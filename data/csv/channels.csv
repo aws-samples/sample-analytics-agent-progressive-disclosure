@@ -1,0 +1,15 @@
+channel_id,channel_name,channel_type,platform,description,is_active,created_at
+1,抖音信息流,paid,douyin,,t,2025-10-26 22:53:46.598973
+2,抖音搜索,paid,douyin,,t,2025-10-26 22:53:46.598973
+3,小红书种草,kol,xiaohongshu,,t,2025-10-26 22:53:46.598973
+4,小红书搜索,paid,xiaohongshu,,t,2025-10-26 22:53:46.598973
+5,微信朋友圈广告,paid,weixin,,t,2025-10-26 22:53:46.598973
+6,微信公众号,organic,weixin,,t,2025-10-26 22:53:46.598973
+7,百度搜索,paid,baidu,,t,2025-10-26 22:53:46.598973
+8,快手信息流,paid,kuaishou,,t,2025-10-26 22:53:46.598973
+9,微博KOL,kol,weibo,,t,2025-10-26 22:53:46.598973
+10,App Store,organic,apple,,t,2025-10-26 22:53:46.598973
+11,应用宝,organic,tencent,,t,2025-10-26 22:53:46.598973
+12,老用户邀请,referral,app,,t,2025-10-26 22:53:46.598973
+13,直接访问,direct,direct,,t,2025-10-26 22:53:46.598973
+14,B站UP主,kol,bilibili,,t,2025-10-26 22:53:46.598973

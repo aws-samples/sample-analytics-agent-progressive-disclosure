@@ -1,0 +1,1582 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>App Analytics · AI 数据分析师</title>
+<link rel="stylesheet" href="/app/vendor/fonts/fonts.css">
+<!-- nosemgrep: insecure-document-method —— 渲染的是 app/模型生成内容,回显的用户文本已 HTML 转义 -->
+<script>
+/* —— app 层 Cognito 登录(照搬 graph-cmdb/AVA 模式;浅色风格)——
+ * 读 /api/config:authEnabled=false(本地)→ 不拦。authEnabled=true 且无有效 token → 弹登录浮层。
+ * 包 window.fetch 给 /ask、/api/ 自动带 Authorization: Bearer <idToken>;401 → 清 token 回登录。
+ * 认证全在 app 层,CloudFront/Lambda@Edge 不参与,静态资源因此可正常缓存。 */
+(function(){
+  var TOKEN_KEY='aa_id_token';
+  var BASE=location.protocol.indexOf('http')===0?location.origin:'';
+  var _fetch=window.fetch.bind(window);
+  window.fetch=function(input,init){
+    init=init||{};
+    var url=(typeof input==='string')?input:(input&&input.url)||'';
+    var needAuth=url.indexOf('/ask')!==-1||url.indexOf('/api/')!==-1;
+    var tok=localStorage.getItem(TOKEN_KEY);
+    if(needAuth&&tok){
+      var headers=new Headers((init&&init.headers)||(typeof input!=='string'&&input&&input.headers)||{});
+      if(!headers.has('Authorization'))headers.set('Authorization','Bearer '+tok);
+      init=Object.assign({},init,{headers:headers});
+    }
+    return _fetch(input,init).then(function(resp){
+      if(resp.status===401&&needAuth&&window.__AA_AUTH__){
+        localStorage.removeItem(TOKEN_KEY);
+        if(!document.getElementById('aa-auth-overlay'))location.reload();
+      }
+      return resp;
+    });
+  };
+  function tokenValid(){
+    var t=localStorage.getItem(TOKEN_KEY);if(!t)return false;
+    try{var p=JSON.parse(atob(t.split('.')[1]));return p.exp&&(p.exp*1000>Date.now()+30000);}catch(e){return false;}
+  }
+  function loadScript(src){return new Promise(function(res,rej){var s=document.createElement('script');s.src=src;s.onload=res;s.onerror=rej;document.head.appendChild(s);});}
+  document.addEventListener('DOMContentLoaded',function(){
+    _fetch(BASE+'/api/config').then(function(r){return r.json();}).then(function(cfg){
+      window.__AA_AUTH__=!!cfg.authEnabled;
+      if(!cfg.authEnabled)return;        // 本地开发:放行
+      if(tokenValid())return;            // 已登录:fetch 包装会带 token
+      localStorage.removeItem(TOKEN_KEY);
+      loadScript('/app/vendor/amazon-cognito-identity.min.js').then(function(){showLogin(cfg);})
+        .catch(function(){alert((localStorage.getItem('aa_lang')||'en')==='zh'?'登录组件加载失败,请检查网络后刷新。':'Failed to load the sign-in component. Check your network and refresh.');});
+    }).catch(function(){/* 配置端点拿不到就不拦,避免把人锁死在外面 */});
+  });
+  function showLogin(cfg){
+    var AC=window.AmazonCognitoIdentity;
+    var LX=(function(){var l=localStorage.getItem('aa_lang')||'en';
+      var d={en:{sub:'AI Data Analyst · sign in to explore',user:'Username',pass:'Password',login:'Sign in',
+        hint:'Sign in with the account created in your Cognito user pool',fail:'Sign-in failed',
+        need:'Enter your username and password',newpass:'Set a new password (first sign-in)',
+        setlogin:'Set and sign in',neednew:'Enter a new password'},
+        zh:{sub:'AI 数据分析师 · 请登录后体验',user:'用户名',pass:'密码',login:'登录',
+        hint:'用你在 Cognito 用户池里创建的账号登录',fail:'登录失败',need:'请输入用户名和密码',
+        newpass:'设置新密码(首次登录)',setlogin:'设置并登录',neednew:'请输入新密码'}};
+      return d[l]||d.en;})();
+    var pool=new AC.CognitoUserPool({UserPoolId:cfg.userPoolId,ClientId:cfg.clientId});
+    var pendingUser=null;
+    var o=document.createElement('div');o.id='aa-auth-overlay';
+    o.innerHTML=[
+      '<style>',
+      '#aa-auth-overlay{position:fixed;inset:0;z-index:99999;display:flex;align-items:center;justify-content:center;',
+      'background:radial-gradient(820px 560px at 72% -8%,rgba(224,87,59,.07),transparent 60%),#F2EFE7;',
+      'font-family:"Hanken Grotesk",system-ui,sans-serif;color:#181611}',
+      '#aa-auth-overlay .box{width:352px;max-width:90vw;padding:32px 30px;background:#FBFAF5;',
+      'border:1px solid #E5DFD2;border-radius:16px;box-shadow:0 2px 4px rgba(24,22,17,.05),0 24px 60px -28px rgba(24,22,17,.32)}',
+      '#aa-auth-overlay .mark{font-family:"Fraunces",serif;font-weight:600;font-size:23px;letter-spacing:-.01em;color:#181611}',
+      '#aa-auth-overlay .mark .dot{color:#E0573B}',
+      '#aa-auth-overlay p.sub{font-size:12.5px;color:#9A9488;margin:6px 0 22px}',
+      '#aa-auth-overlay label{display:block;font-size:11px;font-weight:600;letter-spacing:.04em;color:#9A9488;',
+      'text-transform:uppercase;margin:14px 0 6px}',
+      '#aa-auth-overlay input{width:100%;padding:11px 13px;background:#fff;border:1.5px solid #E5DFD2;border-radius:10px;',
+      'color:#181611;font:400 14px "Hanken Grotesk",sans-serif;outline:none;transition:.18s}',
+      '#aa-auth-overlay input:focus{border-color:#184E43;box-shadow:0 0 0 4px #E3EDE7}',
+      '#aa-auth-overlay button{width:100%;margin-top:24px;padding:12px;border:0;border-radius:10px;background:#184E43;',
+      'color:#fff;font:600 13.5px "Hanken Grotesk",sans-serif;letter-spacing:.02em;cursor:pointer;transition:.18s}',
+      '#aa-auth-overlay button:hover{background:#10362e}',
+      '#aa-auth-overlay button:disabled{opacity:.5;cursor:wait}',
+      '#aa-auth-overlay .err{margin-top:14px;font-size:12.5px;color:#C9543B;min-height:16px;line-height:1.5}',
+      '#aa-auth-overlay .hint{margin-top:16px;font-size:11.5px;color:#9A9488;text-align:center;line-height:1.6}',
+      '#aa-auth-overlay .hint code{font-family:"JetBrains Mono",monospace;background:#F2EFE7;padding:1px 5px;border-radius:4px;color:#544F45}',
+      '</style>',
+      '<div class="box">',
+      '<div class="mark">App&nbsp;Analytics<span class="dot">.</span></div>',
+      '<p class="sub">'+LX.sub+'</p>',
+      '<div id="aa-fields">',
+      '<label>'+LX.user+'</label><input id="aa-user" type="text" autocomplete="username" autocapitalize="off" spellcheck="false">',
+      '<label>'+LX.pass+'</label><input id="aa-pass" type="password" autocomplete="current-password">',
+      '</div>',
+      '<button id="aa-btn">'+LX.login+'</button>',
+      '<div class="err" id="aa-err"></div>',
+      '<div class="hint">'+LX.hint+'</div>',
+      '</div>'
+    ].join('');
+    document.body.appendChild(o);
+    var $=function(id){return document.getElementById(id);};
+    var err=$('aa-err'),btn=$('aa-btn');
+    function fail(m){err.textContent=m||LX.fail;btn.disabled=false;}
+    function ok(session){localStorage.setItem(TOKEN_KEY,session.getIdToken().getJwtToken());location.reload();}
+    function doLogin(){
+      var u=$('aa-user').value.trim(),pw=$('aa-pass').value;
+      if(!u||!pw){fail(LX.need);return;}
+      btn.disabled=true;err.textContent='';
+      var user=new AC.CognitoUser({Username:u,Pool:pool});
+      var details=new AC.AuthenticationDetails({Username:u,Password:pw});
+      user.authenticateUser(details,{
+        onSuccess:ok,
+        onFailure:function(e){fail(e&&e.message?e.message:String(e));},
+        newPasswordRequired:function(){pendingUser=user;showNewPassword();}
+      });
+    }
+    function showNewPassword(){
+      $('aa-fields').innerHTML='<label>'+LX.newpass+'</label><input id="aa-newpass" type="password" autocomplete="new-password">';
+      btn.textContent=LX.setlogin;btn.disabled=false;err.textContent='';
+      btn.onclick=function(){var np=$('aa-newpass').value;if(!np){fail(LX.neednew);return;}btn.disabled=true;
+        pendingUser.completeNewPasswordChallenge(np,{},{onSuccess:ok,onFailure:function(e){fail(e&&e.message?e.message:String(e));}});};
+    }
+    btn.onclick=doLogin;
+    o.addEventListener('keydown',function(e){if(e.key==='Enter')btn.click();});
+    $('aa-user').focus();
+  }
+})();
+</script>
+<script src="/app/vendor/echarts.min.js"></script>
+<style>
+:root{
+  --paper:#F2EFE7;
+  --surface:#FBFAF5;
+  --surface-2:#F6F3EB;
+  --ink:#181611;
+  --ink-soft:#544F45;
+  --muted:#9A9488;
+  --line:#E5DFD2;
+  --line-soft:#EEEAE0;
+  --brand:#184E43;
+  --brand-soft:#E3EDE7;
+  --coral:#E0573B;
+  --teal:#2F9C8E;
+  --gold:#D29A2A;
+  --slate:#3C6488;
+  --good:#2F9C8E;
+  --bad:#C9543B;
+  --shadow:0 1px 2px rgba(24,22,17,.04), 0 8px 24px -12px rgba(24,22,17,.18);
+  --shadow-lg:0 2px 4px rgba(24,22,17,.05), 0 24px 60px -28px rgba(24,22,17,.32);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{
+  font-family:"Hanken Grotesk",system-ui,sans-serif;
+  background:var(--paper);
+  color:var(--ink);
+  -webkit-font-smoothing:antialiased;
+  font-feature-settings:"tnum";
+  overflow:hidden;
+}
+::selection{background:var(--brand);color:#fff}
+
+.app{display:flex;flex-direction:column;height:100vh}
+.topbar{
+  display:flex;align-items:center;gap:16px;
+  padding:14px 26px;border-bottom:1px solid var(--line);
+  background:linear-gradient(180deg,var(--surface),var(--paper));
+  flex:0 0 auto;
+}
+.brand{display:flex;align-items:baseline;gap:10px}
+.brand .mark{font-family:"Fraunces",serif;font-weight:600;font-size:23px;letter-spacing:-.01em}
+.brand .mark .dot{color:var(--coral)}
+.brand .sub{font-size:12.5px;color:var(--muted);font-weight:500}
+.topbar .spacer{flex:1}
+.chip-model{
+  display:flex;align-items:center;gap:8px;
+  font-size:12px;color:var(--ink-soft);font-weight:500;
+  background:var(--surface);border:1px solid var(--line);
+  padding:7px 13px;border-radius:999px;
+}
+.chip-model .pulse{width:7px;height:7px;border-radius:50%;background:var(--good);position:relative}
+.chip-model .pulse.off{background:var(--muted)}
+.chip-model .pulse::after{content:"";position:absolute;inset:-4px;border-radius:50%;border:1px solid var(--good);opacity:.5;animation:ping 2.4s ease-out infinite}
+.chip-model .pulse.off::after{display:none}
+@keyframes ping{0%{transform:scale(.6);opacity:.6}80%,100%{transform:scale(1.8);opacity:0}}
+.topbar .db{font-size:12px;color:var(--muted);display:flex;align-items:center;gap:7px}
+.topbar .db b{color:var(--ink-soft);font-weight:600}
+.lang-toggle{display:inline-flex;align-items:center;gap:5px;font-family:inherit;font-size:12px;font-weight:600;
+  color:var(--ink-soft);background:var(--surface);border:1px solid var(--line);padding:7px 12px;border-radius:999px;
+  cursor:pointer;transition:.16s;letter-spacing:.01em}
+.lang-toggle:hover{border-color:var(--brand);color:var(--brand);background:var(--brand-soft)}
+.lang-toggle .glb{font-size:12px;opacity:.7}
+
+.main{display:grid;grid-template-columns:minmax(360px,38%) 1fr;flex:1;min-height:0}
+
+.rail{display:flex;flex-direction:column;min-height:0;border-right:1px solid var(--line);
+  background:linear-gradient(180deg,var(--surface-2),var(--paper))}
+.rail-head{padding:18px 22px 10px;flex:0 0 auto;display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+.rail-head h2{font-family:"Fraunces",serif;font-weight:500;font-size:16px;color:var(--ink-soft)}
+.rail-head p{font-size:12.5px;color:var(--muted);margin-top:3px}
+.clear-btn{flex:0 0 auto;display:inline-flex;align-items:center;gap:5px;font-family:inherit;font-size:12px;font-weight:500;
+  color:var(--ink-soft);background:var(--surface);border:1px solid var(--line);padding:6px 11px;border-radius:9px;
+  cursor:pointer;transition:.16s;margin-top:2px}
+.clear-btn:hover{border-color:var(--coral);color:var(--coral);background:#FBEDE9}
+.clear-btn:disabled{opacity:.4;cursor:not-allowed}
+.clear-btn svg{width:13px;height:13px}
+.log{flex:1;overflow-y:auto;padding:8px 22px 4px;display:flex;flex-direction:column;gap:18px}
+.log::-webkit-scrollbar{width:8px}
+.log::-webkit-scrollbar-thumb{background:var(--line);border-radius:8px;border:2px solid transparent;background-clip:padding-box}
+
+.turn{display:flex;flex-direction:column;gap:10px;animation:rise .45s cubic-bezier(.2,.7,.2,1);position:relative}
+@keyframes rise{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+.turn.clickable{cursor:pointer}
+.turn .recall{position:absolute;top:-2px;right:0;z-index:2;font-size:10.5px;font-weight:600;color:var(--brand);
+  background:var(--surface);border:1px solid var(--line);border-radius:999px;padding:3px 9px;
+  opacity:0;transform:translateY(-3px);transition:.16s;pointer-events:none;box-shadow:var(--shadow);white-space:nowrap}
+.turn.clickable:hover .recall{opacity:1;transform:none}
+.turn.clickable:hover .summary{border-color:var(--brand)}
+.turn.active .recall{opacity:1;transform:none;color:#fff;background:var(--brand);border-color:var(--brand)}
+.turn.active .q{box-shadow:0 0 0 3px var(--brand-soft),var(--shadow)}
+.turn.active .summary{border-color:var(--brand);box-shadow:0 0 0 2px var(--brand-soft)}
+.q{align-self:flex-end;max-width:90%;background:var(--brand);color:#fff;
+  padding:10px 14px;border-radius:14px 14px 4px 14px;font-size:14px;line-height:1.45;font-weight:500;box-shadow:var(--shadow)}
+.a{display:flex;gap:11px;max-width:97%}
+.a .ava{flex:0 0 28px;height:28px;border-radius:8px;background:var(--ink);color:var(--paper);
+  display:grid;place-items:center;font-family:"Fraunces",serif;font-size:14px;font-weight:600;margin-top:1px}
+.a .body{flex:1;min-width:0}
+
+.stages{display:flex;flex-direction:column;gap:6px;margin-bottom:4px}
+.stage{display:flex;align-items:center;gap:9px;font-size:12.5px;color:var(--ink-soft);
+  animation:rise .3s ease}
+.stage .ic{width:15px;height:15px;flex:0 0 15px;display:grid;place-items:center}
+.stage .spin{width:11px;height:11px;border-radius:50%;border:1.6px solid var(--line);border-top-color:var(--brand);animation:spin .7s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.stage code{font-family:"JetBrains Mono",monospace;font-size:11px;background:var(--surface);
+  border:1px solid var(--line-soft);padding:1px 6px;border-radius:5px;color:var(--brand);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:170px}
+.check{color:var(--good)}
+
+/* ---------------- agent 工作流（多层渐进披露） ---------------- */
+.trace{border:1px solid var(--line);border-radius:12px;background:var(--surface);overflow:hidden;margin-bottom:6px;box-shadow:var(--shadow)}
+.trace-head{display:flex;align-items:center;gap:8px;padding:9px 13px;cursor:pointer;user-select:none;font-size:12px}
+.trace-head .caret{color:var(--muted);transition:.22s;font-size:9px;flex:0 0 auto}
+.trace.collapsed .caret{transform:rotate(-90deg)}
+.trace-head .tsum{color:var(--muted);font-weight:500;display:flex;flex-wrap:wrap;gap:0 4px;align-items:center;line-height:1.5}
+.trace-head .tsum b{color:var(--ink-soft);font-weight:600}
+.trace-head .live{margin-left:auto;flex:0 0 auto;display:inline-flex;align-items:center;gap:6px;color:var(--brand);font-weight:600;font-size:11.5px}
+.trace-head .live .spin{width:10px;height:10px;border:1.6px solid var(--brand-soft);border-top-color:var(--brand);border-radius:50%;animation:spin .7s linear infinite}
+.trace-body{border-top:1px solid var(--line-soft)}
+.trace.collapsed .trace-body{display:none}
+.steps{display:flex;flex-direction:column;padding:3px 0}
+
+.step{display:flex;flex-direction:column}
+.step-row{display:flex;align-items:center;gap:8px;padding:7px 13px;font-size:12.5px;color:var(--ink-soft)}
+.step.has-detail .step-row{cursor:pointer}
+.step.has-detail:hover .step-row{background:var(--surface-2)}
+.step-row .dot{flex:0 0 16px;height:16px;display:grid;place-items:center}
+.step-row .dot .spin{width:11px;height:11px;border:1.6px solid var(--line);border-top-color:var(--brand);border-radius:50%;animation:spin .7s linear infinite}
+.step-row .dot .ok{color:var(--good);font-size:12.5px;font-weight:700}
+.step-row .lab{font-weight:500;flex:0 0 auto}
+.step-row .badge{flex:0 0 auto;font-family:"JetBrains Mono",monospace;font-size:9.5px;font-weight:500;padding:1.5px 6px;border-radius:5px;letter-spacing:.02em}
+.badge.b-think{color:var(--ink-soft);background:var(--surface-2);border:1px solid var(--line)}
+.badge.b-schema{color:var(--slate);background:#EAF0F6;border:1px solid #D6E2EE}
+.badge.b-sql{color:var(--coral);background:#FBEDE9;border:1px solid #F1D6CC}
+.badge.b-chart{color:var(--brand);background:var(--brand-soft);border:1px solid #CFE0D8}
+.step-row .prev{color:var(--muted);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.step-row .t{margin-left:auto;flex:0 0 auto;font-family:"JetBrains Mono",monospace;font-size:10.5px;color:var(--muted);font-variant-numeric:tabular-nums}
+.step-row .xc{flex:0 0 auto;color:var(--muted);font-size:9px;transition:.2s;opacity:.7}
+.step.open .step-row .xc{transform:rotate(90deg)}
+.step-detail{display:none;padding:0 13px 11px 37px}
+.step.open .step-detail{display:block;animation:rise .25s ease}
+.step-detail pre.sql{border:1px solid var(--line-soft);border-radius:8px;background:#FCFBF7;font-size:11.5px;padding:11px 13px;margin:0;line-height:1.65}
+.schema-fields{font-family:"JetBrains Mono",monospace;font-size:11px;line-height:1.75;color:var(--ink-soft);background:#FCFBF7;border:1px solid var(--line-soft);border-radius:8px;padding:10px 13px;overflow-x:auto}
+.schema-fields .tname{color:var(--slate);font-weight:700;margin-top:4px}
+.schema-fields .tname:first-child{margin-top:0}
+.schema-fields .typ{color:var(--muted)}
+.peek{font-size:11px;border-collapse:collapse;width:100%;margin-top:9px;border:1px solid var(--line-soft);border-radius:8px;overflow:hidden}
+.peek th{font-size:10px;color:var(--muted);font-weight:600;text-align:left;padding:5px 9px;background:var(--surface-2);white-space:nowrap}
+.peek td{padding:5px 9px;border-top:1px solid var(--line-soft);color:var(--ink-soft);font-variant-numeric:tabular-nums;white-space:nowrap}
+.peek-more{font-size:10.5px;color:var(--muted);padding:6px 2px 0}
+
+/* 文档读取步骤 + 文件查看器（"正在读取哪个文件"） */
+.badge.b-doc{color:#7A3FA0;background:#F1E9F7;border:1px solid #E2D2EE}
+.step.step-doc .lab{font-family:"JetBrains Mono",monospace;font-size:11.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.docview{border:1px solid var(--line-soft);border-radius:8px;overflow:hidden;background:#FCFBF7}
+.docview-bar{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:7px 11px;background:var(--surface-2);border-bottom:1px solid var(--line-soft)}
+.docview-bar .fp{font-family:"JetBrains Mono",monospace;font-size:11px;color:#7A3FA0;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.docview-bar .fkind{font-size:9.5px;color:var(--muted);font-family:"JetBrains Mono",monospace;flex:0 0 auto}
+.docview-body{padding:10px 13px;max-height:300px;overflow-y:auto;font-size:11.5px;line-height:1.6;color:var(--ink-soft)}
+.docview-body::-webkit-scrollbar{width:7px}.docview-body::-webkit-scrollbar-thumb{background:var(--line);border-radius:6px}
+.docview-body .md-h{font-weight:700;color:var(--ink);margin:9px 0 4px}
+.docview-body .md-h1{font-size:14px}.docview-body .md-h2{font-size:12.5px}.docview-body .md-h3,.docview-body .md-h4{font-size:11.5px;color:var(--ink-soft)}
+.docview-body .md-h:first-child{margin-top:0}
+.docview-body .md-p{margin:3px 0}
+.docview-body .md-li{margin:2px 0 2px 13px;position:relative}
+.docview-body .md-li::before{content:"·";position:absolute;left:-9px;color:var(--muted)}
+.docview-body .md-code{background:#F2EFE7;border:1px solid var(--line-soft);border-radius:6px;padding:8px 10px;font-family:"JetBrains Mono",monospace;font-size:10.5px;line-height:1.5;overflow-x:auto;margin:5px 0;white-space:pre}
+.docview-body code{font-family:"JetBrains Mono",monospace;font-size:10.5px;background:#F2EFE7;padding:1px 4px;border-radius:4px}
+.docview-body .md-tbl{border-collapse:collapse;width:100%;margin:5px 0;font-size:11px}
+.docview-body .md-tbl th{background:var(--surface-2);text-align:left;padding:4px 8px;border:1px solid var(--line-soft);font-weight:600;color:var(--muted);white-space:nowrap}
+.docview-body .md-tbl td{padding:4px 8px;border:1px solid var(--line-soft);color:var(--ink-soft)}
+.docview-body .docerr{color:var(--bad);font-family:"JetBrains Mono",monospace;font-size:11px}
+
+.summary{font-size:13.5px;line-height:1.6;color:var(--ink);background:var(--surface);
+  border:1px solid var(--line);border-radius:12px;padding:12px 14px;box-shadow:var(--shadow)}
+.summary.typing::after{content:"▋";color:var(--coral);animation:blink 1s steps(1) infinite;margin-left:1px}
+@keyframes blink{50%{opacity:0}}
+.summary b{font-weight:700;color:var(--brand)}
+
+.chips{display:flex;flex-wrap:wrap;gap:7px;margin-top:2px}
+.chip{font-size:12.5px;color:var(--ink-soft);background:var(--surface);border:1px solid var(--line);
+  padding:6px 12px;border-radius:999px;cursor:pointer;transition:.18s;font-weight:500;font-family:inherit;text-align:left}
+.chip:hover{border-color:var(--brand);color:var(--brand);background:var(--brand-soft);transform:translateY(-1px)}
+.chip .arr{color:var(--muted);margin-right:5px}
+.chip:hover .arr{color:var(--brand)}
+
+.composer{flex:0 0 auto;padding:14px 22px 18px;border-top:1px solid var(--line);background:var(--surface-2)}
+.presets{display:flex;flex-wrap:wrap;gap:7px;margin-bottom:11px}
+.preset{font-size:12px;color:var(--muted);background:transparent;border:1px dashed var(--line);
+  padding:5px 11px;border-radius:8px;cursor:pointer;transition:.16s;font-family:inherit}
+.preset:hover{border-style:solid;border-color:var(--brand);color:var(--brand)}
+.preset-group{margin-bottom:10px}
+.preset-group:last-child{margin-bottom:11px}
+.preset-group .presets{margin-bottom:0}
+.preset-glabel{font-size:11px;margin:0 0 5px 1px;line-height:1.4}
+.preset-glabel b{color:var(--text);font-weight:650}
+.preset-glabel .cap{color:var(--muted);margin-left:6px}
+.inputwrap{display:flex;align-items:center;gap:10px;background:var(--surface);
+  border:1.5px solid var(--line);border-radius:13px;padding:6px 6px 6px 16px;transition:.2s;box-shadow:var(--shadow)}
+.inputwrap:focus-within{border-color:var(--brand);box-shadow:0 0 0 4px var(--brand-soft)}
+.inputwrap input{flex:1;border:none;background:none;outline:none;font-size:14px;font-family:inherit;color:var(--ink)}
+.inputwrap input::placeholder{color:var(--muted)}
+.send{width:36px;height:36px;border-radius:9px;border:none;background:var(--brand);color:#fff;cursor:pointer;
+  display:grid;place-items:center;transition:.18s;flex:0 0 auto}
+.send:hover{background:#10362e;transform:translateY(-1px)}
+.send:disabled{opacity:.4;cursor:not-allowed;transform:none}
+
+.canvas{overflow-y:auto;padding:26px 30px 40px;position:relative}
+.canvas::-webkit-scrollbar{width:10px}
+.canvas::-webkit-scrollbar-thumb{background:var(--line);border-radius:8px;border:3px solid transparent;background-clip:padding-box}
+
+.interp{display:flex;align-items:center;gap:9px;font-size:13px;color:var(--ink-soft);margin-bottom:18px}
+.interp .tag{font-size:11px;font-weight:600;color:var(--brand);background:var(--brand-soft);
+  padding:3px 9px;border-radius:6px;letter-spacing:.02em;flex:0 0 auto}
+.interp .txt{font-style:italic}
+
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:14px;margin-bottom:22px}
+.kpi{background:var(--surface);border:1px solid var(--line);border-radius:15px;padding:16px 18px;box-shadow:var(--shadow);position:relative;overflow:hidden}
+.kpi::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--accent,var(--brand))}
+.kpi .label{font-size:12px;color:var(--muted);font-weight:500;margin-bottom:8px}
+.kpi .val{font-size:30px;font-weight:700;letter-spacing:-.02em;line-height:1;font-variant-numeric:tabular-nums}
+.kpi .val .unit{font-size:15px;color:var(--ink-soft);font-weight:600;margin-left:2px}
+.kpi .delta{font-size:12px;font-weight:600;margin-top:9px;display:inline-flex;align-items:center;gap:4px;color:var(--ink-soft)}
+.kpi .delta.up{color:var(--good)}.kpi .delta.down{color:var(--bad)}
+.kpi .delta .lab{color:var(--muted);font-weight:500}
+
+.card{background:var(--surface);border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow-lg);overflow:hidden;margin-bottom:18px}
+.card-head{display:flex;align-items:center;justify-content:space-between;padding:16px 20px 4px}
+.card-head h3{font-family:"Fraunces",serif;font-weight:500;font-size:18px;letter-spacing:-.01em}
+.toggle{display:flex;background:var(--surface-2);border:1px solid var(--line);border-radius:8px;padding:2px}
+.toggle button{border:none;background:none;font-family:inherit;font-size:12px;font-weight:500;color:var(--muted);
+  padding:5px 11px;border-radius:6px;cursor:pointer;transition:.15s}
+.toggle button.on{background:var(--surface);color:var(--ink);box-shadow:var(--shadow)}
+.chart{height:360px;width:100%;padding:4px 8px 10px}
+
+.insight{display:flex;gap:12px;padding:15px 20px;border-top:1px solid var(--line-soft);background:var(--surface-2)}
+.insight .ic{flex:0 0 22px;height:22px;border-radius:6px;background:var(--coral);color:#fff;display:grid;place-items:center;font-size:13px;margin-top:1px}
+.insight p{font-size:13.5px;line-height:1.65;color:var(--ink-soft)}
+.insight p b{color:var(--ink);font-weight:700}
+/* KPI 对比基准(方向3) */
+.kpi-base{font-size:11px;color:var(--ink-faint,#9aa);margin-top:4px;line-height:1.4}
+/* findings 洞察面板(方向3):驱动/异常/风险 */
+.findings{display:flex;flex-direction:column;gap:8px;padding:14px 20px;border-top:1px solid var(--line-soft)}
+.finding{display:flex;gap:10px;align-items:flex-start;font-size:13px;line-height:1.6}
+.finding .f-ic{flex:0 0 20px;height:20px;border-radius:5px;display:grid;place-items:center;font-size:12px;color:#fff;margin-top:1px}
+.finding .f-tag{display:inline-block;font-size:10.5px;font-weight:700;padding:1px 7px;border-radius:4px;margin-right:7px;vertical-align:middle}
+.finding .f-body{color:var(--ink-soft)} .finding .f-body b{color:var(--ink);font-weight:700}
+.finding .f-ev{display:block;font-size:11.5px;color:var(--ink-faint,#9aa);margin-top:2px}
+.f-driver .f-ic{background:var(--teal,#2aa)} .f-driver .f-tag{background:rgba(34,170,170,.14);color:var(--teal,#2aa)}
+.f-anomaly .f-ic{background:var(--coral,#e66)} .f-anomaly .f-tag{background:rgba(230,102,102,.14);color:var(--coral,#e66)}
+.f-risk .f-ic{background:var(--gold,#d9a)} .f-risk .f-tag{background:rgba(200,150,60,.16);color:#b8860b}
+/* 治理来源标注(方向2) */
+.src-badge{margin:0 20px 14px;padding:8px 12px;border-radius:8px;background:rgba(80,140,220,.08);border:1px dashed rgba(80,140,220,.35);font-size:11.5px;color:var(--ink-soft)}
+.src-badge b{color:var(--brand,#36c);font-weight:700} .src-badge code{background:rgba(80,140,220,.15);padding:0 5px;border-radius:3px}
+/* function call 面板(方向2):右侧看板里明确显示这次调用了哪个治理 function、传了什么参、DB 多久 */
+.fncall{margin:0 20px 14px;padding:11px 13px;border-radius:9px;background:rgba(80,140,220,.06);border:1px solid rgba(80,140,220,.28)}
+.fncall .fc-head{font-size:11px;color:var(--muted);letter-spacing:.04em;text-transform:uppercase;margin-bottom:6px}
+.fncall .fc-sig{font-family:"JetBrains Mono",monospace;font-size:13px;color:var(--brand,#36c);font-weight:600;word-break:break-all}
+.fncall .fc-sig .fn{color:#7A3FA0}
+.fncall .fc-meta{margin-top:7px;display:flex;flex-wrap:wrap;gap:6px}
+.fncall .fc-pill{font-size:10.5px;font-family:"JetBrains Mono",monospace;padding:2px 7px;border-radius:5px;background:rgba(80,140,220,.12);color:var(--ink-soft)}
+.fncall .fc-pill b{color:var(--text);font-weight:600}
+/* 推理步骤 badge：把 LLM 思考/生成时间单列，与 DB 执行毫秒区分 */
+.badge.b-reason{color:#8a6d1f;background:#FBF3DC;border:1px solid #ECDDB0}
+.badge.b-stats{color:#1a7f5a;background:#E6F5EE;border:1px solid #BEE6D3}
+.step-row .t.t-db{color:var(--good);font-weight:600}
+.step-row .t.t-llm{color:#8a6d1f}
+/* 分析方法面板(方向3·深度):把统计方法/步骤/公式/统计量亮在结果最上方,体现"分析层做了干预" */
+.method{margin:0 0 16px;border:1px solid rgba(122,63,160,.28);border-radius:11px;overflow:hidden;background:linear-gradient(180deg,rgba(122,63,160,.05),rgba(122,63,160,.02))}
+.method .m-head{display:flex;align-items:center;gap:8px;padding:10px 14px;background:rgba(122,63,160,.09);border-bottom:1px solid rgba(122,63,160,.18)}
+.method .m-head .m-ic{font-size:14px}
+.method .m-head .m-name{font-weight:700;color:#7A3FA0;font-size:13.5px}
+.method .m-head .m-tool{margin-left:auto;font-size:10.5px;font-weight:600;color:#1a7f5a;background:#E6F5EE;border:1px solid #BEE6D3;border-radius:5px;padding:2px 8px}
+.method .m-head .m-tag{margin-left:auto;font-size:10px;letter-spacing:.05em;color:#9B6BBF;text-transform:uppercase;font-weight:600}
+.method .m-head .m-tool+.m-tag{margin-left:8px}
+.method .m-body{padding:12px 14px;display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.method .m-sec-title{font-size:11px;color:var(--muted);letter-spacing:.04em;text-transform:uppercase;margin-bottom:7px;font-weight:600}
+.method .m-steps{margin:0;padding:0;list-style:none;counter-reset:mstep}
+.method .m-steps li{position:relative;padding:3px 0 3px 26px;font-size:12.5px;color:var(--ink-soft);line-height:1.5;counter-increment:mstep}
+.method .m-steps li::before{content:counter(mstep);position:absolute;left:0;top:3px;width:17px;height:17px;border-radius:50%;background:rgba(122,63,160,.14);color:#7A3FA0;font-size:10px;font-weight:700;display:grid;place-items:center;font-family:"JetBrains Mono",monospace}
+.method .m-formula{display:flex;flex-direction:column;gap:6px}
+.method .m-frow{background:rgba(122,63,160,.06);border:1px solid rgba(122,63,160,.15);border-radius:7px;padding:6px 9px}
+.method .m-frow .m-flab{font-size:10.5px;color:var(--muted);margin-bottom:2px}
+.method .m-frow .m-fexpr{font-family:"JetBrains Mono","Times New Roman",serif;font-size:13px;color:#5a2d7a;font-weight:600}
+.method .m-stats{grid-column:1/-1;display:flex;flex-wrap:wrap;gap:8px;padding-top:11px;border-top:1px dashed rgba(122,63,160,.2)}
+.method .m-stat{background:#fff;border:1px solid rgba(122,63,160,.2);border-radius:8px;padding:6px 11px;min-width:74px}
+.method .m-stat .m-sv{font-size:16px;font-weight:700;color:#5a2d7a;font-variant-numeric:tabular-nums;font-family:"JetBrains Mono",monospace}
+.method .m-stat .m-sv .m-su{font-size:10px;color:var(--muted);margin-left:2px;font-weight:500}
+.method .m-stat .m-sl{font-size:10.5px;color:var(--muted);margin-top:1px}
+@media(max-width:760px){.method .m-body{grid-template-columns:1fr}}
+
+.disclosure{margin-bottom:14px;border:1px solid var(--line);border-radius:12px;overflow:hidden;background:var(--surface)}
+.disclosure summary{cursor:pointer;list-style:none;padding:12px 16px;font-size:13px;font-weight:600;color:var(--ink-soft);
+  display:flex;align-items:center;gap:9px;user-select:none}
+.disclosure summary::-webkit-details-marker{display:none}
+.disclosure summary .caret{transition:.2s;color:var(--muted)}
+.disclosure[open] summary .caret{transform:rotate(90deg)}
+.disclosure summary code{font-family:"JetBrains Mono",monospace;font-size:11px;color:var(--brand);background:var(--brand-soft);padding:2px 7px;border-radius:5px}
+.disclosure .inner{border-top:1px solid var(--line-soft)}
+pre.sql{margin:0;padding:16px 18px;font-family:"JetBrains Mono",monospace;font-size:12.5px;line-height:1.7;
+  color:var(--ink-soft);overflow-x:auto;background:#FCFBF7;white-space:pre-wrap;word-break:break-word}
+pre.sql .kw{color:var(--coral);font-weight:500}
+pre.sql .fn{color:var(--slate)}
+pre.sql .st{color:var(--teal)}
+.tablewrap{overflow-x:auto;max-height:340px;overflow-y:auto}
+table{border-collapse:collapse;width:100%;font-size:13px}
+th,td{padding:9px 16px;text-align:left;border-bottom:1px solid var(--line-soft);white-space:nowrap}
+th{font-size:11.5px;color:var(--muted);font-weight:600;background:var(--surface-2);position:sticky;top:0}
+td{font-variant-numeric:tabular-nums;color:var(--ink-soft)}
+tr:last-child td{border-bottom:none}
+td.num{text-align:right;font-weight:500;color:var(--ink)}
+
+.empty{display:grid;place-items:center;height:100%;text-align:center;color:var(--muted)}
+.empty .big{font-family:"Fraunces",serif;font-size:26px;color:var(--ink-soft);margin-bottom:8px}
+
+.reveal{opacity:0;transform:translateY(10px)}
+.reveal.in{opacity:1;transform:none;transition:opacity .5s,transform .5s}
+
+.footnote{font-size:11px;color:var(--muted);text-align:center;margin-top:8px;line-height:1.5}
+.errbox{background:#FBEDE9;border:1px solid #E7C3B8;color:#9A3C28;padding:10px 14px;border-radius:10px;font-size:13px}
+
+/* ---------------- welcome ---------------- */
+.welcome{max-width:880px;margin:0 auto;padding:8px 4px 30px;animation:rise .5s cubic-bezier(.2,.7,.2,1)}
+.wm-hero{padding:18px 0 6px}
+.wm-eyebrow{display:inline-flex;align-items:center;gap:7px;font-size:11.5px;font-weight:600;letter-spacing:.04em;
+  color:var(--brand);background:var(--brand-soft);padding:5px 12px;border-radius:999px;text-transform:uppercase}
+.wm-eyebrow .dot{width:6px;height:6px;border-radius:50%;background:var(--good);box-shadow:0 0 0 3px rgba(47,156,142,.18)}
+.wm-title{font-family:"Fraunces",serif;font-weight:600;font-size:38px;line-height:1.12;letter-spacing:-.02em;
+  margin:16px 0 14px;color:var(--ink)}
+.wm-title .em{color:var(--coral);font-style:italic}
+.wm-lead{font-size:15px;line-height:1.7;color:var(--ink-soft);max-width:660px}
+.wm-lead b{color:var(--ink);font-weight:600}
+
+.wm-flow{display:grid;grid-template-columns:1fr auto 1fr auto 1fr;align-items:stretch;gap:10px;margin:30px 0 8px}
+.wm-step{display:flex;gap:12px;min-width:0;background:var(--surface);border:1px solid var(--line);border-radius:14px;
+  padding:15px 16px;box-shadow:var(--shadow)}
+.wm-step>div{min-width:0}
+.wm-step .wm-num{flex:0 0 26px;height:26px;border-radius:8px;background:var(--ink);color:var(--paper);
+  font-family:"Fraunces",serif;font-weight:600;font-size:14px;display:grid;place-items:center}
+.wm-step b{font-size:13.5px;color:var(--ink);display:block;margin-bottom:3px}
+.wm-step p{font-size:12px;line-height:1.5;color:var(--muted)}
+.wm-arrow{display:grid;place-items:center;color:var(--line);font-size:20px;font-weight:300}
+
+.wm-data{margin-top:34px}
+.wm-data-head{display:flex;align-items:baseline;justify-content:space-between;gap:14px;
+  padding-bottom:12px;margin-bottom:16px;border-bottom:1px solid var(--line)}
+.wm-data-head h2{font-family:"Fraunces",serif;font-weight:500;font-size:20px;color:var(--ink-soft)}
+.wm-data-head span{font-size:12px;color:var(--muted);font-family:"JetBrains Mono",monospace}
+.wm-domains{display:grid;grid-template-columns:repeat(4,1fr);gap:11px}
+.wm-dom{min-width:0;background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:13px 14px;
+  transition:.18s;cursor:pointer}
+.wm-dom:hover{border-color:var(--brand);transform:translateY(-2px);box-shadow:var(--shadow)}
+.wm-dom.active{border-color:var(--brand);box-shadow:0 0 0 2px var(--brand-soft),var(--shadow)}
+.wm-dom .dh{display:flex;align-items:center;justify-content:space-between;margin-bottom:7px}
+.wm-dom .dh b{font-size:13px;color:var(--ink);font-weight:600}
+.wm-dom .dh .cnt{font-size:11px;font-weight:600;color:var(--brand);background:var(--brand-soft);
+  padding:2px 7px;border-radius:6px;font-family:"JetBrains Mono",monospace}
+.wm-dom .tbls{font-size:11px;line-height:1.55;color:var(--muted);font-family:"JetBrains Mono",monospace;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.wm-hint{font-size:12px;color:var(--muted);margin:-6px 0 12px}
+.wm-hint b{color:var(--ink-soft);font-weight:600}
+.wm-detail{margin-top:12px;border:1px solid var(--line);border-radius:12px;overflow:hidden;
+  background:var(--surface);animation:rise .25s cubic-bezier(.2,.7,.2,1)}
+.wm-detail .dt-head{padding:9px 14px;background:var(--brand-soft);display:flex;align-items:center;
+  justify-content:space-between;font-size:12.5px;font-weight:650;color:var(--ink)}
+.wm-detail .dt-head .mut{font-weight:400;color:var(--muted);font-size:11px;font-family:"JetBrains Mono",monospace}
+.dt-row{padding:9px 14px;border-top:1px solid var(--line)}
+.dt-row .dt-name{font-family:"JetBrains Mono",monospace;font-size:12.5px;color:var(--brand);font-weight:600}
+.dt-row .dt-desc{font-size:12px;color:var(--ink-soft);margin-left:9px}
+.dt-row .dt-cols{font-family:"JetBrains Mono",monospace;font-size:11px;color:var(--muted);
+  margin-top:4px;line-height:1.5;word-break:break-word}
+
+.wm-cta{margin-top:30px;display:flex;align-items:center;gap:10px;font-size:13.5px;color:var(--ink-soft);
+  background:linear-gradient(90deg,var(--brand-soft),transparent);border-left:3px solid var(--brand);
+  padding:13px 16px;border-radius:0 10px 10px 0}
+.wm-cta b{color:var(--brand);font-weight:600}
+.wm-cta .hand{font-size:16px}
+@media(max-width:1180px){.wm-domains{grid-template-columns:repeat(2,1fr)}.wm-flow{grid-template-columns:1fr;gap:8px}.wm-arrow{transform:rotate(90deg);height:8px}.wm-title{font-size:31px}}
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="topbar">
+    <div class="brand">
+      <span class="mark">App&nbsp;Analytics<span class="dot">.</span></span>
+      <span class="sub" data-i18n="brand_sub">AI 数据分析师</span>
+    </div>
+    <div class="spacer"></div>
+    <div class="db" id="dbInfo" data-i18n="db_initial">数据源 <b>app_analytics</b> · 35 明细表 + 4 治理表 · PostgreSQL</div>
+    <button class="lang-toggle" id="langToggle" title="Switch language / 切换语言"><span class="glb">🌐</span><span id="langLabel">中文</span></button>
+    <div class="chip-model"><span class="pulse off" id="pulse"></span><span id="modelLabel" data-i18n="model_connecting">连接中…</span></div>
+  </header>
+
+  <div class="main">
+    <section class="rail">
+      <div class="rail-head">
+        <div>
+          <h2 data-i18n="rail_h2">对话</h2>
+          <p data-i18n="rail_p">用大白话提问，Agent 自动找表、写 SQL、出图</p>
+        </div>
+        <button class="clear-btn" id="clearBtn" data-i18n-title="clear_title" title="清空当前会话，回到欢迎页">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
+          <span data-i18n="clear_btn">清空</span>
+        </button>
+      </div>
+      <div class="log" id="log"></div>
+      <div class="composer">
+        <div id="presets"></div>
+        <div class="inputwrap">
+          <input id="qinput" data-i18n-ph="q_ph" placeholder="问点别的，比如「按等级看用户分布」…" autocomplete="off">
+          <button class="send" id="send" data-i18n-title="send_title" title="发送">
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>
+          </button>
+        </div>
+        <div class="footnote" id="foot" data-i18n="foot_detecting">正在检测后端…</div>
+      </div>
+    </section>
+
+    <main class="canvas" id="canvas">
+      <div class="welcome" id="welcome">
+        <div class="wm-hero">
+          <span class="wm-eyebrow"><span class="dot"></span><span data-i18n="wm_eyebrow">实时 · Claude Opus 4.8 on Amazon Bedrock</span></span>
+          <h1 class="wm-title" data-i18n="wm_title">用大白话问数据，<br>看它自己变成<span class="em">图表和结论</span></h1>
+          <p class="wm-lead" data-i18n="wm_lead">这是一个直接接在真实 PostgreSQL 上的 AI 数据分析师。你<b>不用写 SQL、也不用记表结构</b>——按日常说法提一个业务问题，它会自己翻数据字典文档、判断该用哪些表、写出只读查询、跑数，再画图给结论。左边提问，右边出活，中间每一步——包括它正在读哪个文件——都看得见。</p>
+        </div>
+
+        <div class="wm-flow">
+          <div class="wm-step"><span class="wm-num">1</span><div><b data-i18n="wm_s1_t">你提问</b><p data-i18n="wm_s1_p">「哪个渠道拉来的用户最值钱？」<br>大白话就行，不必精确</p></div></div>
+          <div class="wm-arrow">→</div>
+          <div class="wm-step"><span class="wm-num">2</span><div><b data-i18n="wm_s2_t">Agent 干活</b><p data-i18n="wm_s2_p">按路由逐层读数据字典文档 → 拿到表结构 → 写只读 SQL → 执行</p></div></div>
+          <div class="wm-arrow">→</div>
+          <div class="wm-step"><span class="wm-num">3</span><div><b data-i18n="wm_s3_t">出洞察</b><p data-i18n="wm_s3_p">关键指标 + 图表 + 一句话结论<br>读了哪些文档、SQL 全程可展开核对</p></div></div>
+        </div>
+
+        <div class="wm-data">
+          <div class="wm-data-head"><h2 data-i18n="wm_data_h2">背后的数据</h2><span data-i18n="wm_data_span">app_analytics · 35 明细表 + 4 治理表 · ~19万行 · 样本区间 2025-10 ~ 2026-01</span></div>
+          <p class="wm-hint" data-i18n="wm_hint">👆 点任意卡片，展开看该域<b>每张表的字段</b>（再点收起）</p>
+          <div class="wm-domains">
+            <div class="wm-dom" data-dom="user"><div class="dh"><b data-i18n="dom_user">用户域</b><span class="cnt" data-i18n="cnt_user">5 表</span></div><div class="tbls">users · user_profiles · user_devices · …</div></div>
+            <div class="wm-dom" data-dom="behavior"><div class="dh"><b data-i18n="dom_behavior">行为域</b><span class="cnt" data-i18n="cnt_behavior">4 表</span></div><div class="tbls">events · sessions · page_views · …</div></div>
+            <div class="wm-dom" data-dom="transaction"><div class="dh"><b data-i18n="dom_transaction">交易域</b><span class="cnt" data-i18n="cnt_transaction">4 表</span></div><div class="tbls">orders · order_items · payments · …</div></div>
+            <div class="wm-dom" data-dom="product"><div class="dh"><b data-i18n="dom_product">商品域</b><span class="cnt" data-i18n="cnt_product">3 表</span></div><div class="tbls">products · categories · product_tags</div></div>
+            <div class="wm-dom" data-dom="social"><div class="dh"><b data-i18n="dom_social">社交域</b><span class="cnt" data-i18n="cnt_social">6 表</span></div><div class="tbls">posts · post_likes · user_follows · …</div></div>
+            <div class="wm-dom" data-dom="marketing"><div class="dh"><b data-i18n="dom_marketing">营销域</b><span class="cnt" data-i18n="cnt_marketing">5 表</span></div><div class="tbls">campaigns · coupons · banners · …</div></div>
+            <div class="wm-dom" data-dom="attribution"><div class="dh"><b data-i18n="dom_attribution">归因域</b><span class="cnt" data-i18n="cnt_attribution">5 表</span></div><div class="tbls">channels · ad_campaigns · user_attributions · …</div></div>
+            <div class="wm-dom" data-dom="experiment"><div class="dh"><b data-i18n="dom_experiment">实验域</b><span class="cnt" data-i18n="cnt_experiment">3 表</span></div><div class="tbls">ab_tests · ab_test_variants · …</div></div>
+            <div class="wm-dom" data-dom="mart" style="grid-column:1/-1;border-left:3px solid var(--brand)"><div class="dh"><b data-i18n="dom_mart">治理层 · mart（治理后）</b><span class="cnt" data-i18n="cnt_mart">4 表</span></div><div class="tbls" data-i18n="mart_tbls">mart_daily_kpi · mart_daily_revenue · mart_channel_daily · mart_user_summary —— 口径已冻结，专给「复盘 / 归因 / 复购」这类洞察问题用</div></div>
+          </div>
+          <div class="wm-detail" id="domDetail" hidden></div>
+        </div>
+
+        <div class="wm-cta"><span class="hand">👈</span><span data-i18n="wm_cta">从左边挑一个<b>示例问题</b>开始，或直接在输入框里打字问。结果是真查真算，<b>每次约 50–70 秒</b>，请稍候。</span></div>
+      </div>
+    </main>
+  </div>
+</div>
+
+<!-- nosemgrep: insecure-document-method —— 同上:渲染 app/模型生成内容,用户文本已转义 -->
+<script>
+const $=s=>document.querySelector(s);
+const API=location.protocol.startsWith('http') ? location.origin : 'http://127.0.0.1:8000';
+const fmt=n=>typeof n==='number'?n.toLocaleString('en-US'):n;
+let MODE='baked';        // 'live' | 'baked'
+let busy=false, sessionId=null;
+const log=$('#log'), canvas=$('#canvas');
+const WELCOME_HTML=canvas.innerHTML;   // 留底，清空 session 时恢复欢迎页
+
+/* ---------------- i18n layer (English default / 中文) ---------------- */
+/* 只切换 UI 外壳文案；分析结果内容(KPI/洞察/SQL/表数据)与后端一致仍为中文，示例问题发给后端的 query(q) 不变。 */
+let LANG=(function(){try{var l=localStorage.getItem('aa_lang');return (l==='zh'||l==='en')?l:'en';}catch(e){return 'en';}})();
+const I18N={
+ en:{
+  page_title:'App Analytics · AI Data Analyst',
+  brand_sub:'AI Data Analyst',
+  db_initial:'Data source <b>app_analytics</b> · 35 detail tables + 4 governance tables · PostgreSQL',
+  model_connecting:'Connecting…',
+  rail_h2:'Conversation',
+  rail_p:'Ask in plain language — the agent finds the tables, writes the SQL, and builds the charts',
+  clear_title:'Clear this session and return to the welcome page',
+  clear_btn:'Clear',
+  q_ph:'Ask something else, e.g. "user distribution by tier"…',
+  send_title:'Send',
+  foot_detecting:'Checking backend…',
+  wm_eyebrow:'Live · Claude Opus 4.8 on Amazon Bedrock',
+  wm_title:'Ask your data in plain language,<br>watch it turn into <span class="em">charts and answers</span>',
+  wm_lead:'This is an AI data analyst wired straight into a real PostgreSQL database. You <b>don’t write SQL and don’t need to memorize the schema</b> — ask a business question the way you’d say it out loud, and it flips through the data-dictionary docs, decides which tables to use, writes a read-only query, runs it, then charts the result and gives you the takeaway. Ask on the left, results on the right, and every step in between — including which file it’s reading — stays visible.',
+  wm_s1_t:'You ask',
+  wm_s1_p:'“Which channel brings in the most valuable users?”<br>Plain language is fine — no need to be precise',
+  wm_s2_t:'The agent works',
+  wm_s2_p:'Reads the data-dictionary docs layer by layer → gets the schema → writes read-only SQL → runs it',
+  wm_s3_t:'You get insight',
+  wm_s3_p:'Key metrics + charts + a one-line takeaway<br>Which docs it read and the full SQL are expandable to verify',
+  wm_data_h2:'The data behind it',
+  wm_data_span:'app_analytics · 35 detail tables + 4 governance tables · ~190K rows · sample window 2025-10 – 2026-01',
+  wm_hint:'👆 Click any card to expand and see the <b>fields of every table</b> in that domain (click again to collapse)',
+  dom_user:'User domain',dom_behavior:'Behavior domain',dom_transaction:'Transaction domain',dom_product:'Product domain',
+  dom_social:'Social domain',dom_marketing:'Marketing domain',dom_attribution:'Attribution domain',dom_experiment:'Experiment domain',
+  dom_mart:'Governance layer · mart (curated)',
+  cnt_user:'5 tables',cnt_behavior:'4 tables',cnt_transaction:'4 tables',cnt_product:'3 tables',cnt_social:'6 tables',
+  cnt_marketing:'5 tables',cnt_attribution:'5 tables',cnt_experiment:'3 tables',cnt_mart:'4 tables',
+  mart_tbls:'mart_daily_kpi · mart_daily_revenue · mart_channel_daily · mart_user_summary — definitions frozen, built for review / attribution / repurchase-style insight questions',
+  wm_cta:'Pick an <b>example question</b> on the left, or just type your own. Every answer is really queried and computed — <b>about 50–70 seconds each</b>, please wait.',
+  fields_subset:'fields shown are a subset',
+  db_live_pre:'Data source <b>',
+  db_live_post:'</b> · 35 detail tables + 4 governance tables · PostgreSQL (live)',
+  foot_live:'Engine: Claude Agent SDK + Bedrock · querying the live local database',
+  model_offline:'Offline demo mode',
+  foot_offline:'Backend not connected — running the offline demo (mock data). Start the backend: <code style="font-family:JetBrains Mono">backend/run.sh</code>',
+  wf_agent:'Agent workflow',wf_analyzing:'Analyzing…',
+  recall_view:'↺ Revisit this chart',recall_showing:'● Now showing',
+  badge_think:'reason',badge_doc:'read_doc',badge_schema:'schema',badge_run:'run_sql',badge_metric:'call_metric',
+  badge_stats:'compute_stats',badge_gen:'reasoning',badge_chart:'present_result',
+  reason_next:'Reasoning · thinking about the next step',reason_decide:'Reasoning · deciding the next step',
+  reason_gen:'Reasoning · generating result / next step',
+  steps_word:'steps',total_word:'total',ft_llm:'🧠 Model reasoning',ft_db:'🔧 DB fetch',ft_docs:'📄 Docs',ft_docs_unit:'',
+  ft_metric:'ƒ Metric calls',ft_stats:'🧮 Stat computations',
+  doc_missing:'Document not found',
+  step_think:'Understanding the question and planning which docs to read',
+  lbl_doc:'Reading data dictionary',lbl_run:'Running query · PostgreSQL',lbl_metric:'Calling governance metric function',lbl_chart:'Generating charts and insights',
+  step_readdoc:'Reading doc',metric_label:'Calling governance metric',running:'Running…',
+  stats_label:'Stat computation',computing:'Computing…',notfound:'Not found',
+  metric_notcov:'Metric not covered — switching to hand-written SQL',stats_done:'Computed',stats_detail_pre:'✓ Deterministic computation · ',
+  stats_err:'Parameter error — retrying',err_step:'Something went wrong',err_unknown:'Unknown error',anomaly:'Anomaly',
+  interp_tag:'Interpreted as',kpi_baseline:'Baseline',
+  find_driver:'Driver',find_anomaly:'Anomaly',find_risk:'Risk',
+  stats_tool_tag:'⚙ compute_stats exact calc',
+  stats_tool_title:'All statistics are computed exactly by the compute_stats tool using deterministic code, not model estimates',
+  method_name:'Statistical method',method_tag:'Method',method_steps:'Analysis steps',method_formula:'Formula',
+  src_pre:'🔒 Governance metric ',src_post:' · matches the dashboard definition',
+  fncall_head:'ƒ This result comes from a governance-metric function call (definition frozen, matches the dashboard)',
+  fc_metric:'Metric',fc_version:'Version',fc_unit:'Unit',fc_dbexec:'DB exec',
+  result_title:'Analysis result',multi_title:'Multi-dimensional analysis',toggle_chart:'Chart',toggle_data:'Data',
+  sql_view:'View generated SQL'
+ },
+ zh:{
+  page_title:'App Analytics · AI 数据分析师',
+  brand_sub:'AI 数据分析师',
+  db_initial:'数据源 <b>app_analytics</b> · 35 明细表 + 4 治理表 · PostgreSQL',
+  model_connecting:'连接中…',
+  rail_h2:'对话',
+  rail_p:'用大白话提问，Agent 自动找表、写 SQL、出图',
+  clear_title:'清空当前会话，回到欢迎页',
+  clear_btn:'清空',
+  q_ph:'问点别的，比如「按等级看用户分布」…',
+  send_title:'发送',
+  foot_detecting:'正在检测后端…',
+  wm_eyebrow:'实时 · Claude Opus 4.8 on Amazon Bedrock',
+  wm_title:'用大白话问数据，<br>看它自己变成<span class="em">图表和结论</span>',
+  wm_lead:'这是一个直接接在真实 PostgreSQL 上的 AI 数据分析师。你<b>不用写 SQL、也不用记表结构</b>——按日常说法提一个业务问题，它会自己翻数据字典文档、判断该用哪些表、写出只读查询、跑数，再画图给结论。左边提问，右边出活，中间每一步——包括它正在读哪个文件——都看得见。',
+  wm_s1_t:'你提问',
+  wm_s1_p:'「哪个渠道拉来的用户最值钱？」<br>大白话就行，不必精确',
+  wm_s2_t:'Agent 干活',
+  wm_s2_p:'按路由逐层读数据字典文档 → 拿到表结构 → 写只读 SQL → 执行',
+  wm_s3_t:'出洞察',
+  wm_s3_p:'关键指标 + 图表 + 一句话结论<br>读了哪些文档、SQL 全程可展开核对',
+  wm_data_h2:'背后的数据',
+  wm_data_span:'app_analytics · 35 明细表 + 4 治理表 · ~19万行 · 样本区间 2025-10 ~ 2026-01',
+  wm_hint:'👆 点任意卡片，展开看该域<b>每张表的字段</b>（再点收起）',
+  dom_user:'用户域',dom_behavior:'行为域',dom_transaction:'交易域',dom_product:'商品域',
+  dom_social:'社交域',dom_marketing:'营销域',dom_attribution:'归因域',dom_experiment:'实验域',
+  dom_mart:'治理层 · mart（治理后）',
+  cnt_user:'5 表',cnt_behavior:'4 表',cnt_transaction:'4 表',cnt_product:'3 表',cnt_social:'6 表',
+  cnt_marketing:'5 表',cnt_attribution:'5 表',cnt_experiment:'3 表',cnt_mart:'4 表',
+  mart_tbls:'mart_daily_kpi · mart_daily_revenue · mart_channel_daily · mart_user_summary —— 口径已冻结，专给「复盘 / 归因 / 复购」这类洞察问题用',
+  wm_cta:'从左边挑一个<b>示例问题</b>开始，或直接在输入框里打字问。结果是真查真算，<b>每次约 50–70 秒</b>，请稍候。',
+  fields_subset:'字段为节选',
+  db_live_pre:'数据源 <b>',
+  db_live_post:'</b> · 35 明细表 + 4 治理表 · PostgreSQL（实时）',
+  foot_live:'大脑：Claude Agent SDK + Bedrock · 真实查询本地库',
+  model_offline:'离线演示模式',
+  foot_offline:'后端未连接，当前为离线演示（模拟数据）。启动后端：<code style="font-family:JetBrains Mono">backend/run.sh</code>',
+  wf_agent:'Agent 工作流',wf_analyzing:'分析中…',
+  recall_view:'↺ 回看此图表',recall_showing:'● 正在显示',
+  badge_think:'推理',badge_doc:'read_doc',badge_schema:'表结构',badge_run:'run_sql',badge_metric:'call_metric',
+  badge_stats:'compute_stats',badge_gen:'模型推理',badge_chart:'present_result',
+  reason_next:'模型推理 · 思考下一步',reason_decide:'模型推理 · 决定下一步',
+  reason_gen:'模型推理 · 生成结果/下一步',
+  steps_word:'步',total_word:'总',ft_llm:'🧠 模型推理',ft_db:'🔧 DB取数',ft_docs:'📄 文档',ft_docs_unit:' 份',
+  ft_metric:'ƒ 指标调用',ft_stats:'🧮 统计计算',
+  doc_missing:'文档不存在',
+  step_think:'理解问题、规划要读哪些文档',
+  lbl_doc:'读取数据字典',lbl_run:'执行查询 · PostgreSQL',lbl_metric:'调用治理指标 function',lbl_chart:'生成图表与洞察',
+  step_readdoc:'读取文档',metric_label:'调用治理指标',running:'执行中…',
+  stats_label:'统计计算',computing:'计算中…',notfound:'未找到',
+  metric_notcov:'指标未覆盖，改手写 SQL',stats_done:'已计算',stats_detail_pre:'✓ 确定性计算 · ',
+  stats_err:'计算参数错误，重试',err_step:'出错了',err_unknown:'未知错误',anomaly:'异常',
+  interp_tag:'已理解为',kpi_baseline:'对比基准',
+  find_driver:'驱动',find_anomaly:'异常',find_risk:'风险',
+  stats_tool_tag:'⚙ compute_stats 精确计算',
+  stats_tool_title:'所有统计量由 compute_stats 工具用确定性代码精确计算，非模型估算',
+  method_name:'统计分析方法',method_tag:'统计方法',method_steps:'分析步骤',method_formula:'统计公式',
+  src_pre:'🔒 治理指标 ',src_post:' · 与看板口径一致',
+  fncall_head:'ƒ 本结果由治理指标 function call 产出（口径冻结，与看板一致）',
+  fc_metric:'指标',fc_version:'版本',fc_unit:'单位',fc_dbexec:'DB 执行',
+  result_title:'分析结果',multi_title:'多维分析',toggle_chart:'图表',toggle_data:'数据',
+  sql_view:'查看生成的 SQL'
+ }
+};
+function t(k){var o=I18N[LANG]||I18N.en;return (o[k]!=null?o[k]:(I18N.en[k]!=null?I18N.en[k]:k));}
+const tr=t;   // 别名:供内部把 t 用作局部变量的函数(如 renderChart 里 const t=spec.type)调用 i18n
+// —— 带参数的文案:根据语言拼装 ——
+function L_rowsPrev(n,c,ms){return LANG==='zh'?`返回 ${fmt(n)} 行 × ${c} 列 · DB ${fmtMs(ms)}`:`Returned ${fmt(n)} rows × ${c} cols · DB ${fmtMs(ms)}`;}
+function L_rowsPrevNoDb(n,c){return LANG==='zh'?`返回 ${fmt(n)} 行 × ${c} 列`:`Returned ${fmt(n)} rows × ${c} cols`;}
+function L_peekMore(n){return LANG==='zh'?`…共 ${fmt(n)} 行，完整明细见右侧画布`:`…${fmt(n)} rows total; full detail on the right`;}
+function L_rowsDisc(n,trunc){return LANG==='zh'?`查询结果明细（${n} 行${trunc?'，已截断':''}）`:`Query results (${n} rows${trunc?', truncated':''})`;}
+function L_tablesCount(n){return LANG==='zh'?`${n} 张表`:`${n} tables`;}
+function L_followups(){return LANG==='zh'?['换个时间范围对比看看','再按一个维度拆开','看看相关的其他指标']:['Compare a different time range','Break it down by another dimension','Look at other related metrics'];}
+function L_backendFail(msg){return LANG==='zh'?`<div class="errbox">后端连接失败：${msg}。已回退到离线演示模式可刷新页面。</div>`:`<div class="errbox">Backend connection failed: ${msg}. Falling back to offline demo mode — you can refresh the page.</div>`;}
+// —— 英文侧的域/表说明(SCHEMA 保持不变,这里做展示层翻译) ——
+const SCHEMA_EN={
+ user:{name:'User domain',d:{users:'User master table',user_profiles:'User profiles',user_devices:'Device info',user_segments:'Segment definitions',user_segment_members:'Segment membership'}},
+ behavior:{name:'Behavior domain',d:{events:'Event stream (core large table)',sessions:'Session aggregates',page_views:'Page views',event_definitions:'Event metadata / dictionary'}},
+ transaction:{name:'Transaction domain',d:{orders:'Order master',order_items:'Order line items',payments:'Payment records',subscriptions:'Membership subscriptions'}},
+ product:{name:'Product domain',d:{products:'Products / content',categories:'Categories (multi-level)',product_tags:'Product tags'}},
+ social:{name:'Social domain',d:{posts:'UGC content',post_likes:'Likes',post_comments:'Comments',post_shares:'Shares',user_follows:'Follow relationships',user_messages:'Direct messages'}},
+ marketing:{name:'Marketing domain',d:{campaigns:'Campaigns',coupons:'Coupon templates',user_coupons:'User coupon claim / redemption records',banners:'Banner slot config',push_notifications:'Push records'}},
+ attribution:{name:'Attribution domain',d:{channels:'Channel dimension',ad_campaigns:'Ad campaigns',ad_creatives:'Ad creatives',channel_daily_costs:'Channel daily cost',user_attributions:'User attribution records'}},
+ experiment:{name:'Experiment domain',d:{ab_tests:'A/B test config',ab_test_variants:'Test variants',ab_test_assignments:'User assignments'}},
+ mart:{name:'Governance layer · mart (curated)',d:{mart_daily_kpi:'Daily business dashboard',mart_daily_revenue:'Revenue fact table (day × channel × new/returning)',mart_channel_daily:'Channel performance (CAC/ROI)',mart_user_summary:'User summary (repurchase / LTV)'}}
+};
+let BOOTED=false, HEALTH=null;
+function renderStatus(){
+  if(!BOOTED)return;
+  if(MODE==='live'&&HEALTH){
+    $('#modelLabel').textContent=(HEALTH.model||'Claude Opus').replace('global.anthropic.','')+' · Amazon Bedrock';
+    $('#dbInfo').innerHTML=t('db_live_pre')+HEALTH.db.name+t('db_live_post');
+    $('#foot').textContent=t('foot_live');
+  } else {
+    $('#modelLabel').textContent=t('model_offline');
+    $('#foot').innerHTML=t('foot_offline');
+  }
+}
+function applyI18n(root){
+  root=root||document;
+  root.querySelectorAll('[data-i18n]').forEach(el=>{const v=t(el.getAttribute('data-i18n'));if(v!=null)el.innerHTML=v;});
+  root.querySelectorAll('[data-i18n-ph]').forEach(el=>{const v=t(el.getAttribute('data-i18n-ph'));if(v!=null)el.setAttribute('placeholder',v);});
+  root.querySelectorAll('[data-i18n-title]').forEach(el=>{const v=t(el.getAttribute('data-i18n-title'));if(v!=null)el.setAttribute('title',v);});
+  document.documentElement.lang=(LANG==='zh')?'zh-CN':'en';
+  document.title=t('page_title');
+  const ll=$('#langLabel');if(ll)ll.textContent=(LANG==='zh')?'EN':'中文';
+  renderStatus();
+}
+function setLang(l){LANG=(l==='zh')?'zh':'en';try{localStorage.setItem('aa_lang',LANG);}catch(e){}applyI18n();if(typeof renderPresets==='function')renderPresets();}
+$('#langToggle').onclick=()=>setLang(LANG==='en'?'zh':'en');
+applyI18n();
+
+// —— 欢迎页：点域卡片展开看每张表的字段（字段为节选，取自真实 DDL） ——
+const SCHEMA={
+ user:{name:'用户域',tables:[
+   {t:'users',d:'用户主表',c:'user_id · registered_at · registration_source · status · user_level · is_vip · last_active_at'},
+   {t:'user_profiles',d:'用户画像',c:'user_id · age · gender · city · province · interests · income_level'},
+   {t:'user_devices',d:'设备信息',c:'device_id · user_id · device_type · os_version · app_version'},
+   {t:'user_segments',d:'分群定义',c:'segment_id · segment_name · segment_type · rules_json'},
+   {t:'user_segment_members',d:'分群成员关系',c:'user_id · segment_id · entered_at · exited_at'}]},
+ behavior:{name:'行为域',tables:[
+   {t:'events',d:'行为事件流（核心大表）',c:'event_id · user_id · session_id · event_name · event_time · properties'},
+   {t:'sessions',d:'会话聚合',c:'session_id · user_id · start_time · duration_seconds · is_bounce · traffic_source · utm_source'},
+   {t:'page_views',d:'页面浏览',c:'page_view_id · user_id · session_id · page_name · duration_seconds · scroll_depth_pct'},
+   {t:'event_definitions',d:'事件元数据 / 字典',c:'event_name · event_category · description · is_core_event'}]},
+ transaction:{name:'交易域',tables:[
+   {t:'orders',d:'订单主表',c:'order_id · user_id · status · total_amount · actual_amount · coupon_id · placed_at · paid_at'},
+   {t:'order_items',d:'订单明细',c:'item_id · order_id · product_id · quantity · unit_price · actual_amount'},
+   {t:'payments',d:'支付记录',c:'payment_id · order_id · amount · payment_method · status · paid_at'},
+   {t:'subscriptions',d:'会员订阅',c:'subscription_id · user_id · plan_name · plan_price · start_date · end_date · status · auto_renew'}]},
+ product:{name:'商品域',tables:[
+   {t:'products',d:'商品 / 内容',c:'product_id · product_name · category_id · brand · price · cost · stock · sold_count · rating_avg · status'},
+   {t:'categories',d:'分类（多级）',c:'category_id · parent_id · category_name · level · sort_order'},
+   {t:'product_tags',d:'商品标签',c:'id · product_id · tag_name · tag_type'}]},
+ social:{name:'社交域',tables:[
+   {t:'posts',d:'UGC 内容',c:'post_id · user_id · content_type · title · view_count · like_count · comment_count · share_count · published_at'},
+   {t:'post_likes',d:'点赞',c:'user_id · post_id · created_at'},
+   {t:'post_comments',d:'评论',c:'comment_id · post_id · user_id · parent_comment_id · content · like_count'},
+   {t:'post_shares',d:'分享',c:'share_id · user_id · post_id · share_channel'},
+   {t:'user_follows',d:'关注关系',c:'follower_id · following_id · created_at'},
+   {t:'user_messages',d:'私信',c:'message_id · sender_id · receiver_id · message_type · is_read · sent_at'}]},
+ marketing:{name:'营销域',tables:[
+   {t:'campaigns',d:'运营活动',c:'campaign_id · campaign_name · campaign_type · start_date · end_date · budget · status'},
+   {t:'coupons',d:'优惠券模板',c:'coupon_id · coupon_name · coupon_type · discount_value · min_purchase · valid_days · total_quota · status'},
+   {t:'user_coupons',d:'用户领券 / 核销记录',c:'id · user_id · coupon_id · received_at · used_at · order_id · status · source'},
+   {t:'banners',d:'资源位配置',c:'banner_id · position · target_type · click_count · impression_count · is_active'},
+   {t:'push_notifications',d:'推送记录',c:'push_id · user_id · campaign_id · push_type · sent_at · is_delivered · is_opened'}]},
+ attribution:{name:'归因域',tables:[
+   {t:'channels',d:'渠道维表',c:'channel_id · channel_name · channel_type · platform · is_active'},
+   {t:'ad_campaigns',d:'广告投放活动',c:'ad_campaign_id · channel_id · campaign_name · objective · budget_total · start_date · end_date · status'},
+   {t:'ad_creatives',d:'广告素材',c:'creative_id · ad_campaign_id · creative_type · headline · call_to_action'},
+   {t:'channel_daily_costs',d:'渠道每日成本',c:'id · channel_id · date · impressions · clicks · installs · cost'},
+   {t:'user_attributions',d:'用户归因记录',c:'attribution_id · user_id · channel_id · attribution_type · click_time · install_time'}]},
+ experiment:{name:'实验域',tables:[
+   {t:'ab_tests',d:'A/B 实验配置',c:'test_id · test_name · test_key · primary_metric · status · winner_variant_id'},
+   {t:'ab_test_variants',d:'实验分支',c:'variant_id · test_id · variant_name · variant_key · traffic_percentage · is_control'},
+   {t:'ab_test_assignments',d:'用户分组',c:'id · user_id · test_id · variant_id · assigned_at · first_exposure_at'}]},
+ mart:{name:'治理层 · mart（治理后）',tables:[
+   {t:'mart_daily_kpi',d:'每日业务大盘',c:'dt · dau · new_users · orders · paying_users · gmv · refund_amt · new_subscriptions'},
+   {t:'mart_daily_revenue',d:'收入事实表（日×渠道×新老客）',c:'dt · channel_name · channel_type · is_new_user · order_cnt · paying_user_cnt · gmv'},
+   {t:'mart_channel_daily',d:'渠道效果表（算 CAC/ROI）',c:'dt · channel_name · cost · impressions · clicks · installs · new_users_attributed · gmv_attributed'},
+   {t:'mart_user_summary',d:'用户汇总（复购 / LTV）',c:'user_id · register_date · register_channel · first_paid_date · paid_order_cnt · total_gmv · is_repurchaser_30d'}]}
+};
+document.addEventListener('click',e=>{
+  const card=e.target.closest('.wm-dom'); if(!card||!card.dataset.dom) return;
+  const panel=document.getElementById('domDetail'); if(!panel) return;
+  const wasActive=card.classList.contains('active');
+  document.querySelectorAll('.wm-dom.active').forEach(c=>c.classList.remove('active'));
+  if(wasActive){panel.hidden=true;panel.innerHTML='';return;}
+  const d=SCHEMA[card.dataset.dom]; if(!d){panel.hidden=true;return;}
+  const de=(LANG==='en')?SCHEMA_EN[card.dataset.dom]:null;
+  const dName=(de&&de.name)||d.name;
+  card.classList.add('active');
+  panel.innerHTML='<div class="dt-head"><span>'+dName+' · '+L_tablesCount(d.tables.length)+'</span><span class="mut">'+t('fields_subset')+'</span></div>'+
+    d.tables.map(x=>{const dsc=(de&&de.d&&de.d[x.t])||x.d;return '<div class="dt-row"><span class="dt-name">'+x.t+'</span><span class="dt-desc">'+dsc+'</span><div class="dt-cols">'+x.c+'</div></div>';}).join('');
+  panel.hidden=false;
+  panel.scrollIntoView({behavior:'smooth',block:'nearest'});
+});
+let activeTurn=null;                    // 当前右侧正在显示哪一轮
+
+/* ---------------- chart palette / styling ---------------- */
+const SER=['#E0573B','#184E43','#2F9C8E','#D29A2A','#3C6488'];
+const PAL={line:'#E5DFD2',muted:'#9A9488',ink:'#544F45'};
+const baseGrid={left:8,right:18,top:30,bottom:8,containLabel:true};
+const axisStyle={axisLine:{lineStyle:{color:PAL.line}},axisTick:{show:false},
+  axisLabel:{color:PAL.muted,fontFamily:'Hanken Grotesk',fontSize:12},
+  splitLine:{lineStyle:{color:'#EEEAE0'}}};
+const grad=(c1,c2)=>new echarts.graphic.LinearGradient(0,0,0,1,[{offset:0,color:c1},{offset:1,color:c2}]);
+const hexA=(h,a)=>{const n=parseInt(h.slice(1),16);return `rgba(${n>>16&255},${n>>8&255},${n&255},${a})`;};
+const legend=show=>show?{right:0,top:0,textStyle:{color:'#544F45',fontFamily:'Hanken Grotesk'},icon:'roundRect',itemWidth:12,itemHeight:8}:undefined;
+
+function renderChart(el, spec){
+  if(!spec||!spec.type) return null;
+  const c=echarts.init(el);
+  let opt={};
+  const t=spec.type;
+  if(t==='line'||t==='bar'){
+    const series=(spec.series||[]).map((s,i)=>{
+      const col=SER[i%SER.length];
+      const isBar=(t==='bar')||s.kind==='bar';
+      const base={name:s.name,yAxisIndex:s.axis==='right'?1:0,data:s.data};
+      // 异常点标记(方向3)。兼容两种入参格式:
+      //  a) ECharts 原生(agent 常给): {coord:[x,y], name}
+      //  b) 简写: {xIndex, value, label}
+      // 统一转成 ECharts 的 {coord:[xLabel,yVal], value:文字},任一字段缺失则跳过该点,避免抛错。
+      const mk={};
+      const xs=spec.x||[];
+      if(s.markPoints&&s.markPoints.length){
+        // 异常点:不再用大 pin 盖住峰值。改为在点上画一个空心红环圈住数据点,
+        // 文字做成"深色描边小标签"浮在点的正上方(top),短文本(如 Z=2.1),不遮挡曲线、不被顶轴裁切。
+        const pts=s.markPoints.map(p=>{
+          let coord=p.coord;
+          if(!coord){ // 简写格式
+            const xv=(typeof p.xIndex==='number')?xs[p.xIndex]:p.x;
+            if(xv===undefined||p.value===undefined) return null;
+            coord=[xv,p.value];
+          }
+          if(!Array.isArray(coord)||coord.length<2) return null;
+          let lab=(p.label||p.name||'').toString().replace(/\s+/g,' ').trim();
+          if(lab.length>10) lab=lab.slice(0,10);        // 避免长文本溢出
+          return {coord, value:lab};
+        }).filter(Boolean);
+        if(pts.length) mk.markPoint={
+          symbol:'circle', symbolSize:11,
+          itemStyle:{color:'#fff',borderColor:'#E0573B',borderWidth:3,
+            shadowBlur:6,shadowColor:hexA('#E0573B',.4)},
+          label:{show:true,position:'top',distance:8,
+            formatter:o=>o.value||tr('anomaly'),
+            color:'#B23A22',fontSize:11,fontWeight:700,fontFamily:'Hanken Grotesk',
+            backgroundColor:'#fff',borderColor:hexA('#E0573B',.5),borderWidth:1,
+            borderRadius:5,padding:[2,6]},
+          data:pts};
+      }
+      if(s.markLines&&s.markLines.length){
+        // μ 均值线 / μ±2σ 阈值带:虚线 + 标签放在线的左端(start),浅色小字,不挤在右侧盖住数据。
+        const lns=s.markLines.map(m=>{
+          const yv=(m.value!==undefined)?m.value:m.yAxis;
+          if(yv===undefined) return null;
+          const nm=(m.label||m.name||'');
+          const isMean=/μ$|均值|mean/i.test(nm)&&!/[±+\-]/.test(nm);
+          return {yAxis:yv, name:nm, lineStyle:{color:isMean?hexA('#184E43',.55):hexA('#9A9488',.6),
+            type:isMean?'solid':'dashed',width:isMean?1.5:1}};
+        }).filter(Boolean);
+        if(lns.length) mk.markLine={symbol:'none',
+          label:{position:'start',formatter:o=>o.name||'',color:PAL.muted,fontSize:10,
+            backgroundColor:hexA('#FBFAF5',.85),padding:[1,3],borderRadius:3},
+          data:lns};
+      }
+      if(isBar) return {...base,type:'bar',barWidth:(spec.series.length>1?'40%':'52%'),
+        itemStyle:{color:grad(col,hexA(col,.55)),borderRadius:[6,6,0,0]},...mk};
+      return {...base,type:'line',smooth:.4,symbol:'circle',symbolSize:6,
+        lineStyle:{width:3,color:col},itemStyle:{color:col,borderColor:'#fff',borderWidth:2},
+        areaStyle:(spec.series.length===1?{color:grad(hexA(col,.26),hexA(col,.02))}:undefined),...mk};
+    });
+    const hasRight=(spec.series||[]).some(s=>s.axis==='right');
+    const hasBar=(t==='bar')||(spec.series||[]).some(s=>s.kind==='bar');
+    // 有异常点标签时,给顶部多留空间(标签浮在最高点上方,否则会被顶轴裁切,如截图)
+    const hasMarks=(spec.series||[]).some(s=>s.markPoints&&s.markPoints.length);
+    const grid=hasMarks?{...baseGrid,top:46}:baseGrid;
+    // 让 y 轴上界比数据峰值再高一点,给异常点标签腾出净空
+    const yBase={type:'value',...axisStyle};
+    const yTop=hasMarks?{...yBase,scale:false}:yBase;
+    opt={grid,tooltip:{trigger:'axis'},legend:legend((spec.series||[]).length>1),
+      xAxis:{type:'category',data:spec.x||[],...axisStyle,boundaryGap:hasBar},
+      yAxis:hasRight?[yTop,{type:'value',...axisStyle,splitLine:{show:false}}]:yTop,
+      series};
+  } else if(t==='hbar'){
+    const cats=spec.categories||[], vals=spec.values||[], note=spec.note||[];
+    opt={grid:{left:8,right:74,top:14,bottom:8,containLabel:true},
+      tooltip:{trigger:'axis',axisPointer:{type:'shadow'},formatter:p=>{const i=p[0].dataIndex;return cats[i]+'<br/>'+fmt(p[0].value)+(note[i]?'<br/>'+note[i]:'');}},
+      xAxis:{type:'value',...axisStyle},
+      yAxis:{type:'category',data:cats,inverse:true,...axisStyle,axisLabel:{...axisStyle.axisLabel,color:'#544F45',fontWeight:600}},
+      series:[{type:'bar',barWidth:'58%',data:vals.map((v,i)=>({value:v,itemStyle:{color:SER[i%SER.length],borderRadius:[0,6,6,0]}})),
+        label:{show:true,position:'right',formatter:p=>fmt(p.value)+(note[p.dataIndex]?'  ·  '+note[p.dataIndex]:''),color:PAL.muted,fontSize:11.5}}]};
+  } else if(t==='funnel'){
+    const items=(spec.items||[]).slice().sort((a,b)=>b.value-a.value);
+    opt={tooltip:{trigger:'item',formatter:'{b}: {c}'},
+      series:[{type:'funnel',top:18,bottom:18,left:'8%',right:'8%',minSize:'28%',gap:3,
+        label:{position:'inside',color:'#fff',fontWeight:600,fontFamily:'Hanken Grotesk',fontSize:14,formatter:'{b}  {c}'},
+        itemStyle:{borderWidth:0},
+        data:items.map((it,i)=>({value:it.value,name:it.name,itemStyle:{color:SER[i%SER.length]}}))}]};
+  } else if(t==='pie'){
+    opt={tooltip:{trigger:'item',formatter:'{b}: {c} ({d}%)'},legend:legend(true),
+      series:[{type:'pie',radius:['42%','70%'],center:['50%','54%'],avoidLabelOverlap:true,
+        itemStyle:{borderColor:'#FBFAF5',borderWidth:3,borderRadius:5},
+        label:{color:'#544F45',fontFamily:'Hanken Grotesk'},
+        data:(spec.items||[]).map((it,i)=>({value:it.value,name:it.name,itemStyle:{color:SER[i%SER.length]}}))}]};
+  } else if(t==='heatmap'){
+    const xs=spec.xLabels||[], ys=spec.yLabels||[], cells=spec.cells||[];
+    const vals=cells.map(c=>c[2]); const mn=Math.min(...vals,0), mx=Math.max(...vals,1);
+    opt={grid:{left:8,right:18,top:14,bottom:60,containLabel:true},
+      tooltip:{position:'top',formatter:p=>ys[p.data[1]]+' · '+xs[p.data[0]]+'：'+p.data[2]},
+      xAxis:{type:'category',data:xs,splitArea:{show:true},axisLine:{lineStyle:{color:PAL.line}},axisTick:{show:false},axisLabel:{color:PAL.muted}},
+      yAxis:{type:'category',data:ys,inverse:true,splitArea:{show:true},axisLine:{lineStyle:{color:PAL.line}},axisTick:{show:false},axisLabel:{color:PAL.muted}},
+      visualMap:{min:mn,max:mx,calculable:true,orient:'horizontal',left:'center',bottom:8,
+        inRange:{color:['#F4EAE0','#EE9F6F','#E0573B','#184E43']},textStyle:{color:PAL.muted}},
+      series:[{type:'heatmap',data:cells,label:{show:true,color:'#fff',fontSize:11,fontWeight:600},
+        itemStyle:{borderColor:'#FBFAF5',borderWidth:3,borderRadius:4},emphasis:{itemStyle:{shadowBlur:8,shadowColor:'rgba(0,0,0,.2)'}}}]};
+  } else { return null; }
+  c.setOption(opt);
+  return c;
+}
+
+/* ---------------- SQL highlight + helpers ---------------- */
+function hlSql(s){
+  const kws=['SELECT','FROM','WHERE','GROUP BY','ORDER BY','LIMIT','AND','OR','AS','WITH','LEFT JOIN','JOIN','ON','FILTER','CASE','WHEN','THEN','ELSE','END','interval','current_date','DISTINCT','IN','DESC','ASC','HAVING'];
+  let h=(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;');
+  h=h.replace(/'[^']*'/g,m=>`<span class="st">${m}</span>`);
+  h=h.replace(/\b(count|sum|round|avg|date|coalesce|max|min|extract|to_char)\b/gi,'<span class="fn">$1</span>');
+  kws.sort((a,b)=>b.length-a.length).forEach(k=>{h=h.replace(new RegExp('\\b'+k.replace(/ /g,'\\s')+'\\b','g'),m=>`<span class="kw">${m}</span>`);});
+  return h;
+}
+const mdBold=s=>(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/\*\*(.+?)\*\*/g,'<b>$1</b>');
+const wait=ms=>new Promise(r=>setTimeout(r,ms));
+const stripTags=h=>{const d=document.createElement('div');d.innerHTML=h;return d.textContent;};
+async function typeIn(el,text){el.textContent='';for(let i=0;i<text.length;i++){el.textContent+=text[i];if(i%3===0)await wait(8);}}
+function countUp(el){const target=parseFloat(el.dataset.count);if(isNaN(target))return;const dec=(target%1!==0)?1:0;const dur=850,t0=performance.now();
+  (function step(t){const p=Math.min((t-t0)/dur,1),e=1-Math.pow(1-p,3),v=target*e;
+    el.firstChild.textContent=dec?v.toFixed(1):Math.round(v).toLocaleString('en-US');
+    if(p<1)requestAnimationFrame(step);})(t0);}
+
+/* ---------------- rail turn ---------------- */
+function newTurn(question){
+  $('#empty')?.remove();$('#welcome')?.remove();
+  log.querySelectorAll('.trace').forEach(t=>t.classList.add('collapsed'));  // 旧轮工作流收起，保持干净
+  const turn=document.createElement('div');turn.className='turn';
+  turn.innerHTML=`<div class="recall">${t('recall_view')}</div>
+    <div class="q">${question.replace(/</g,'&lt;')}</div>
+    <div class="a"><div class="ava">A</div><div class="body">
+      <div class="trace">
+        <div class="trace-head"><span class="caret">▾</span><span class="tsum">${t('wf_agent')}</span>
+          <span class="live"><span class="spin"></span>${t('wf_analyzing')}</span></div>
+        <div class="trace-body"><div class="steps"></div></div>
+      </div>
+      <div class="summary typing" style="display:none"></div>
+      <div class="chips" style="display:none"></div>
+    </div></div>`;
+  const traceEl=turn.querySelector('.trace');
+  turn.querySelector('.trace-head').addEventListener('click',e=>{e.stopPropagation();traceEl.classList.toggle('collapsed');});
+  turn.addEventListener('click',e=>{
+    if(e.target.closest('.chip'))return;       // 点 followup 药丸照常发新问题
+    if(e.target.closest('.trace'))return;      // 点工作流内部只展开步骤，不触发回看
+    if(turn._payload) recall(turn);            // 有结果才回看
+  });
+  log.appendChild(turn);log.scrollTop=log.scrollHeight;
+  return {el:turn,trace:traceEl,steps:turn.querySelector('.steps'),
+    tsum:turn.querySelector('.tsum'),live:turn.querySelector('.live'),
+    summary:turn.querySelector('.summary'),chips:turn.querySelector('.chips'),
+    stepList:[],_steps:{},_docSteps:{},t0:performance.now(),timer:null,nDocs:0,nSql:0,nMetric:0,nStats:0,_openGen:null};
+}
+function attachResult(T,payload){
+  if(!T||!T.el)return;
+  T.el._payload=payload;
+  T.el.classList.add('clickable');
+  T.el.querySelector('.recall').textContent=t('recall_view');
+  setActiveTurn(T.el);
+}
+function setActiveTurn(el){
+  if(activeTurn&&activeTurn!==el){
+    activeTurn.classList.remove('active');
+    const r=activeTurn.querySelector('.recall');if(r)r.textContent=t('recall_view');
+  }
+  activeTurn=el;
+  if(el){el.classList.add('active');const r=el.querySelector('.recall');if(r)r.textContent=t('recall_showing');}
+}
+function recall(turn){
+  if(!turn._payload)return;
+  renderResult(turn._payload);
+  setActiveTurn(turn);
+}
+const BADGE={think:['b-think','think'],doc:['b-doc','doc'],schema:['b-schema','schema'],run:['b-sql','run'],metric:['b-doc','metric'],stats:['b-stats','stats'],gen:['b-reason','gen'],chart:['b-chart','chart']};
+const fmtMs=ms=>(ms==null?'':(ms<1000?(+ms).toFixed(ms<10?1:0)+'ms':(ms/1000).toFixed(2)+'s'));
+// 把某步定格为"已完成"并记录耗时归类：
+//   dbMs 给定 → DB 真实执行毫秒(绿,t-db)；gen/think 步 → LLM 墙钟秒(黄,t-llm)；其余(读文档)→ 执行毫秒。
+// 记 _ms/_kind，供 finishTrace 把"模型推理"与"DB 取数"分开汇总——这正是以前混计的根因。
+function freezeStep(T,obj,opt){
+  if(!obj||obj.done)return;clearInterval(T.timer);T.timer=null;
+  obj.done=true;obj.dot.innerHTML='<span class="ok">✓</span>';
+  const wall=performance.now()-obj.t0;
+  if(opt&&opt.dbMs!=null){obj.t.textContent=fmtMs(opt.dbMs);obj.t.classList.add('t-db');obj._ms=opt.dbMs;obj._kind='db';}
+  else if(obj.key==='gen'||obj.key==='think'){obj.t.textContent=(wall/1000).toFixed(1)+'s';obj.t.classList.add('t-llm');obj._ms=wall;obj._kind='llm';}
+  else{obj.t.textContent=fmtMs(wall);obj._ms=wall;obj._kind='exec';}
+}
+// 开一个"模型推理/生成"步，专门承接 LLM 思考+生成的时间（以前被混计到 SQL 步上）。
+function openReason(T,label){const o=addStep(T,'gen',label||t('reason_next'));T._openGen=o;return o;}
+function addStep(T,key,label,preview){
+  freezeLast(T);                                  // 上一步冻结（打勾 + 定格耗时）
+  const step=document.createElement('div');step.className='step'+(key==='doc'?' step-doc':'');
+  const bm=BADGE[key]||['b-think',key];const bc=bm[0];const bkey=bm[1];
+  let bl=t('badge_'+bkey);if(bl==='badge_'+bkey)bl=bkey;
+  step.innerHTML=`<div class="step-row">
+      <span class="dot"><span class="spin"></span></span>
+      <span class="lab">${label}</span>
+      <span class="badge ${bc}">${bl}</span>
+      <span class="prev"></span>
+      <span class="t">…</span>
+      <span class="xc" style="display:none">▸</span>
+    </div><div class="step-detail"></div>`;
+  T.steps.appendChild(step);
+  const obj={key,el:step,dot:step.querySelector('.dot'),prev:step.querySelector('.prev'),
+    t:step.querySelector('.t'),xc:step.querySelector('.xc'),detail:step.querySelector('.step-detail'),
+    t0:performance.now(),done:false};
+  if(preview)obj.prev.textContent=preview;
+  step.querySelector('.step-row').addEventListener('click',()=>{if(step.classList.contains('has-detail'))step.classList.toggle('open');});
+  T.stepList.push(obj);T._steps[key]=obj;
+  clearInterval(T.timer);
+  T.timer=setInterval(()=>{obj.t.textContent=((performance.now()-obj.t0)/1000).toFixed(1)+'s';},100);
+  log.scrollTop=log.scrollHeight;
+  return obj;
+}
+function freezeLast(T){
+  const last=T.stepList[T.stepList.length-1];
+  if(last&&!last.done){
+    freezeStep(T,last);                       // 走统一定格逻辑，记录 _kind/_ms 供汇总
+    // 两个事件背靠背时，中间的"模型推理"步可能只有几十毫秒——这种噪声步直接移除，保持工作流干净。
+    if(last.key==='gen'&&(last._ms||0)<200){
+      last.el.remove();T.stepList.pop();if(T._steps.gen===last)delete T._steps.gen;
+    }
+  }
+}
+function stepDetail(obj,html){               // 给某步挂上可展开的产物
+  if(!obj)return;obj.detail.innerHTML=html;obj.el.classList.add('has-detail');obj.xc.style.display='';
+}
+function stepAppend(obj,html){
+  if(!obj)return;obj.detail.innerHTML+=html;obj.el.classList.add('has-detail');obj.xc.style.display='';
+}
+function finishTrace(T){
+  freezeLast(T);if(T.live){T.live.remove();T.live=null;}
+  const totalMs=performance.now()-T.t0;
+  // 把各步耗时按归类汇总：LLM 推理(墙钟) / DB 取数(真实执行ms) / 读文档。
+  let llm=0,db=0,doc=0;
+  T.stepList.forEach(s=>{const m=s._ms||0;if(s._kind==='db')db+=m;else if(s._kind==='llm')llm+=m;else doc+=m;});
+  const parts=[`<b>${T.stepList.length}</b> ${t('steps_word')}`,`${t('total_word')} <b>${(totalMs/1000).toFixed(1)}s</b>`];
+  parts.push(`${t('ft_llm')} <b>${(llm/1000).toFixed(1)}s</b>`);
+  if(T.nSql||T.nMetric)parts.push(`${t('ft_db')} <b>${fmtMs(db)}</b>`);
+  if(T.nDocs)parts.push(`${t('ft_docs')} <b>${T.nDocs}</b>${t('ft_docs_unit')}`);
+  if(T.nMetric)parts.push(`${t('ft_metric')} <b>${T.nMetric}</b>`);
+  if(T.nStats)parts.push(`${t('ft_stats')} <b>${T.nStats}</b>`);
+  T.tsum.innerHTML=t('wf_agent')+' · '+parts.join(' · ');
+}
+function fmtSchema(text){                     // 把 ## 表名 / - 列: 类型 渲染成字段卡
+  return (text||'').split('\n').map(l=>{
+    l=l.replace(/&/g,'&amp;').replace(/</g,'&lt;');
+    let m=l.match(/^##\s*(.+)/);if(m)return `<div class="tname">› ${m[1]}</div>`;
+    m=l.match(/^\s*[-•]\s*([^:]+):\s*(.+)/);if(m)return `<div>&nbsp;&nbsp;${m[1].trim()} <span class="typ">${m[2].trim()}</span></div>`;
+    return l.trim()?`<div>${l}</div>`:'';
+  }).join('');
+}
+function rowPeek(cols,rows){                   // 查询结果头几行预览
+  const head=`<tr>${(cols||[]).map(c=>`<th>${String(c).replace(/</g,'&lt;')}</th>`).join('')}</tr>`;
+  const body=(rows||[]).slice(0,4).map(r=>`<tr>${r.map(c=>`<td>${c==null?'':(typeof c==='number'?fmt(c):String(c).replace(/</g,'&lt;'))}</td>`).join('')}</tr>`).join('');
+  const more=rows.length>4?`<div class="peek-more">${L_peekMore(rows.length)}</div>`:'';
+  return `<table class="peek"><thead>${head}</thead><tbody>${body}</tbody></table>${more}`;
+}
+// ——— agent 读到的数据字典文档：渲染成文件查看器 ———
+const esc=s=>(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;');
+const inlineMd=s=>esc(s).replace(/\*\*(.+?)\*\*/g,'<b>$1</b>').replace(/`([^`]+)`/g,'<code>$1</code>');
+function mdDoc(text){
+  const lines=(text||'').split('\n');let html='',inCode=false,code='';const tbl=[];
+  const parseRow=r=>r.trim().replace(/^\|/,'').replace(/\|$/,'').split('|').map(c=>c.trim());
+  const flushTbl=()=>{
+    if(!tbl.length)return;
+    const head=parseRow(tbl[0]);
+    const bodyRows=tbl.slice(1).filter(r=>r.replace(/[|\-:\s]/g,'').length>0);  // 丢掉 |---| 分隔行
+    html+=`<table class="md-tbl"><thead><tr>${head.map(h=>`<th>${inlineMd(h)}</th>`).join('')}</tr></thead><tbody>`+
+      bodyRows.map(r=>`<tr>${parseRow(r).map(c=>`<td>${inlineMd(c)}</td>`).join('')}</tr>`).join('')+'</tbody></table>';
+    tbl.length=0;
+  };
+  for(const raw of lines){
+    const line=raw.replace(/\r$/,'');
+    if(/^```/.test(line)){ if(inCode){html+=`<pre class="md-code">${esc(code)}</pre>`;code='';inCode=false;}else{flushTbl();inCode=true;} continue; }
+    if(inCode){code+=(code?'\n':'')+line;continue;}
+    if(/^\s*\|.*\|\s*$/.test(line)){tbl.push(line);continue;}
+    flushTbl();
+    const m=line.match(/^(#{1,4})\s+(.*)/);
+    if(m){html+=`<div class="md-h md-h${m[1].length}">${inlineMd(m[2])}</div>`;continue;}
+    if(/^\s*[-*]\s+/.test(line)){html+=`<div class="md-li">${inlineMd(line.replace(/^\s*[-*]\s+/,''))}</div>`;continue;}
+    if(line.trim()==='')continue;
+    html+=`<div class="md-p">${inlineMd(line)}</div>`;
+  }
+  if(inCode&&code)html+=`<pre class="md-code">${esc(code)}</pre>`;
+  flushTbl();
+  return html;
+}
+function docViewer(path,text,ok){
+  return `<div class="docview">
+    <div class="docview-bar"><span class="fp">📄 ${esc(path)}</span><span class="fkind">${ok?'markdown':'not found'}</span></div>
+    <div class="docview-body">${ok?mdDoc(text):`<div class="docerr">${esc(text||t('doc_missing'))}</div>`}</div>
+  </div>`;
+}
+function setChips(chipsEl,items){
+  if(!items||!items.length)return;
+  chipsEl.style.display='';chipsEl.innerHTML='';
+  items.forEach(t=>{const b=document.createElement('button');b.className='chip';b.innerHTML=`<span class="arr">↳</span>${t.replace(/</g,'&lt;')}`;
+    b.onclick=()=>ask(t);chipsEl.appendChild(b);});
+  log.scrollTop=log.scrollHeight;
+}
+
+/* ---------------- canvas render (shared) ---------------- */
+let currentCharts=[];
+function renderResult(p){
+  if(currentCharts&&currentCharts.length){currentCharts.forEach(c=>{try{c.dispose();}catch(e){}});}
+  currentCharts=[];
+  const ACC=['var(--brand)','var(--coral)','var(--teal)','var(--gold)'];
+  const kpiHTML=(p.kpis||[]).map((k,i)=>{
+    const isNum=typeof k.value==='number';
+    const delta=(k.delta||k.note)?`<div class="delta ${k.dir||''}">${k.dir?(k.dir==='up'?'▲':'▼'):''} ${k.delta||''}${k.note?` <span class="lab">${k.note}</span>`:''}</div>`:'';
+    // 对比基准(同环比/历史均值/目标值)——方向3:让 KPI 不只是一个孤数
+    const base=(k.baseline||k.baseline_value!=null)?`<div class="kpi-base">${(k.baseline||t('kpi_baseline')).replace(/</g,'&lt;')}${k.baseline_value!=null?`：${typeof k.baseline_value==='number'?fmt(k.baseline_value):k.baseline_value}`:''}</div>`:'';
+    return `<div class="kpi" style="--accent:${ACC[i%ACC.length]}">
+      <div class="label">${(k.label||'').replace(/</g,'&lt;')}</div>
+      <div class="val" ${isNum?`data-count="${k.value}"`:''}>${isNum?'0':(k.value??'')}${k.unit?`<span class="unit">${k.unit}</span>`:''}</div>
+      ${delta}${base}</div>`;}).join('');
+  // findings 洞察面板(方向3):驱动/异常/风险三类要点
+  const FK={driver:{ic:'↑',cls:'f-driver',lab:t('find_driver')},anomaly:{ic:'⚠',cls:'f-anomaly',lab:t('find_anomaly')},risk:{ic:'▽',cls:'f-risk',lab:t('find_risk')}};
+  const findHTML=(p.findings||[]).map(f=>{const m=FK[f.kind]||{ic:'•',cls:'',lab:''};
+    return `<div class="finding ${m.cls}"><span class="f-ic">${m.ic}</span><div class="f-body"><span class="f-tag">${m.lab}</span>${mdBold((f.text||'').replace(/</g,'&lt;'))}${f.evidence?`<span class="f-ev">${String(f.evidence).replace(/</g,'&lt;')}</span>`:''}</div></div>`;}).join('');
+  // 分析方法面板(方向3·深度):先亮方法/步骤/公式/统计量,再看数据——体现"分析层做了干预"
+  const mt=p.method||{};let methodHTML='';
+  // 只在有真材料(公式 or 统计量)时才展示方法面板——避免常规题挂一个空壳"统计分析方法"。
+  if((mt.formula&&mt.formula.length)||(mt.stats&&mt.stats.length)){
+    const stepsHTML=(mt.steps||[]).map(x=>`<li>${String(x).replace(/</g,'&lt;')}</li>`).join('');
+    const formHTML=(mt.formula||[]).map(f=>`<div class="m-frow"><div class="m-flab">${(f.label||'').replace(/</g,'&lt;')}</div><div class="m-fexpr">${(f.expr||'').replace(/</g,'&lt;')}</div></div>`).join('');
+    const statsHTML=(mt.stats||[]).map(st=>{const v=(typeof st.value==='number')?fmt(st.value):(st.value??'');
+      return `<div class="m-stat"><div class="m-sv">${v}${st.unit?`<span class="m-su">${String(st.unit).replace(/</g,'&lt;')}</span>`:''}</div><div class="m-sl">${(st.label||'').replace(/</g,'&lt;')}</div></div>`;}).join('');
+    const toolTag=p.statsToolUsed?`<span class="m-tool" title="${t('stats_tool_title')}">${t('stats_tool_tag')}</span>`:'';
+    methodHTML=`<div class="method reveal">
+      <div class="m-head"><span class="m-ic">🧮</span><span class="m-name">${(mt.name||t('method_name')).replace(/</g,'&lt;')}</span>${toolTag}<span class="m-tag">${t('method_tag')}</span></div>
+      <div class="m-body">
+        ${stepsHTML?`<div class="m-steps-wrap"><div class="m-sec-title">${t('method_steps')}</div><ol class="m-steps">${stepsHTML}</ol></div>`:''}
+        ${formHTML?`<div class="m-formula-wrap"><div class="m-sec-title">${t('method_formula')}</div><div class="m-formula">${formHTML}</div></div>`:''}
+        ${statsHTML?`<div class="m-stats">${statsHTML}</div>`:''}
+      </div>
+    </div>`;
+  }
+  // source 治理来源标注(方向2):本数来自哪个治理指标、owner、版本——"与看板一致"
+  const s=p.source||{};
+  const srcHTML=(s.metric||s.owner)?`<div class="src-badge" title="${(s['口径声明']||'').replace(/"/g,'&quot;').replace(/</g,'&lt;')}">${t('src_pre')}<b>${(s.metric||'').replace(/</g,'&lt;')}</b>${s.version?` <code>${s.version}</code>`:''}${s.owner?` · owner ${(s.owner).replace(/</g,'&lt;')}`:''}${t('src_post')}</div>`:'';
+  // function call 面板(方向2):明确显示本次调用了哪个治理 function、传了什么参数、DB 真正花了多久
+  const fc=p.fncall;let fncallHTML='';
+  if(fc&&fc.sig){
+    const fn=(fc.metric||'').replace(/</g,'&lt;');
+    const sigHTML=(fc.sig||'').replace(/</g,'&lt;').replace(fn,`<span class="fn">${fn}</span>`);
+    const pills=[];
+    if(fc.label)pills.push(`<span class="fc-pill">${t('fc_metric')} <b>${(fc.label).replace(/</g,'&lt;')}</b></span>`);
+    if(fc.owner)pills.push(`<span class="fc-pill">owner <b>${(fc.owner).replace(/</g,'&lt;')}</b></span>`);
+    if(fc.version)pills.push(`<span class="fc-pill">${t('fc_version')} <b>${(fc.version).replace(/</g,'&lt;')}</b></span>`);
+    if(fc.unit)pills.push(`<span class="fc-pill">${t('fc_unit')} <b>${(fc.unit).replace(/</g,'&lt;')}</b></span>`);
+    if(fc.exec_ms!=null)pills.push(`<span class="fc-pill">${t('fc_dbexec')} <b>${fmtMs(fc.exec_ms)}</b></span>`);
+    fncallHTML=`<div class="fncall" title="${(fc['口径声明']||'').replace(/"/g,'&quot;').replace(/</g,'&lt;')}">
+      <div class="fc-head">${t('fncall_head')}</div>
+      <div class="fc-sig">${sigHTML}</div>
+      <div class="fc-meta">${pills.join('')}</div>
+    </div>`;
+  }
+  const cols=p.columns||(p.table&&p.table.cols)||[];
+  const rows=p.rows||(p.table&&p.table.rows)||[];
+  const numCols=cols.map((c,i)=>i).filter(i=>rows.length&&typeof rows[0][i]==='number');
+  const thead=`<tr>${cols.map(c=>`<th>${c}</th>`).join('')}</tr>`;
+  const tbody=rows.map(r=>`<tr>${r.map((c,i)=>`<td class="${numCols.includes(i)?'num':''}">${c==null?'':(typeof c==='number'?fmt(c):String(c).replace(/</g,'&lt;'))}</td>`).join('')}</tr>`).join('');
+  // 多图(深度分析)优先用 charts 数组,否则回退单 chart
+  const chartList=(p.charts&&p.charts.length)?p.charts:(p.chart&&p.chart.type?[p.chart]:[]);
+  const title=(chartList[0]&&chartList[0].title)||t('result_title');
+  const chartsHTML=chartList.map((c,i)=>`<div class="chart" id="chartEl${i}"></div>`).join('');
+
+  canvas.innerHTML=`
+    <div class="interp reveal"><span class="tag">${t('interp_tag')}</span><span class="txt">${(p.interpreted||'').replace(/</g,'&lt;')}</span></div>
+    ${methodHTML}
+    ${kpiHTML?`<div class="kpis reveal">${kpiHTML}</div>`:''}
+    <div class="card reveal">
+      <div class="card-head"><h3>${(chartList.length>1?t('multi_title'):title).replace(/</g,'&lt;')}</h3>
+        <div class="toggle"><button class="on">${t('toggle_chart')}</button><button>${t('toggle_data')}</button></div></div>
+      ${chartsHTML||'<div class="chart" id="chartEl0"></div>'}
+      ${p.insight?`<div class="insight"><span class="ic">✦</span><p>${mdBold(p.insight)}</p></div>`:''}
+      ${findHTML?`<div class="findings reveal">${findHTML}</div>`:''}
+      ${fncallHTML}
+      ${srcHTML}
+    </div>
+    ${p.sql?`<details class="disclosure reveal"><summary><span class="caret">▸</span> ${t('sql_view')} <code>read-only</code></summary>
+      <div class="inner"><pre class="sql">${hlSql(p.sql)}</pre></div></details>`:''}
+    ${rows.length?`<details class="disclosure reveal"><summary><span class="caret">▸</span> ${L_rowsDisc(rows.length,p.truncated)}</summary>
+      <div class="inner tablewrap"><table><thead>${thead}</thead><tbody>${tbody}</tbody></table></div></details>`:''}`;
+  canvas.scrollTop=0;
+  [...canvas.querySelectorAll('.reveal')].forEach((el,i)=>setTimeout(()=>el.classList.add('in'),100+i*100));
+  setTimeout(()=>canvas.querySelectorAll('.val[data-count]').forEach(countUp),240);
+  setTimeout(()=>{
+    currentCharts=[];
+    chartList.forEach((c,i)=>{const el=$('#chartEl'+i);if(el){const ch=renderChart(el,c);if(ch)currentCharts.push(ch);}});
+  },400);
+  const tg=canvas.querySelectorAll('.toggle button');
+  tg.forEach((b,bi)=>b.onclick=()=>{tg.forEach(x=>x.classList.remove('on'));b.classList.add('on');
+    if(bi===1){const d=canvas.querySelectorAll('.disclosure');const dt=d[d.length-1];if(dt){dt.setAttribute('open','');dt.scrollIntoView({behavior:'smooth',block:'center'});}}});
+}
+
+/* ---------------- LIVE (real agent over SSE) ---------------- */
+async function askLive(question, deep){
+  if(busy)return; busy=true;$('#send').disabled=true;
+  const T=newTurn(question);
+  addStep(T,'think',t('step_think'));
+  const payload={interpreted:'',kpis:[],chart:{},charts:[],insight:'',sql:'',columns:[],rows:[],followups:[],findings:[],source:{},fncall:null,method:{},statsToolUsed:false};
+  let textBuf='', rendered=false;
+  try{
+    const res=await fetch(API+'/ask',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({question,session_id:sessionId,deep:!!deep})});
+    if(!res.ok||!res.body) throw new Error('HTTP '+res.status);
+    const reader=res.body.getReader(),dec=new TextDecoder();let buf='';
+    while(true){
+      const {value,done}=await reader.read(); if(done)break;
+      buf+=dec.decode(value,{stream:true});
+      let idx;
+      while((idx=buf.indexOf('\n\n'))>=0){
+        const chunk=buf.slice(0,idx);buf=buf.slice(idx+2);
+        const dl=chunk.split('\n').find(l=>l.startsWith('data:'));if(!dl)continue;
+        let ev;try{ev=JSON.parse(dl.slice(5).trim());}catch(e){continue;}
+        if(ev.type==='session'){sessionId=ev.session_id;}
+        else if(ev.type==='stage'){
+          if(ev.key==='think')continue;            // think 已在循环外加过
+          // 任何工具步开始前，先把"上一步(可能是模型推理 gen 步)"定格为 LLM 时间——
+          // 这一步之前堆在 SQL 上的就是这段推理时间，现在单列出来。
+          const labels={doc:t('lbl_doc'),run:t('lbl_run'),metric:t('lbl_metric'),chart:t('lbl_chart')};
+          if(ev.key==='doc'){
+            const path=ev.detail||'';
+            const o=addStep(T,'doc',path||t('step_readdoc'),'');  // 文档步：标签即文件路径
+            o._path=path;T._docSteps[path]=o;T.nDocs++;
+          } else if(ev.key==='run'){
+            addStep(T,'run',t('lbl_run'),t('running'));T.nSql++;
+          } else if(ev.key==='metric'){
+            // function call 步：标签即可读签名 gmv(time_window=last_quarter)
+            const o=addStep(T,'metric',ev.sig||ev.label||t('metric_label'),t('running'));
+            o._sig=ev.sig;T.nMetric++;
+          } else if(ev.key==='stats'){
+            // 统计计算器步:确定性代码算 μ/σ/Z/分解等
+            const o=addStep(T,'stats',t('stats_label')+' · '+(ev.method||'compute_stats'),ev.detail||t('computing'));
+            o._statsMethod=ev.method;T.nStats++;
+          } else {
+            addStep(T,ev.key,ev.label||labels[ev.key]||ev.key,'');
+          }
+        }
+        else if(ev.type==='doc_detail'){           // agent 实际读到的文档内容
+          const o=T._docSteps[ev.path]||T._steps.doc;
+          if(o){
+            if(ev.ok===false)o.prev.textContent=t('notfound');
+            stepDetail(o,docViewer(ev.path,ev.text,ev.ok!==false));
+            freezeStep(T,o);                        // 读文档完成：定格(执行ms,非LLM)
+            openReason(T,t('reason_decide'));     // 随后的思考时间单列
+          }
+        }
+        else if(ev.type==='sql'){payload.sql=ev.sql;
+          stepDetail(T._steps.run,`<pre class="sql">${hlSql(ev.sql)}</pre>`);}
+        else if(ev.type==='rows'){payload.columns=ev.columns;payload.rows=ev.rows;payload.truncated=ev.truncated;
+          const o=T._steps.run;
+          if(o){o.prev.textContent=L_rowsPrev(ev.rowcount??ev.rows.length,(ev.columns||[]).length,ev.exec_ms);
+            if(ev.rows&&ev.rows.length)stepAppend(o,rowPeek(ev.columns,ev.rows));
+            freezeStep(T,o,{dbMs:ev.exec_ms});}     // SQL 步定格在【真实 DB 执行毫秒】，不再吞掉后续推理
+          openReason(T,t('reason_gen'));   // DB 之后的 LLM 时间单列(这才是真正耗时大头)
+        }
+        else if(ev.type==='text'){textBuf+=ev.delta;T.summary.style.display='';T.summary.innerHTML=mdBold(textBuf);log.scrollTop=log.scrollHeight;}
+        else if(ev.type==='metric'){          // 治理指标 function call 返回的权威数 + 来源
+          payload.columns=ev.columns||payload.columns;payload.rows=ev.rows||payload.rows;
+          payload.source={metric:ev.metric,label:ev.label,owner:ev.owner,version:ev.version,'口径声明':ev['口径声明']};
+          // function call 卡片数据：右侧看板要明确显示调了哪个 function、参数、DB 耗时
+          payload.fncall={sig:ev.sig,metric:ev.metric,label:ev.label,owner:ev.owner,version:ev.version,
+            unit:ev.unit,time_window:ev.time_window,group_by:ev.group_by||[],filters:ev.filters||{},
+            exec_ms:ev.exec_ms,'口径声明':ev['口径声明']};
+          const o=T._steps.metric;
+          if(o){o.prev.textContent=`${ev.label||ev.metric} · owner ${ev.owner||''} ${ev.version||''} · DB ${fmtMs(ev.exec_ms)}`;
+            if(ev.compiled_sql)stepDetail(o,`<div style="font:600 11px/1.6 'JetBrains Mono',monospace;color:#7A3FA0;margin-bottom:4px">ƒ ${(ev.sig||ev.metric||'').replace(/</g,'&lt;')}</div><pre class="sql">${hlSql(ev.compiled_sql)}</pre>`);
+            freezeStep(T,o,{dbMs:ev.exec_ms});}     // 指标 function 步也定格在真实 DB 毫秒
+          openReason(T,t('reason_gen'));
+        }
+        else if(ev.type==='metric_not_covered'){
+          const o=T._steps.metric;if(o){o.prev.textContent=t('metric_notcov');freezeStep(T,o);}
+        }
+        else if(ev.type==='stats'){          // 统计计算器返回:确定性算出的统计量摘要
+          payload.statsToolUsed=true;
+          const o=T._steps.stats;
+          if(o){o.prev.textContent=ev.summary||ev.method||t('stats_done');
+            stepDetail(o,`<div style="font:600 11px/1.6 'JetBrains Mono',monospace;color:#1a7f5a">${t('stats_detail_pre')}${(ev.method||'').replace(/</g,'&lt;')}</div><pre class="sql">${(JSON.stringify(ev.result,null,1)||'').replace(/</g,'&lt;').slice(0,1400)}</pre>`);
+            freezeStep(T,o);}
+          openReason(T,t('reason_gen'));
+        }
+        else if(ev.type==='stats_error'){
+          const o=T._steps.stats;if(o){o.prev.textContent=t('stats_err');freezeStep(T,o);}
+        }
+        else if(ev.type==='result'){
+          payload.interpreted=ev.interpreted;payload.kpis=ev.kpis||[];payload.chart=ev.chart||{};
+          payload.charts=ev.charts||[];
+          payload.insight=ev.insight;payload.followups=ev.followups||[];
+          payload.findings=ev.findings||[];
+          payload.method=ev.method||{};
+          if(ev.source&&(ev.source.metric||ev.source.owner))payload.source=ev.source;
+          renderResult(payload);rendered=true;
+        }
+        else if(ev.type==='error'){addStep(T,'think',t('err_step'));T.summary.style.display='';T.summary.classList.remove('typing');T.summary.innerHTML=`<span style="color:var(--bad)">${(ev.message||t('err_unknown')).replace(/</g,'&lt;')}</span>`;}
+      }
+    }
+    if(!rendered && payload.sql){renderResult(payload);}
+    finishTrace(T);
+    T.summary.classList.remove('typing');
+    if(!textBuf && payload.insight){T.summary.style.display='';T.summary.innerHTML=mdBold(payload.insight);}
+    const fu=(payload.followups&&payload.followups.length)?payload.followups:L_followups();
+    setChips(T.chips,fu);
+    if(payload.sql||(payload.chart&&payload.chart.type)) attachResult(T,payload);
+  }catch(e){
+    finishTrace(T);
+    T.summary.style.display='';T.summary.classList.remove('typing');
+    T.summary.innerHTML=L_backendFail(String(e.message||e).replace(/</g,'&lt;'));
+  }
+  busy=false;$('#send').disabled=false;
+}
+
+/* ---------------- BAKED (offline demo fallback) ---------------- */
+const DATES=['05/29','05/30','05/31','06/01','06/02','06/03','06/04'];
+const BAKED={
+  dau:{q:'最近 7 天的 DAU 怎么样？',interpreted:'按天统计 events 表的去重活跃用户数（近 7 天）',
+    stages:[['加载表结构','events'],['执行查询 · PostgreSQL',''],['生成图表与洞察','']],
+    kpis:[{label:'平均 DAU',value:1418,delta:'+12.4%',dir:'up',note:'较上周'},{label:'峰值 DAU',value:1680,delta:'06/03',dir:'up',note:'周二最高'},{label:'周环比',value:12.4,unit:'%',delta:'连续 3 天上行',dir:'up'}],
+    chart:{type:'line',title:'日活跃用户趋势',x:DATES,series:[{name:'DAU',data:[1240,1310,1180,1402,1521,1680,1593]}]},
+    insight:'近 7 天 DAU 稳步爬升，**06/03 触顶 1,680**，均值 1,418，**周环比 +12.4%**，最近 3 天连续上行，增长动能不错。',
+    sql:"SELECT date(event_time) AS 日期, count(DISTINCT user_id) AS dau\nFROM events\nWHERE event_time >= current_date - interval '7 days'\nGROUP BY 1 ORDER BY 1;",
+    columns:['日期','DAU'],rows:DATES.map((d,i)=>[d,[1240,1310,1180,1402,1521,1680,1593][i]]),
+    followups:['是什么活动带来的峰值？','拆成新老用户看？','和 GMV 一起看趋势']},
+  gmv:{q:'上周 GMV 和订单量？',interpreted:'按天汇总有效订单的成交额、订单数与客单价',
+    stages:[['加载表结构','orders'],['执行查询 · PostgreSQL',''],['生成图表与洞察','']],
+    kpis:[{label:'7 日 GMV',value:124.1,unit:'万',delta:'+18.2%',dir:'up',note:'较上周'},{label:'订单数',value:2404,delta:'+9.1%',dir:'up',note:'较上周'},{label:'客单价',value:516,unit:'元',delta:'+8.4%',dir:'up',note:'较上周'}],
+    chart:{type:'line',title:'成交额 / 客单价',x:DATES,series:[{name:'GMV',kind:'bar',data:[142000,158000,131000,176000,201000,223000,210000]},{name:'客单价',kind:'line',axis:'right',data:[507,510,494,518,518,531,524]}]},
+    insight:'7 日 GMV **124.1 万元**，环比 +18.2%，跑赢订单量增速（+9.1%），**客单价同步抬到 516 元**，增长含金量高。',
+    sql:"-- GMV 用商品总额 total_amount（非实付 actual_amount，后者含运费、已扣优惠）\nSELECT date(placed_at) AS 日期, count(DISTINCT order_id) AS 订单数,\n       sum(total_amount) AS gmv, round(avg(total_amount),2) AS 客单价\nFROM orders\nWHERE status IN ('paid','shipped','delivered')   -- 有效订单：排除待支付/退款\n  AND placed_at >= current_date - interval '7 days'\nGROUP BY 1 ORDER BY 1;",
+    columns:['日期','订单数','GMV','客单价'],rows:DATES.map((d,i)=>[d,[280,310,265,340,388,420,401][i],[142000,158000,131000,176000,201000,223000,210000][i],[507,510,494,518,518,531,524][i]]),
+    followups:['客单价为什么涨？','看转化漏斗','哪些商品贡献最大']},
+  funnel:{q:'购买转化漏斗分析',interpreted:'近 7 天用户在 浏览→加购→结算→成交 的去重人数与逐级转化',
+    stages:[['执行查询 · PostgreSQL',''],['生成图表与洞察','']],
+    kpis:[{label:'整体转化率',value:12.1,unit:'%',delta:'浏览→成交',dir:'up'},{label:'加购率',value:38.6,unit:'%',delta:'浏览→加购',dir:'up'},{label:'最大流失',value:'加购→结算',delta:'-50.5%',dir:'down',note:'此环节腰斩'}],
+    chart:{type:'funnel',title:'购买转化漏斗',items:[{name:'浏览',value:48200},{name:'加购',value:18600},{name:'结算',value:9200},{name:'成交',value:5840}]},
+    insight:'整体浏览→成交转化 **12.1%**。最大流失在**「加购→结算」，单环节掉 50.5%**，优先排查结算页与登录拦截。',
+    sql:"SELECT\n  count(DISTINCT user_id) FILTER (WHERE event_name='view_product') AS 浏览,\n  count(DISTINCT user_id) FILTER (WHERE event_name='add_to_cart') AS 加购,\n  count(DISTINCT user_id) FILTER (WHERE event_name='begin_checkout') AS 结算,\n  count(DISTINCT user_id) FILTER (WHERE event_name='purchase') AS 成交\nFROM events\nWHERE event_time >= current_date - interval '7 days';",
+    columns:['环节','人数','环节转化'],rows:[['浏览',48200,'—'],['加购',18600,'38.6%'],['结算',9200,'49.5%'],['成交',5840,'63.5%']],
+    followups:['加购未结算的人有什么特征？','分渠道看转化','看次日留存']},
+  retention:{q:'新用户留存怎么样？',interpreted:'近 6 个注册 cohort 的 D1–D7 留存率矩阵',
+    stages:[['加载表结构','users, events'],['执行查询 · PostgreSQL',''],['生成图表与洞察','']],
+    kpis:[{label:'平均次日留存',value:41.5,unit:'%',delta:'+2.1pt',dir:'up',note:'较上一周期'},{label:'D7 留存',value:11.6,unit:'%',delta:'中位偏上',dir:'up'},{label:'最佳 cohort',value:'05/31',delta:'D1 44.1%',dir:'up'}],
+    chart:{type:'heatmap',title:'新用户留存矩阵',xLabels:['D1','D2','D3','D4','D5','D6','D7'],yLabels:['05/27','05/28','05/29','05/30','05/31','06/01'],
+      cells:[[0,0,41],[1,0,28],[2,0,22],[3,0,18],[4,0,15],[5,0,13],[6,0,12],[0,1,39],[1,1,27],[2,1,21],[3,1,17],[4,1,14],[5,1,12],[6,1,11],[0,2,44],[1,2,31],[2,2,24],[3,2,19],[4,2,16],[5,2,14],[6,2,12],[0,3,43],[1,3,30],[2,3,23],[3,3,18],[4,3,15],[5,3,13],[6,3,11],[0,4,40],[1,4,29],[2,4,22],[3,4,17],[4,4,14],[5,4,12],[6,4,10],[0,5,42],[1,5,30],[2,5,23],[3,5,19],[4,5,16],[5,5,13],[6,5,12]]},
+    insight:'各 cohort 次日留存稳定在 **39%–44%**，均值 41.5%。**D1→D2 的陡降是关键缺口**，新手引导和首日 push 优化空间最大。',
+    sql:"WITH cohort AS (\n  SELECT user_id, date(registered_at) AS d0 FROM users\n  WHERE registered_at >= current_date - interval '7 days'\n), act AS (\n  SELECT DISTINCT user_id, date(event_time) AS d FROM events\n)\nSELECT c.d0 AS 注册日, count(DISTINCT c.user_id) AS 新增,\n       round(100.0*count(DISTINCT a.user_id) FILTER (WHERE a.d=c.d0+1)/count(DISTINCT c.user_id),1) AS 次日留存\nFROM cohort c LEFT JOIN act a ON a.user_id=c.user_id\nGROUP BY 1 ORDER BY 1;",
+    columns:['注册日','新增','D1','D3','D7'],rows:[['05/27',210,'41%','22%','12%'],['05/28',198,'39%','21%','11%'],['05/29',233,'44%','24%','12%'],['05/30',256,'43%','23%','11%'],['05/31',241,'40%','22%','10%'],['06/01',228,'42%','23%','12%']],
+    followups:['哪个渠道来的用户留存最高？','看 D1→D2 流失','拉新成本对比留存']},
+  channel:{q:'各渠道流量和质量对比',interpreted:'近 7 天各来源渠道的会话 UV 与跳出率',
+    stages:[['加载表结构','sessions'],['执行查询 · PostgreSQL',''],['生成图表与洞察','']],
+    kpis:[{label:'第一大来源',value:'社交',delta:'15.2K UV',dir:'up',note:'占比 30%'},{label:'总 UV',value:50300,delta:'+7.6%',dir:'up',note:'较上周'},{label:'最优质渠道',value:'直接访问',delta:'跳出 29%',dir:'up',note:'最低'}],
+    chart:{type:'hbar',title:'渠道流量与质量',categories:['社交','自然搜索','直接访问','付费搜索','引荐'],values:[15200,12400,9800,8600,4300],note:['跳出 38%','跳出 42%','跳出 29%','跳出 51%','跳出 47%']},
+    insight:'**社交是第一大入口（15.2K UV，占 30%）**。**付费搜索跳出率最高 51%**，花钱买的流量留不住，落地页要查；直接访问质量最好。',
+    sql:"SELECT coalesce(utm_source, traffic_source, 'direct') AS 渠道,\n       count(DISTINCT user_id) AS uv,\n       round(100.0*sum(CASE WHEN is_bounce THEN 1 ELSE 0 END)/count(*),1) AS 跳出率\nFROM sessions\nWHERE start_time >= current_date - interval '7 days'\nGROUP BY 1 ORDER BY uv DESC;",
+    columns:['渠道','UV','跳出率'],rows:[['社交',15200,'38%'],['自然搜索',12400,'42%'],['直接访问',9800,'29%'],['付费搜索',8600,'51%'],['引荐',4300,'47%']],
+    followups:['付费搜索为什么跳出高？','哪个渠道 ROI 最高','社交流量的转化如何']},
+  subscription:{q:'各订阅套餐的在订用户数',interpreted:'统计 subscriptions 表中 status=active 的各套餐在订用户数',
+    kpis:[{label:'在订总数',value:7900,delta:'active',dir:'up',note:'仅生效中'},{label:'最大套餐',value:'月度高级',delta:'3,120 人',dir:'up',note:'占 39%'},{label:'年付占比',value:24.6,unit:'%',delta:'1,940 人',dir:'up'}],
+    chart:{type:'hbar',title:'各套餐在订用户数',categories:['月度高级','月度基础','年度高级','年度基础'],values:[3120,2840,1180,760],note:['¥19.9/月','¥9.9/月','¥199/年','¥99/年']},
+    insight:'当前在订 **7,900 人**，月度高级会员最多（3,120，占 39%）。**年付套餐合计仅 24.6%**，自动续费和年付转化是拉 LTV 的抓手。',
+    sql:"-- 在订口径：status='active'，排除 cancelled（主动取消）/ expired（到期未续）\nSELECT plan_name AS 套餐, count(*) AS 在订用户数\nFROM subscriptions\nWHERE status = 'active'\nGROUP BY 1 ORDER BY 2 DESC;",
+    columns:['套餐','在订用户数','月价'],rows:[['月度高级',3120,'¥19.9'],['月度基础',2840,'¥9.9'],['年度高级',1180,'¥199'],['年度基础',760,'¥99']],
+    followups:['哪个套餐续费率最高？','取消订阅的主要原因','年付 vs 月付的留存']},
+  coupon:{q:'各类优惠券的核销率',interpreted:'按券类型统计 user_coupons 的核销率（status=used 占领取数）',
+    kpis:[{label:'平均核销率',value:35.1,unit:'%',delta:'已领取的券',dir:'up'},{label:'最高核销',value:'免运费券',delta:'58.6%',dir:'up',note:'用户最敏感'},{label:'最低核销',value:'折扣券',delta:'21.8%',dir:'down',note:'门槛偏高'}],
+    chart:{type:'hbar',title:'各类优惠券核销率',categories:['免运费券(shipping)','满减券(fixed)','折扣券(percentage)'],values:[58.6,34.2,21.8],note:['发1.8万/核1.1万','发4.2万/核1.4万','发3.1万/核0.7万']},
+    insight:'**免运费券核销率最高（58.6%）**，用户对运费最敏感；折扣券仅 21.8%，门槛或折力不够。⚠️ 核销记录在 **user_coupons**（status=used），coupons 是模板表、没有 used 状态——查错表会直接返回 0。',
+    sql:"-- 核销在 user_coupons（领取记录），不是 coupons（模板表，status 只有 active/inactive/exhausted）\nSELECT c.coupon_type AS 券类型,\n       round(100.0*count(*) FILTER (WHERE uc.status='used')/count(*),1) AS 核销率\nFROM user_coupons uc\nJOIN coupons c ON uc.coupon_id = c.coupon_id\nGROUP BY 1 ORDER BY 2 DESC;",
+    columns:['券类型','发放数','核销数','核销率'],rows:[['免运费券',18000,10548,'58.6%'],['满减券',42000,14364,'34.2%'],['折扣券',31000,6758,'21.8%']],
+    followups:['核销的券带来多少 GMV？','哪个活动发的券核销最好','未核销券的用户画像']},
+  cac:{q:'各渠道的获客成本 CAC',interpreted:'各渠道 CAC = 投放成本(channel_daily_costs) / last_touch 归因获客数(user_attributions)',
+    kpis:[{label:'平均 CAC',value:21.6,unit:'元',delta:'加权',dir:'up'},{label:'最贵渠道',value:'付费搜索',delta:'¥38.5',dir:'down',note:'获客 2.1K'},{label:'最划算',value:'KOL',delta:'¥12.1',dir:'up',note:'获客 0.9K'}],
+    chart:{type:'hbar',title:'各渠道获客成本 CAC',categories:['付费搜索','应用商店','信息流','社交','KOL'],values:[38.5,26.2,22.8,15.4,12.1],note:['获客 2.1K','获客 1.8K','获客 3.4K','获客 5.2K','获客 0.9K']},
+    insight:'**付费搜索获客最贵（¥38.5/人）**，KOL 最划算（¥12.1）。口径关键：获客数按 **last_touch 单一归因模型**去重——同一用户在 user_attributions 里有 first/last/linear 多条，不固定模型就会一人多算。',
+    sql:"WITH cost AS (\n  SELECT channel_id, sum(cost) AS spend FROM channel_daily_costs GROUP BY 1\n), acq AS (\n  -- 固定归因模型，避免一个用户被多条归因记录重复计数\n  SELECT channel_id, count(DISTINCT user_id) AS users\n  FROM user_attributions WHERE attribution_type='last_touch' GROUP BY 1\n)\nSELECT ch.channel_name AS 渠道, round(cost.spend/acq.users,1) AS cac\nFROM acq JOIN cost USING(channel_id) JOIN channels ch USING(channel_id)\nORDER BY cac DESC;",
+    columns:['渠道','投放成本','获客数','CAC'],rows:[['付费搜索',80850,2100,'¥38.5'],['应用商店',47160,1800,'¥26.2'],['信息流',77520,3400,'¥22.8'],['社交',80080,5200,'¥15.4'],['KOL',10890,900,'¥12.1']],
+    followups:['哪个渠道 ROI 最高？','CAC 对比 LTV 看回本','付费搜索值不值得加预算']},
+  experiment:{q:'A/B 实验各变体的转化率',interpreted:'某 A/B 实验各变体的转化率与人均收入（仅计用户分组之后产生的订单）',
+    kpis:[{label:'最优变体',value:'变体 B',delta:'转化 11.2%',dir:'up',note:'+33% vs 对照'},{label:'对照组',value:8.4,unit:'%',delta:'baseline'},{label:'人均收入增益',value:38.1,unit:'%',delta:'B vs A',dir:'up'}],
+    chart:{type:'hbar',title:'各变体转化率（标注人均收入）',categories:['对照组 A','变体 B','变体 C'],values:[8.4,11.2,9.6],note:['人均 ¥42','人均 ¥58','人均 ¥47']},
+    insight:'**变体 B 转化率 11.2%，比对照组高 33%**，人均收入从 ¥42 提到 ¥58，建议放量。⚠️ 口径陷阱：只统计用户**分组之后**（orders.created_at ≥ assigned_at）的订单，否则把实验前的历史消费算进来，结论会失真。',
+    sql:"SELECT v.variant_name AS 变体,\n       round(100.0*count(DISTINCT o.user_id)/count(DISTINCT a.user_id),1) AS 转化率,\n       round(sum(o.total_amount)/count(DISTINCT a.user_id),1) AS 人均收入\nFROM ab_test_assignments a\nJOIN ab_test_variants v ON a.variant_id = v.variant_id\nLEFT JOIN orders o ON o.user_id = a.user_id\n     AND o.created_at >= a.assigned_at          -- 只算分组之后的订单\n     AND o.status IN ('paid','shipped','delivered')\nWHERE a.test_id = 1\nGROUP BY 1 ORDER BY v.variant_id;",
+    columns:['变体','分组人数','转化率','人均收入'],rows:[['对照组 A',5000,'8.4%','¥42'],['变体 B',5000,'11.2%','¥58'],['变体 C',5000,'9.6%','¥47']],
+    followups:['这个差异统计显著吗？','变体 B 在哪类用户上更好','放量后对大盘的影响']}
+};
+const BAKED_ROUTE=t=>{t=(t||'').toLowerCase();
+  if(/订阅|套餐|会员|续费/.test(t))return'subscription';
+  if(/优惠券|核销|卡券|券/.test(t))return'coupon';
+  if(/cac|获客成本|获客|拉新成本/.test(t))return'cac';
+  if(/a\/?b|实验|变体|分桶|对照组/.test(t))return'experiment';
+  if(/漏斗|加购|结算/.test(t))return'funnel';
+  if(/留存|cohort|次日/.test(t))return'retention';
+  if(/cac|获客/.test(t))return'cac';
+  if(/渠道|来源|流量|跳出|投放|roi/.test(t))return'channel';
+  if(/gmv|成交|订单|营收|收入|客单/.test(t))return'gmv';
+  if(/转化/.test(t))return'funnel';
+  return'dau';};
+// 离线模式：模拟「读数据字典文档」的渐进式披露（真 live 模式读的是后端 docs_routing 下的同款文件）
+const BAKED_DOCS={
+  dau:['domains/_index.md','domains/behavior/_index.md','domains/behavior/events.md','metrics/core_metrics.md'],
+  gmv:['domains/_index.md','domains/transaction/_index.md','domains/transaction/orders.md','metrics/business_kpis.md'],
+  funnel:['domains/_index.md','domains/behavior/_index.md','domains/behavior/events.md'],
+  retention:['domains/_index.md','domains/user/_index.md','metrics/core_metrics.md'],
+  channel:['domains/_index.md','domains/behavior/_index.md','domains/behavior/sessions.md'],
+  subscription:['domains/_index.md','domains/transaction/_index.md','domains/transaction/subscriptions.md'],
+  coupon:['domains/_index.md','domains/marketing/_index.md','domains/marketing/user_coupons.md'],
+  cac:['domains/_index.md','domains/attribution/_index.md','domains/attribution/user_attributions.md','domains/attribution/channel_daily_costs.md'],
+  experiment:['domains/_index.md','domains/experiment/_index.md','domains/experiment/ab_test_assignments.md','metrics/business_kpis.md']};
+const DOC_CONTENT={
+'domains/_index.md':"# 业务域索引\n\n共 8 个原始业务域（35 张明细表）+ 治理层 mart（4 张预聚合表）。根据问题关键词加载对应域的索引文件。\n\n## 域路由表\n| 域 | 表数 | 索引文件 |\n|----|----|----|\n| 用户域 | 5 | `user/_index.md` |\n| 商品域 | 3 | `product/_index.md` |\n| 行为域 | 4 | `behavior/_index.md` |\n| 社交域 | 6 | `social/_index.md` |\n| 交易域 | 4 | `transaction/_index.md` |\n| 归因域 | 5 | `attribution/_index.md` |\n| 营销域 | 5 | `marketing/_index.md` |\n| 实验域 | 3 | `experiment/_index.md` |\n\n## 关键词路由\n- **交易**：订单、GMV、成交、客单、订阅、套餐 → `transaction/_index.md`\n- **行为**：会话、事件、埋点、漏斗、转化 → `behavior/_index.md`\n- **归因**：渠道、获客、CAC、ROI、投放 → `attribution/_index.md`\n- **营销**：活动、优惠券、核销、推送 → `marketing/_index.md`\n- **实验**：A/B、实验、变体、分桶、对照组 → `experiment/_index.md`",
+'domains/behavior/_index.md':"# 行为域 (Behavior Domain)\n\n## 表清单\n| 表名 | 说明 | 详情文件 |\n|----|----|----|\n| events | 用户事件埋点 | `events.md` |\n| sessions | 会话记录 | `sessions.md` |\n| page_views | 页面浏览 | `page_views.md` |\n\n## 关键词路由\n| 关键词 | 加载文件 |\n|----|----|\n| 事件、埋点、漏斗、DAU | `events.md` |\n| 会话、来源、跳出 | `sessions.md` |",
+'domains/behavior/events.md':"# events - 用户事件表\n\n## 表结构\n| 字段 | 类型 | 说明 |\n|----|----|----|\n| event_id | BIGINT | 主键 |\n| user_id | BIGINT | 用户ID |\n| session_id | BIGINT | 会话ID |\n| event_name | VARCHAR(50) | app_open / view_product / add_to_cart / begin_checkout / purchase |\n| event_time | TIMESTAMP | 事件时间 |\n| properties | JSONB | 事件属性 |\n\n## 常用查询\n```sql\nSELECT date(event_time), count(DISTINCT user_id)\nFROM events GROUP BY 1;\n```",
+'domains/behavior/sessions.md':"# sessions - 会话表\n\n## 表结构\n| 字段 | 类型 | 说明 |\n|----|----|----|\n| session_id | BIGINT | 主键 |\n| user_id | BIGINT | 用户ID |\n| start_time | TIMESTAMP | 开始时间 |\n| is_bounce | BOOLEAN | 是否跳出 |\n| traffic_source | VARCHAR(50) | direct / organic_search / paid_search / social |\n| utm_source | VARCHAR(50) | UTM来源 |",
+'domains/transaction/_index.md':"# 交易域 (Transaction Domain)\n\n## 表清单\n| 表名 | 说明 | 详情文件 |\n|----|----|----|\n| orders | 订单主表 | `orders.md` |\n| order_items | 订单明细 | `order_items.md` |\n| payments | 支付记录 | `payments.md` |\n| subscriptions | 订阅/会员 | `subscriptions.md` |\n\n## 关键词路由\n| 关键词 | 加载文件 |\n|----|----|\n| 订单、GMV、成交、客单 | `orders.md` |\n| 订阅、套餐、会员、续费 | `subscriptions.md` |",
+'domains/transaction/orders.md':"# orders - 订单表\n\n## 表结构\n| 字段 | 类型 | 说明 |\n|----|----|----|\n| order_id | BIGINT | 主键 |\n| user_id | BIGINT | 用户ID |\n| status | VARCHAR(20) | paid / shipped / delivered / cancelled / refunded |\n| actual_amount | DECIMAL(12,2) | 实付金额 |\n| placed_at | TIMESTAMP | 下单时间 |\n\n## 口径\n有效订单：`status IN ('paid','shipped','delivered')`",
+'domains/user/_index.md':"# 用户域 (User Domain)\n\n## 表清单\n| 表名 | 说明 | 详情文件 |\n|----|----|----|\n| users | 用户主表 | `users.md` |\n| user_profiles | 用户画像 | `user_profiles.md` |\n| user_devices | 设备信息 | `user_devices.md` |",
+'metrics/core_metrics.md':"# 核心指标口径\n\n## 次日留存率\n按注册 cohort，统计 D1 仍活跃占比：\n```sql\nWITH cohort AS (SELECT user_id, date(registered_at) d0 FROM users)\nSELECT d0, count(*) 新增,\n  count(*) FILTER (WHERE 次日活跃) AS 次日留存\nFROM cohort GROUP BY 1;\n```\n\n## DAU\n`count(DISTINCT user_id)` 按 `date(event_time)` 分组。",
+'metrics/business_kpis.md':"# 业务 KPI 口径\n\n## GMV（成交总额）\n```sql\nSELECT date(placed_at), sum(total_amount) AS gmv  -- 用 total_amount，不是 actual_amount\nFROM orders WHERE status IN ('paid','shipped','delivered');\n```\n> total_amount=商品总额（GMV口径）；actual_amount=实付（含运费、扣优惠）。\n\n## A/B 实验转化\n只统计用户**被分组之后**产生的订单：`o.created_at >= a.assigned_at`，否则掺入实验前消费。",
+'domains/transaction/subscriptions.md':"# subscriptions - 订阅表\n\n## 表结构\n| 字段 | 类型 | 说明 |\n|----|----|----|\n| subscription_id | BIGINT | 主键 |\n| user_id | BIGINT | 用户ID |\n| plan_name | VARCHAR | monthly_basic / monthly_premium / yearly_basic / yearly_premium |\n| plan_price | DECIMAL | 订阅价格 |\n| status | VARCHAR | active / cancelled / expired |\n| auto_renew | BOOLEAN | 是否自动续费 |\n\n## 口径\n在订用户：`status='active'`（排除 cancelled 主动取消、expired 到期未续）。",
+'domains/marketing/_index.md':"# 营销域 (Marketing Domain)\n\n## 表清单\n| 表名 | 说明 | 详情文件 |\n|----|----|----|\n| campaigns | 运营活动 | `campaigns.md` |\n| coupons | 优惠券**模板** | `coupons.md` |\n| user_coupons | 用户**领取/核销**记录 | `user_coupons.md` |\n| push_notifications | 推送 | `push_notifications.md` |\n\n## ⚠️ 选表提示\n核销/使用情况看 `user_coupons`；`coupons` 只是券模板（面额、门槛、有效期）。\n\n## 关键词路由\n| 关键词 | 加载文件 |\n|----|----|\n| 核销、使用、领取、券效果 | `user_coupons.md` |\n| 券面额、门槛、有效期 | `coupons.md` |",
+'domains/marketing/user_coupons.md':"# user_coupons - 用户优惠券记录\n\n## 表结构\n| 字段 | 类型 | 说明 |\n|----|----|----|\n| user_coupon_id | BIGINT | 主键 |\n| user_id | BIGINT | 用户ID |\n| coupon_id | INT | 关联 coupons.coupon_id（券模板）|\n| status | VARCHAR | **unused / used / expired** |\n| received_at | TIMESTAMP | 领取时间 |\n| used_at | TIMESTAMP | 核销时间 |\n| order_id | BIGINT | 核销对应订单 |\n\n## 口径\n核销率 = `status='used'` 占领取总数。\n> 注意：`coupons` 模板表的 status 是 active/inactive/exhausted，**没有 used**——核销一定查这张表。",
+'domains/attribution/_index.md':"# 归因域 (Attribution Domain)\n\n## 表清单\n| 表名 | 说明 | 详情文件 |\n|----|----|----|\n| channels | 渠道维表 | `channels.md` |\n| ad_campaigns | 广告活动 | `ad_campaigns.md` |\n| channel_daily_costs | 渠道每日投放成本 | `channel_daily_costs.md` |\n| user_attributions | 用户归因 | `user_attributions.md` |\n\n## ⚠️ 提示\n获客成本 CAC = 投放成本（channel_daily_costs）/ 获客数（user_attributions，需固定归因模型）。",
+'domains/attribution/user_attributions.md':"# user_attributions - 用户归因\n\n## 表结构\n| 字段 | 类型 | 说明 |\n|----|----|----|\n| attribution_id | BIGINT | 主键 |\n| user_id | BIGINT | 用户ID |\n| channel_id | INT | 归因渠道 |\n| attribution_type | VARCHAR | **first_touch / last_touch / linear** |\n\n## ⚠️ 口径\n同一用户可能有多条不同模型的归因记录。算获客数务必**固定一种 attribution_type**（last_touch 最常用），否则一人被多算。",
+'domains/attribution/channel_daily_costs.md':"# channel_daily_costs - 渠道每日成本\n\n## 表结构\n| 字段 | 类型 | 说明 |\n|----|----|----|\n| id | BIGINT | 主键 |\n| channel_id | INT | 渠道 |\n| date | DATE | 日期 |\n| cost | DECIMAL | 当日投放花费 |\n| impressions | BIGINT | 曝光 |\n| clicks | BIGINT | 点击 |\n\n## 用途\n按 channel_id 汇总 `sum(cost)` 得到渠道总投放，配合 user_attributions 算 CAC。",
+'domains/experiment/_index.md':"# 实验域 (Experiment Domain)\n\n## 表清单\n| 表名 | 说明 | 详情文件 |\n|----|----|----|\n| ab_tests | 实验定义 | `ab_tests.md` |\n| ab_test_variants | 实验变体 | `ab_test_variants.md` |\n| ab_test_assignments | 用户分组 | `ab_test_assignments.md` |\n\n## 关键词路由\n| 关键词 | 加载文件 |\n|----|----|\n| 变体、分组、转化对比 | `ab_test_assignments.md` |",
+'domains/experiment/ab_test_assignments.md':"# ab_test_assignments - 用户分组\n\n## 表结构\n| 字段 | 类型 | 说明 |\n|----|----|----|\n| assignment_id | BIGINT | 主键 |\n| test_id | INT | 实验ID |\n| variant_id | INT | 分到的变体 |\n| user_id | BIGINT | 用户ID |\n| assigned_at | TIMESTAMP | **分组时间** |\n\n## ⚠️ 口径\n评估变体效果时，订单只算分组**之后**的：`orders.created_at >= assigned_at`，否则把实验前的历史消费算进来，结论失真。"};
+async function askBaked(question){
+  if(busy)return;busy=true;$('#send').disabled=true;
+  const route=BAKED_ROUTE(question);
+  const p=BAKED[route];
+  const T=newTurn(question);
+  addStep(T,'think',t('step_think'));await wait(640);
+  for(const path of (BAKED_DOCS[route]||[])){      // 一份份"读"数据字典文档
+    const o=addStep(T,'doc',path,'');o._path=path;T._docSteps[path]=o;T.nDocs++;
+    await wait(560);
+    stepDetail(o,docViewer(path,DOC_CONTENT[path]||('# '+path+'\n\n（示例文档）'),true));
+  }
+  const r=addStep(T,'run',t('lbl_run'),'');T.nSql++;await wait(720);
+  if(p.sql)stepDetail(r,`<pre class="sql">${hlSql(p.sql)}</pre>`);
+  r.prev.textContent=L_rowsPrevNoDb(p.rows.length,p.columns.length);
+  if(p.rows.length)stepAppend(r,rowPeek(p.columns,p.rows));
+  addStep(T,'chart',t('lbl_chart'),'');await wait(560);
+  renderResult(p);
+  finishTrace(T);
+  T.summary.style.display='';await typeIn(T.summary,stripTags(mdBold(p.insight)));T.summary.innerHTML=mdBold(p.insight);T.summary.classList.remove('typing');
+  setChips(T.chips,p.followups);
+  attachResult(T,p);
+  busy=false;$('#send').disabled=false;
+}
+
+/* ---------------- dispatch + boot ---------------- */
+function ask(question, deep){ return MODE==='live'?askLive(question,deep):askBaked(question); }
+// 示例问题:显示按语言切换的 label,但发给后端的 q 始终是原中文(知识库为中文)。
+const PRESET_GROUPS=[
+  {name:{zh:'原始数据 · 问数',en:'Raw data · Ask'}, mode:'text-to-ETL', cap:{zh:'AI 现场从 35 张明细表 join、定口径、写复杂 SQL',en:'The AI joins across 35 detail tables, defines the metrics, and writes complex SQL on the fly'}, items:[
+    {zh:'30天 GMV',en:'30-day GMV',q:'最近30天每天的成交额(GMV)走势'},
+    {zh:'转化漏斗',en:'Conversion funnel',q:'购买转化漏斗：浏览→加购→发起结算→完成购买'},
+    {zh:'优惠券核销',en:'Coupon redemption',q:'各类优惠券的核销率对比'},
+    {zh:'渠道 CAC',en:'Channel CAC',q:'各渠道的获客成本CAC对比'},
+  ]},
+  {name:{zh:'治理层 · 洞察',en:'Governance layer · Insight'}, mode:'text-to-insight', cap:{zh:'AI 在算好的干净表上做分析、归因、下结论',en:'The AI analyzes, attributes, and concludes on pre-computed curated tables'}, items:[
+    {zh:'复盘月度 GMV',en:'Monthly GMV review',q:'复盘最近一个完整自然月的GMV：环比上个月是涨是跌，主要由哪些渠道和新老客带动，有什么值得注意的'},
+    {zh:'这周业务咋样',en:'How is business this week',q:'最近7天业务整体怎么样，跟前7天比关键指标有什么变化，最值得关注的是什么'},
+    {zh:'复购率',en:'Repurchase rate',q:'最近的用户30天复购率是多少，不同注册渠道的复购率有什么差异'},
+  ]},
+  {name:{zh:'深度分析 · 资深分析师',en:'Deep analysis · Senior analyst'}, mode:'advanced-analytics', deep:true, cap:{zh:'调用治理指标 + 资深分析师方法（异常检测/漏斗/归因），统计方法面板 + 多图 + 结构化洞察',en:'Calls governance metrics + senior-analyst methods (anomaly detection / funnel / attribution): method panel + multiple charts + structured insights'}, items:[
+    {zh:'异常检测·GMV',en:'GMV anomaly detection',q:'对最近30天每天的 GMV 做异常检测：用 Z-score 跟近期均值比，哪几天明显偏离，可能的原因是什么，在图上标出异常点'},
+    {zh:'转化漏斗诊断',en:'Funnel diagnosis',q:'分析购买转化漏斗：浏览→加购→下单→支付，逐步算转化率，找出流失最大的环节，给出可行动的优化建议'},
+    {zh:'渠道 ROI 体检',en:'Channel ROI checkup',q:'按渠道对比 ROI 和 CAC，找出投放回报最高和最差的渠道，标出异常渠道和需要警惕的风险（含未归因占比）'},
+    {zh:'复购率归因',en:'Repurchase attribution',q:'30天复购率按注册渠道拆解，哪个渠道带来的用户最忠诚、哪个最差，差距有多大，给出可行动的结论'},
+  ]},
+];
+function renderPresets(){
+  const pw=$('#presets');pw.innerHTML='';
+  PRESET_GROUPS.forEach(g=>{
+    const grp=document.createElement('div');grp.className='preset-group';
+    const lab=document.createElement('div');lab.className='preset-glabel';
+    const cap=(g.cap[LANG]||g.cap.en),nm=(g.name[LANG]||g.name.en);
+    const modeWrap=(LANG==='zh')?('（'+g.mode+'）'):(' ('+g.mode+') ');
+    lab.innerHTML='<b>'+nm+'</b><span class="cap">'+modeWrap+cap+'</span>';
+    grp.appendChild(lab);
+    const row=document.createElement('div');row.className='presets';
+    g.items.forEach(it=>{const b=document.createElement('button');b.className='preset';b.textContent=(it[LANG]||it.en);b.onclick=()=>ask(it.q,g.deep);row.appendChild(b);});
+    grp.appendChild(row);pw.appendChild(grp);
+  });
+}
+renderPresets();
+$('#send').onclick=()=>{const v=$('#qinput').value.trim();if(!v||busy)return;$('#qinput').value='';ask(v);};
+$('#qinput').addEventListener('keydown',e=>{if(e.key==='Enter')$('#send').click();});
+
+function clearSession(){
+  if(busy)return;                 // 查询进行中不清，避免打断
+  log.innerHTML='';               // 清空左侧对话列表
+  sessionId=null;                 // 断开 Agent 会话上下文，下次重新开
+  activeTurn=null;
+  canvas.innerHTML=WELCOME_HTML;  // 右侧恢复欢迎页
+  applyI18n(canvas);              // 按当前语言重新翻译欢迎页
+}
+$('#clearBtn').onclick=clearSession;
+
+async function boot(){
+  try{
+    const ctrl=new AbortController();const to=setTimeout(()=>ctrl.abort(),2500);
+    const r=await fetch(API+'/health',{signal:ctrl.signal});clearTimeout(to);
+    const h=await r.json();
+    if(h.ok){
+      MODE='live';HEALTH=h;BOOTED=true;
+      $('#pulse').classList.remove('off');
+      renderStatus();
+    } else { throw new Error('db down'); }
+  }catch(e){
+    MODE='baked';BOOTED=true;
+    renderStatus();
+  }
+  // 不自动发问：登录后先停在欢迎页，由用户主动点示例或输入
+}
+boot();
+</script>
+</body>
+</html>

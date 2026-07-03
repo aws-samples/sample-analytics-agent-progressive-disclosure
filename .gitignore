@@ -1,0 +1,39 @@
+# 敏感文件
+.env
+*.secret
+k8s/secret.yaml
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+*.egg
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# 临时文件
+*.log
+*.tmp
+
+# 本地数据库数据卷 / 虚拟环境
+.pgdata/
+.venv/
+node_modules/
+
+# generate_data.py 的临时产物(非种子;repo 跟踪 data/csv/ 下的 35 个 CSV 种子)
+data/*.json
+data/csv_fixed/
+data/events.csv

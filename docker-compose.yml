@@ -1,0 +1,28 @@
+version: '3.8'
+
+services:
+  # nosemgrep: writable-filesystem-service —— 本地 demo 库,postgres 需可写数据目录,read_only 不适用
+  db:
+    image: postgres:16
+    container_name: app-analytics-db
+    security_opt:
+      - "no-new-privileges:true"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: app_analytics
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database:/docker-entrypoint-initdb.d/ddl:ro
+      - ./data/csv:/data/csv:ro
+      - ./scripts/docker-init.sh:/docker-entrypoint-initdb.d/99-init.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d app_analytics"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:

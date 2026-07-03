@@ -1,0 +1,52 @@
+# 云上整套:容器版 Postgres(首启自动灌 35 表 19 万行) + FastAPI agent 应用。
+# 在 EC2 上:docker compose -f docker-compose.cloud.yml up -d --build
+services:
+  db:
+    image: postgres:16
+    container_name: analytics-db
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: app_analytics
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./database:/docker-entrypoint-initdb.d/ddl:ro      # DDL(子目录,不被 entrypoint 自动跑)
+      - ./data/csv:/data/csv:ro                            # CSV 数据
+      - ./scripts/docker-init.sh:/docker-entrypoint-initdb.d/99-init.sh:ro  # 显式建表+灌数+重置序列
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d app_analytics"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+
+  app:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: analytics-app
+    environment:
+      CLAUDE_CODE_USE_BEDROCK: "1"
+      AWS_REGION: us-east-1
+      ANTHROPIC_MODEL: global.anthropic.claude-opus-4-8
+      PGHOST: db
+      PGPORT: "5432"
+      PGDATABASE: app_analytics
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PORT: "8000"
+      AUTH_ENABLED: "${AUTH_ENABLED:-1}"
+      # Cognito app 层认证:把你自己的用户池 / 客户端 ID 放进 .env(见 .env.example)。
+      # 这些是公共客户端标识(非密钥),仍建议用 .env 管理而非硬编码进 compose。
+      COGNITO_REGION: "${COGNITO_REGION:-us-east-1}"
+      COGNITO_USER_POOL_ID: "${COGNITO_USER_POOL_ID}"
+      COGNITO_CLIENT_ID: "${COGNITO_CLIENT_ID}"
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "80:8000"     # 主机 80 ← CloudFront 源站;容器内 uvicorn 8000
+    restart: unless-stopped
+
+volumes:
+  pgdata:

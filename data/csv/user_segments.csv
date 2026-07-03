@@ -1,0 +1,11 @@
+segment_id,segment_name,segment_type,description,rules_json,owner,status,created_at,updated_at
+1,高价值用户,value,累计消费金额超过5000元的用户,"{""total_spent"": {""value"": 5000, ""operator"": "">=""}}",product_team,active,2026-01-25 02:16:11.496664,2026-01-25 02:16:11.496664
+2,新注册用户,lifecycle,最近30天内注册的用户,"{""registered_days_ago"": {""value"": 30, ""operator"": ""<=""}}",operations_team,active,2026-01-25 02:16:11.496664,2026-01-25 02:16:11.496664
+3,沉睡用户,lifecycle,超过30天未活跃的用户,"{""inactive_days"": {""value"": 30, ""operator"": "">=""}}",data_team,active,2026-01-25 02:16:11.496664,2026-01-25 02:16:11.496664
+4,VIP会员,membership,开通VIP会员的用户,"{""is_vip"": {""value"": true, ""operator"": ""==""}}",data_team,active,2026-01-25 02:16:11.496664,2026-01-25 02:16:11.496664
+5,年轻用户,demographic,18-25岁的用户群体,"{""age"": {""value"": [18, 25], ""operator"": ""between""}}",marketing_team,active,2026-01-25 02:16:11.496664,2026-01-25 02:16:11.496664
+6,一线城市用户,geographic,北上广深用户,"{""city"": {""value"": [""北京"", ""上海"", ""广州"", ""深圳""], ""operator"": ""in""}}",product_team,active,2026-01-25 02:16:11.496664,2026-01-25 02:16:11.496664
+7,高活跃用户,engagement,周登录次数超过5次的用户,"{""weekly_logins"": {""value"": 5, ""operator"": "">=""}}",product_team,active,2026-01-25 02:16:11.496664,2026-01-25 02:16:11.496664
+8,购物车用户,behavior,购物车有商品但未购买的用户,"{""cart_items"": {""value"": 0, ""operator"": "">""}, ""recent_purchase"": {""value"": false, ""operator"": ""==""}}",product_team,active,2026-01-25 02:16:11.496664,2026-01-25 02:16:11.496664
+9,iOS用户,device,使用iOS设备的用户,"{""device_type"": {""value"": ""ios"", ""operator"": ""==""}}",product_team,active,2026-01-25 02:16:11.496664,2026-01-25 02:16:11.496664
+10,推广注册用户,acquisition,通过广告推广注册的用户,"{""registration_source"": {""value"": ""ad_campaign"", ""operator"": ""==""}}",marketing_team,active,2026-01-25 02:16:11.496664,2026-01-25 02:16:11.496664

@@ -1,0 +1,31 @@
+variant_id,test_id,variant_name,variant_key,description,traffic_percentage,config_json,is_control,created_at
+1,1,control,homepage_recommendation_v2_control,原有基于规则的推荐,34,,t,2025-11-14 05:46:22.474586
+2,1,treatment_a,homepage_recommendation_v2_treatment_a,协同过滤算法,33,,f,2025-11-14 05:46:22.474586
+3,1,treatment_b,homepage_recommendation_v2_treatment_b,深度学习推荐模型,33,,f,2025-11-14 05:46:22.474586
+4,2,control,cart_button_color_control,蓝色按钮 (#1890ff),34,,t,2025-11-07 01:20:47.474586
+5,2,treatment_a,cart_button_color_treatment_a,橙色按钮 (#ff6600),33,,f,2025-11-07 01:20:47.474586
+6,2,treatment_b,cart_button_color_treatment_b,绿色按钮 (#52c41a),33,,f,2025-11-07 01:20:47.474586
+7,3,control,onboarding_flow_v3_control,5步完整引导,50,,t,2025-11-17 11:21:20.474586
+8,3,treatment_a,onboarding_flow_v3_treatment_a,3步简化引导,50,,f,2025-11-17 11:21:20.474586
+9,4,control,pdp_layout_test_control,评价模块在页面底部,50,,t,2025-11-12 23:31:17.474586
+10,4,treatment_a,pdp_layout_test_treatment_a,评价模块在价格下方,50,,f,2025-11-12 23:31:17.474586
+11,5,control,coupon_display_style_control,页面内嵌入式展示,34,,t,2025-11-23 04:07:44.474586
+12,5,treatment_a,coupon_display_style_treatment_a,弹窗式展示,33,,f,2025-11-23 04:07:44.474586
+13,5,treatment_b,coupon_display_style_treatment_b,浮动气泡展示,33,,f,2025-11-23 04:07:44.474586
+14,6,control,search_ranking_v2_control,基于销量和相关性排序,50,,t,2025-12-15 03:41:23.474586
+15,6,treatment_a,search_ranking_v2_treatment_a,加入用户行为个性化因子,50,,f,2025-12-15 03:41:23.474586
+16,7,control,checkout_simplify_control,3页分步支付流程,50,,t,2025-11-05 12:58:34.474586
+17,7,treatment_a,checkout_simplify_treatment_a,1页合并支付流程,50,,f,2025-11-05 12:58:34.474586
+18,8,control,push_timing_test_control,统一时间发送（10:00）,34,,t,2025-11-27 21:02:18.474586
+19,8,treatment_a,push_timing_test_treatment_a,基于用户活跃时段发送,33,,f,2025-11-27 21:02:18.474586
+20,8,treatment_b,push_timing_test_treatment_b,基于历史最佳时段发送,33,,f,2025-11-27 21:02:18.474586
+21,9,control,membership_benefits_display_control,列表式权益展示,50,,t,2025-11-04 06:45:51.474586
+22,9,treatment_a,membership_benefits_display_treatment_a,卡片式突出展示,50,,f,2025-11-04 06:45:51.474586
+23,10,control,product_image_count_control,展示3张主图,34,,t,2025-11-14 17:32:00.474586
+24,10,treatment_a,product_image_count_treatment_a,展示5张主图,33,,f,2025-11-14 17:32:00.474586
+25,10,treatment_b,product_image_count_treatment_b,展示5张主图+视频,33,,f,2025-11-14 17:32:00.474586
+26,11,control,cart_upsell_prompt_control,无凑单提示,34,,t,2025-12-05 02:09:56.474586
+27,11,treatment_a,cart_upsell_prompt_treatment_a,满减凑单提示,33,,f,2025-12-05 02:09:56.474586
+28,11,treatment_b,cart_upsell_prompt_treatment_b,满减+推荐商品凑单,33,,f,2025-12-05 02:09:56.474586
+29,12,control,order_confirmation_recommend_control,无推荐,50,,t,2025-11-12 21:31:51.474586
+30,12,treatment_a,order_confirmation_recommend_treatment_a,基于本单商品推荐,50,,f,2025-11-12 21:31:51.474586
