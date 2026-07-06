@@ -8,6 +8,10 @@
 
 数据集故意做得很杂:一个内容+电商混合型 APP(类似小红书/得物),35 张表、8 个业务域、约 19 万行模拟数据。表一多,口径陷阱就多(GMV 算 total 还是实付?优惠券核销在模板表还是领取表?A/B 该不该掐时间窗?),"先读对文档再写 SQL"的价值才显出来。
 
+![数据分析 Agent 架构图(动态)](docs/architecture.svg)
+
+> 这张图在渲染后的 README 里会动(GitHub 把 SVG 当图片嵌入)。蓝色 = 进行中的请求,青色 = 流式返回,天蓝 = Agent 的工具调用(`read_doc` 顺着知识树逐层读、`run_sql` / `call_metric` 打到 PostgreSQL)。
+
 ## 它长什么样
 
 打开后左侧有 6 个示例题(由易到难:30 天 GMV → 订阅套餐 → 转化漏斗 → 优惠券核销 → 渠道 CAC → A/B 实验),Agent 会把每一步"正在读哪份文档"实时铺开,看得见渐进式披露的全过程。前端右上角有 **EN / 中** 语言切换。大脑是 **Claude Agent SDK** 自建的 Agent,跑在 **Amazon Bedrock**(默认 `global.anthropic.claude-opus-4-8`,`global.` 跨区推理)上,不依赖 Claude Code CLI。单题端到端约 25~70 秒(Opus 要多读几份 md、多几次工具往返)。注意:UI **外壳**可切中英,但**分析内容**(洞察 / SQL / 结果)仍以中文返回,因为 Agent 读的知识库是中文。

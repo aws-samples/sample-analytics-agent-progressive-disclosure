@@ -8,6 +8,10 @@ What it really sets out to prove is one thing: **turning a database schema into 
 
 The dataset is deliberately messy: a content + commerce app (think a social-shopping platform), with **35 tables across 8 business domains and ~190k rows** of synthetic data. The more tables there are, the more definitional traps appear (is GMV gross or net of refunds? is a coupon redemption recorded on the template table or the claim table? should an A/B test be time-boxed?) — and that's precisely where "read the right doc first, then write SQL" earns its keep.
 
+![Analytics Agent architecture — animated](docs/architecture.svg)
+
+> The diagram animates in the rendered README (GitHub embeds the SVG as an image). Blue = request in-flight, teal = the streamed reply, sky = the agent's tool calls (`read_doc` walking the knowledge tree, `run_sql` / `call_metric` hitting PostgreSQL).
+
 ## What it looks like
 
 The left rail has 6 example questions (easy to hard: 30-day GMV → subscription plans → conversion funnel → coupon redemption → channel CAC → A/B experiment). As the agent works, it streams "which doc am I reading right now" in real time, so you can watch progressive disclosure happen. The UI has an **EN / 中 language toggle** (top-right). The brain is an agent built on the **Claude Agent SDK**, running on **Amazon Bedrock** (default `global.anthropic.claude-opus-4-8`, cross-region inference via the `global.` prefix) — it does not depend on the Claude Code CLI. End to end, a question takes ~25–70s (Opus reads several docs and makes several tool round-trips). Note: the UI *chrome* toggles between English and Chinese, but the **analysis content** (insights, generated SQL, results) comes back in Chinese, because the knowledge base the agent reads is Chinese.
