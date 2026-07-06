@@ -77,3 +77,22 @@
 | **合计** | **35** | **~190,000** |
 
 治理层(mart)不额外造数,是从上面这些原始表 CTAS 派生出来的 4 张预聚合表(每日/渠道/用户粒度),随库一起构建。
+
+---
+
+## 下一步(规划中):AgentCore-native 重构
+
+> 状态:**蓝图,尚未落地**。当前云上部署仍是阶段三的 EC2 两容器形态(README 顶部那张架构图即现状)。这一节记录计划中的目标架构,供对齐,不代表已部署。
+
+把「EC2 + Docker Postgres」重构成更 serverless 的形态:
+
+- **AgentCore Runtime** 托管 Claude Agent SDK,取代 EC2 上常驻的 FastAPI 容器。
+- **知识库放 S3**,AgentCore 冷启动时加载,更新知识不必重建镜像。
+- **数据迁到 Aurora Serverless v2(PostgreSQL)**,Runtime 经 **VPC 私有连接**(psycopg 5432)访问,沿用现有 `backend/db.py` 的只读单语句安全边界。
+- 前端静态资源走 S3 + CloudFront;`/ask` 由 Lambda 承接(验 Cognito JWT、`InvokeAgentRuntime`、SSE 回传)。
+
+![目标架构:AgentCore-native(规划中)](docs/target-architecture.svg)
+
+有意思的是,阶段一最初就跑在 Aurora Serverless v2 + EKS 上,后来为省事退回 EC2;这次是带着 AgentCore 重新走回 serverless。
+
+待定权衡(规划阶段细化):Aurora Serverless v2 的成本地板与 scale-to-zero 行为、S3 冷启动加载 vs 烤进镜像、本地开发是否保留 Docker 路径。
