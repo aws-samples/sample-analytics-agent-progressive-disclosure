@@ -16,6 +16,7 @@ from __future__ import annotations
 import os
 import json
 import asyncio
+import logging
 
 from fastapi import FastAPI, Request
 from fastapi.responses import StreamingResponse, JSONResponse, RedirectResponse
@@ -24,6 +25,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 import db
 from agent import run_agent, MODEL
+
+log = logging.getLogger("server")
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 WEB = os.path.normpath(os.path.join(HERE, "..", "web"))
@@ -79,7 +82,9 @@ def _auth_error(req: Request):
     try:
         _verify_jwt(auth[7:])
     except Exception as e:  # noqa: BLE001
-        return JSONResponse({"error": "invalid token", "detail": str(e)[:120]}, status_code=401)
+        # 细节只进服务端日志,不回显给客户端(异常文本可能含内部实现细节)
+        log.warning("JWT verify failed: %s: %s", type(e).__name__, e)
+        return JSONResponse({"error": "invalid token"}, status_code=401)
     return None
 
 
@@ -163,7 +168,9 @@ async def ask(req: Request):
                 if await req.is_disconnected():
                     break
         except Exception as e:  # noqa: BLE001
-            yield _sse({"type": "error", "message": f"{type(e).__name__}: {e}"})
+            # 只回错误类名,消息细节留在服务端日志
+            log.exception("agent stream failed")
+            yield _sse({"type": "error", "message": type(e).__name__})
         yield _sse({"type": "end"})
 
     return StreamingResponse(gen(), media_type="text/event-stream",

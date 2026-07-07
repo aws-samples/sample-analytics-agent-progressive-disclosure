@@ -54,9 +54,10 @@ async function handleAsk(req, res) {
   try {
     await verifier.verify(token);
   } catch (e) {
+    // 细节只进服务端日志,不回显给客户端(异常信息可能带内部实现细节)
     console.error("JWT verify failed:", e?.name, "|", e?.message, "| tokenLen:", token.length);
     res.writeHead(401, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ error: "unauthorized", detail: String(e?.message || e).slice(0, 200) }));
+    res.end(JSON.stringify({ error: "unauthorized" }));
     return;
   }
 
@@ -103,8 +104,9 @@ async function handleAsk(req, res) {
       lastWrite = Date.now();
     }
   } catch (e) {
+    // 只回错误类名(足够前端提示"限流/权限"类别),消息细节留在服务端日志
     console.error("InvokeAgentRuntime failed:", e?.name, "|", e?.message);
-    if (!res.writableEnded) res.write(sse({ type: "error", message: `${e?.name || "Error"}: ${e?.message || e}` }));
+    if (!res.writableEnded) res.write(sse({ type: "error", message: e?.name || "UpstreamError" }));
   } finally {
     clearInterval(heartbeat);
     if (!res.writableEnded) res.end();
