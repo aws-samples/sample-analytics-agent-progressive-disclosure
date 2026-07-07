@@ -37,3 +37,9 @@ node_modules/
 data/*.json
 data/csv_fixed/
 data/events.csv
+.secrets/
+
+# Claude Code 本地会话配置
+.claude/
+# 本地部署参数(含账号相关资源 ID)
+infra/deploy.local.sh

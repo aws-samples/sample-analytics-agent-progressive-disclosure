@@ -1,0 +1,15 @@
+# Secrets (local environment files are never committed)
+.env.local
+
+# CDK Build Artifacts
+cdk/cdk.out/
+cdk/node_modules/
+cdk/dist/
+
+# CLI Internals(公开样例仓库:部署状态/日志/账号绑定均不入库)
+.cli/
+.llm-context/
+aws-targets.json
+
+# Ephemeral Staging
+.cache/*

@@ -1,0 +1,11 @@
+{
+  "name": "analytics-ask-relay",
+  "private": true,
+  "type": "module",
+  "main": "server.mjs",
+  "scripts": { "start": "node server.mjs" },
+  "dependencies": {
+    "aws-jwt-verify": "^4.0.1",
+    "@aws-sdk/client-bedrock-agentcore": "^3.848.0"
+  }
+}

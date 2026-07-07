@@ -1,0 +1,305 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Analytics Agent (AgentCore-native) foundation: private VPC (no NAT/IGW),
+  VPC endpoints (S3 gateway + bedrock-runtime/secretsmanager/logs interface),
+  Aurora Serverless v2 PostgreSQL in private subnets, DB secret, and the
+  knowledge + static-site S3 buckets. The AgentCore Runtime attaches to the
+  private subnets via RuntimeSecurityGroup and reaches Aurora over 5432.
+
+Parameters:
+  ProjectTag:
+    Type: String
+    Default: analytics-agent
+  DBName:
+    Type: String
+    Default: app_analytics
+  DBUsername:
+    Type: String
+    Default: analytics_admin
+
+Resources:
+
+  # ----------------------------- VPC + subnets -----------------------------
+  Vpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.42.0.0/16
+      EnableDnsSupport: true       # required for interface-endpoint private DNS
+      EnableDnsHostnames: true
+      Tags: [{ Key: Name, Value: !Sub "${ProjectTag}-vpc" }]
+
+  PrivateSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: 10.42.1.0/24
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      Tags: [{ Key: Name, Value: !Sub "${ProjectTag}-private-a" }]
+
+  PrivateSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: 10.42.2.0/24
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      Tags: [{ Key: Name, Value: !Sub "${ProjectTag}-private-b" }]
+
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags: [{ Key: Name, Value: !Sub "${ProjectTag}-private-rt" }]
+
+  RouteAssocA:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties: { SubnetId: !Ref PrivateSubnetA, RouteTableId: !Ref PrivateRouteTable }
+  RouteAssocB:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties: { SubnetId: !Ref PrivateSubnetB, RouteTableId: !Ref PrivateRouteTable }
+
+  # ---- 出网:IGW + 公有子网 + NAT。私有子网默认路由走 NAT，让 AgentCore 的容器构建
+  #      编排 Lambda(被放进本 VPC)能触达公网 AWS API(CodeBuild / 控制面)。仅出站,
+  #      无 0.0.0.0/0 入站规则。 ----
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags: [{ Key: Name, Value: !Sub "${ProjectTag}-igw" }]
+  IgwAttach:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties: { VpcId: !Ref Vpc, InternetGatewayId: !Ref InternetGateway }
+
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: 10.42.0.0/24
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      Tags: [{ Key: Name, Value: !Sub "${ProjectTag}-public-a" }]
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags: [{ Key: Name, Value: !Sub "${ProjectTag}-public-rt" }]
+  PublicDefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: IgwAttach
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+  PublicRouteAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties: { SubnetId: !Ref PublicSubnet, RouteTableId: !Ref PublicRouteTable }
+
+  NatEip:
+    Type: AWS::EC2::EIP
+    Properties: { Domain: vpc }
+  NatGateway:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatEip.AllocationId
+      SubnetId: !Ref PublicSubnet
+      Tags: [{ Key: Name, Value: !Sub "${ProjectTag}-nat" }]
+  PrivateDefaultRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway
+
+  # ------------------------- Security groups --------------------------------
+  EndpointSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: HTTPS to interface VPC endpoints from within the VPC
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 10.42.0.0/16
+          Description: HTTPS from VPC
+      Tags: [{ Key: Name, Value: !Sub "${ProjectTag}-endpoint-sg" }]
+
+  RuntimeSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: AgentCore Runtime ENIs (egress to endpoints + Aurora)
+      VpcId: !Ref Vpc
+      Tags: [{ Key: Name, Value: !Sub "${ProjectTag}-runtime-sg" }]
+
+  SeederSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: One-shot Aurora seeder Lambda ENIs
+      VpcId: !Ref Vpc
+      Tags: [{ Key: Name, Value: !Sub "${ProjectTag}-seeder-sg" }]
+
+  AuroraSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Aurora PostgreSQL - 5432 from runtime + seeder only
+      VpcId: !Ref Vpc
+      Tags: [{ Key: Name, Value: !Sub "${ProjectTag}-aurora-sg" }]
+
+  AuroraIngressRuntime:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref AuroraSG
+      IpProtocol: tcp
+      FromPort: 5432
+      ToPort: 5432
+      SourceSecurityGroupId: !Ref RuntimeSG
+      Description: PostgreSQL from AgentCore Runtime
+  AuroraIngressSeeder:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref AuroraSG
+      IpProtocol: tcp
+      FromPort: 5432
+      ToPort: 5432
+      SourceSecurityGroupId: !Ref SeederSG
+      Description: PostgreSQL from seeder Lambda
+
+  # ----------------------------- VPC endpoints ------------------------------
+  S3GatewayEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref Vpc
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.s3"
+      VpcEndpointType: Gateway
+      RouteTableIds: [!Ref PrivateRouteTable]
+
+  BedrockEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref Vpc
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.bedrock-runtime"
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      SubnetIds: [!Ref PrivateSubnetA, !Ref PrivateSubnetB]
+      SecurityGroupIds: [!Ref EndpointSG]
+
+  SecretsEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref Vpc
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.secretsmanager"
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      SubnetIds: [!Ref PrivateSubnetA, !Ref PrivateSubnetB]
+      SecurityGroupIds: [!Ref EndpointSG]
+
+  LogsEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref Vpc
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.logs"
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      SubnetIds: [!Ref PrivateSubnetA, !Ref PrivateSubnetB]
+      SecurityGroupIds: [!Ref EndpointSG]
+
+  # ECR 端点:VPC 模式下 AgentCore Runtime 从 ECR 拉镜像需要(镜像层 blob 走 S3 网关端点)。
+  EcrApiEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref Vpc
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.ecr.api"
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      SubnetIds: [!Ref PrivateSubnetA, !Ref PrivateSubnetB]
+      SecurityGroupIds: [!Ref EndpointSG]
+
+  EcrDkrEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref Vpc
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.ecr.dkr"
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      SubnetIds: [!Ref PrivateSubnetA, !Ref PrivateSubnetB]
+      SecurityGroupIds: [!Ref EndpointSG]
+
+  # ------------------------------- DB secret --------------------------------
+  DBSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub "${ProjectTag}/db"
+      Description: Aurora master credentials for the analytics agent
+      GenerateSecretString:
+        SecretStringTemplate: !Sub '{"username":"${DBUsername}"}'
+        GenerateStringKey: password
+        PasswordLength: 24
+        ExcludePunctuation: true
+
+  # ------------------------------- Aurora -----------------------------------
+  DBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Aurora private subnets
+      SubnetIds: [!Ref PrivateSubnetA, !Ref PrivateSubnetB]
+
+  AuroraCluster:
+    Type: AWS::RDS::DBCluster
+    Properties:
+      Engine: aurora-postgresql
+      EngineVersion: "16.13"
+      EngineMode: provisioned
+      DatabaseName: !Ref DBName
+      MasterUsername: !Ref DBUsername
+      MasterUserPassword: !Sub "{{resolve:secretsmanager:${DBSecret}:SecretString:password}}"
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      VpcSecurityGroupIds: [!Ref AuroraSG]
+      StorageEncrypted: true
+      ServerlessV2ScalingConfiguration:
+        MinCapacity: 0.5
+        MaxCapacity: 2
+
+  AuroraInstance:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBClusterIdentifier: !Ref AuroraCluster
+      DBInstanceClass: db.serverless
+      Engine: aurora-postgresql
+      PubliclyAccessible: false
+
+  # ------------------------------- S3 buckets -------------------------------
+  KnowledgeBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${ProjectTag}-knowledge-${AWS::AccountId}-${AWS::Region}"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: { SSEAlgorithm: AES256 }
+
+  SiteBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${ProjectTag}-site-${AWS::AccountId}-${AWS::Region}"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: { SSEAlgorithm: AES256 }
+
+Outputs:
+  VpcId: { Value: !Ref Vpc }
+  PrivateSubnetA: { Value: !Ref PrivateSubnetA }
+  PrivateSubnetB: { Value: !Ref PrivateSubnetB }
+  RuntimeSGId: { Value: !Ref RuntimeSG }
+  SeederSGId: { Value: !Ref SeederSG }
+  AuroraEndpoint: { Value: !GetAtt AuroraCluster.Endpoint.Address }
+  AuroraPort: { Value: !GetAtt AuroraCluster.Endpoint.Port }
+  DBName: { Value: !Ref DBName }
+  DBSecretArn: { Value: !Ref DBSecret }
+  KnowledgeBucket: { Value: !Ref KnowledgeBucket }
+  SiteBucket: { Value: !Ref SiteBucket }

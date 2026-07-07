@@ -1,0 +1,48 @@
+{
+  "title": "Analytics Agent · Architecture (AgentCore-native)",
+  "subtitle": "AgentCore Runtime hosts the Claude Agent SDK · knowledge loaded from S3 at cold start · Aurora Serverless v2 (PostgreSQL) over a private VPC connection · /ask rides CloudFront VPC origin → internal ALB → Fargate relay",
+  "footer": "① Browser (X-Id-Token) → ② CloudFront VPC origin (private, unsigned) → ALB → ③ Fargate relay (JWT · SSE) → ④ AgentCore ⇄ Bedrock · green = S3 knowledge @ cold start · run_sql → Aurora (psycopg 5432) · dashed = in-flight",
+  "canvas": {"w": 1480, "h": 900},
+
+  "nodes": [
+    {"id": "browser",    "x": 110,  "y": 408, "icon": "tile:generic", "label": "User · Browser",      "sub": "plain-language question"},
+    {"id": "cloudfront", "x": 370,  "y": 408, "icon": "cloudfront",   "label": "CloudFront",          "sub": "static UI (S3) + /ask"},
+    {"id": "alb",        "x": 640,  "y": 408, "icon": "elb",          "label": "Internal ALB",        "sub": "CloudFront prefix-list only"},
+    {"id": "relay",      "x": 870,  "y": 408, "icon": "ecs",          "label": "Fargate · ask relay", "sub": "verify JWT · SSE relay"},
+    {"id": "runtime",    "x": 1100, "y": 408, "icon": "agentcore",    "label": "AgentCore Runtime",   "sub": "Claude Agent SDK"},
+    {"id": "bedrock",    "x": 1330, "y": 408, "icon": "bedrock",      "label": "Amazon Bedrock",      "sub": "Opus 4.8 · cross-region"},
+
+    {"id": "s3",      "x": 1100, "y": 168, "icon": "s3",      "label": "S3 · Knowledge",      "sub": "md doc tree · 8 domains"},
+    {"id": "cognito", "x": 370,  "y": 660, "icon": "cognito", "label": "Amazon Cognito",      "sub": "SRP login · JWT/JWKS"},
+    {"id": "aurora",  "x": 1100, "y": 660, "icon": "rds",     "label": "Aurora Serverless v2", "sub": "PostgreSQL · 35 tables + mart"}
+  ],
+
+  "groups": [
+    {"kind": "region", "x": 280, "y": 90,  "w": 1140, "h": 706, "label": "AWS Cloud · Region us-west-2", "lx": 296, "ly": 108},
+    {"kind": "subnet", "x": 560, "y": 350, "w": 620,  "h": 410, "label": "VPC · private subnets", "lx": 576, "ly": 368}
+  ],
+
+  "edges": [
+    {"from": "browser",    "fs": "r", "to": "cloudfront", "ts": "l", "flow": "request", "label": "HTTPS · X-Id-Token",       "lxy": [240, 395]},
+    {"from": "cloudfront", "fs": "r", "to": "alb",        "ts": "l", "flow": "request", "label": "VPC origin · unsigned",    "lxy": [505, 395]},
+    {"from": "alb",        "fs": "r", "to": "relay",      "ts": "l", "flow": "request", "label": "/ask",                     "lxy": [755, 395]},
+    {"from": "relay",      "fs": "r", "to": "runtime",    "ts": "l", "flow": "request", "label": "InvokeAgentRuntime",       "lxy": [985, 395]},
+    {"from": "runtime",    "fs": "r", "to": "bedrock",    "ts": "l", "flow": "request", "label": "InvokeModel",              "lxy": [1215, 395]},
+
+    {"from": "s3",      "fs": "b", "to": "runtime", "ts": "t", "flow": "schedule", "label": "load knowledge @ cold start", "lxy": [1230, 295]},
+    {"from": "runtime", "fs": "b", "to": "aurora",  "ts": "t", "flow": "tool",     "label": "run_sql · psycopg 5432",      "lxy": [1218, 545]},
+
+    {"from": "browser", "fs": "b", "to": "cognito", "ts": "l", "flow": "aux", "label": "SRP login → JWT", "lxy": [190, 645], "mids": [[110, 660]]},
+    {"from": "relay",   "fs": "b", "to": "cognito", "ts": "t", "flow": "aux", "static": true, "label": "JWKS verify", "lxy": [615, 548], "mids": [[870, 560], [370, 560]]}
+  ],
+
+  "journeys": [
+    {"flow": "request",  "dur": 2.8, "hops": [["browser","cloudfront"],["cloudfront","alb"],["alb","relay"],["relay","runtime"],["runtime","bedrock"]]},
+    {"flow": "reply",    "dur": 3.2, "reverse": true, "hops": [["runtime","bedrock"],["relay","runtime"],["alb","relay"],["cloudfront","alb"],["browser","cloudfront"]]},
+    {"flow": "schedule", "dur": 2.2, "hops": [["s3","runtime"]]},
+    {"flow": "tool",     "dur": 2.2, "hops": [["runtime","aurora"]]}
+  ],
+
+  "steps": [["browser","cloudfront",1],["cloudfront","alb",2],["alb","relay",3],["runtime","bedrock",4]],
+  "legend": ["request","reply","schedule","tool","aux"]
+}

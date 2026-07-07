@@ -80,19 +80,20 @@
 
 ---
 
-## 下一步(规划中):AgentCore-native 重构
+## 阶段五:AgentCore-native 重构(已上线)
 
-> 状态:**蓝图,尚未落地**。当前云上部署仍是阶段三的 EC2 两容器形态(README 顶部那张架构图即现状)。这一节记录计划中的目标架构,供对齐,不代表已部署。
+> 状态:**已部署并端到端实测跑通**(us-west-2,浏览器同款请求验证:登录 → 提问 → SSE 流式返回真实 Aurora 数据)。EC2 两容器形态被整体替换。
 
-把「EC2 + Docker Postgres」重构成更 serverless 的形态:
+把「EC2 + Docker Postgres」重构成 serverless 形态:
 
-- **AgentCore Runtime** 托管 Claude Agent SDK,取代 EC2 上常驻的 FastAPI 容器。
-- **知识库放 S3**,AgentCore 冷启动时加载,更新知识不必重建镜像。
-- **数据迁到 Aurora Serverless v2(PostgreSQL)**,Runtime 经 **VPC 私有连接**(psycopg 5432)访问,沿用现有 `backend/db.py` 的只读单语句安全边界。
-- 前端静态资源走 S3 + CloudFront;`/ask` 由 Lambda 承接(验 Cognito JWT、`InvokeAgentRuntime`、SSE 回传)。
+- **AgentCore Runtime** 托管 Claude Agent SDK(`analyticsagent/`,BYO Container:python + Node20 + claude CLI 非 root 运行)。冷启动做三件事:读 `analytics-agent/runtime` secret 注入配置 → 从 S3 同步知识树(61 个 md)到本地 → 惰性起暖 `ClaudeSDKClient` 跨调用复用,摊薄 CLI 进程拉起成本。
+- **知识库放 S3**(`knowledge/` 前缀),更新知识不必重建镜像;`db.py` 连接参数惰性读取,消除「import 早于配置注入」的冷启动竞态。
+- **Aurora Serverless v2(PG16)**,Runtime 走 **VPC 私有连接**(psycopg 5432),只读单语句安全边界原样保留;35 表 19 万行由一次性 VPC seeder Lambda 灌入。
+- 前端 S3 + CloudFront(OAC);认证仍是 app 层 Cognito(SRP 登录拿 idToken)。
+- **`/ask` 中继:Fargate + 内网 ALB + CloudFront VPC origin**(`functions/ask-relay/` + `infra/relay.yaml`)。原计划的 Lambda Function URL 方案(代码已移除)被账号的组织 SCP 堵死——公开 URL 和 Cognito 联合角色的 IAM 调用都被拒,而 CloudFront OAC 又签不了带 body 的 POST。改用同账号 graph-cmdb 已验证的模式:CloudFront 经 VPC origin 私网回源到内网 ALB(SG 只放行 CloudFront origin-facing 前缀列表,零公网暴露、零签名),JWT 走 `X-Id-Token` 直达中继校验后 `InvokeAgentRuntime` 透传 SSE(15s 心跳防读超时)。
 
-![目标架构:AgentCore-native(规划中)](docs/target-architecture.svg)
+![架构:AgentCore-native](docs/target-architecture.svg)
+
+基建三个栈:`infra/foundation.yaml`(VPC/端点/NAT/Aurora/桶)、`infra/relay.yaml`(ECS+ALB)、`infra/edge.yaml`(CloudFront);Runtime 由 `@aws/agentcore` CDK CLI 部署(`analyticsagent/agentcore/`)。
 
 有意思的是,阶段一最初就跑在 Aurora Serverless v2 + EKS 上,后来为省事退回 EC2;这次是带着 AgentCore 重新走回 serverless。
-
-待定权衡(规划阶段细化):Aurora Serverless v2 的成本地板与 scale-to-zero 行为、S3 冷启动加载 vs 烤进镜像、本地开发是否保留 Docker 路径。

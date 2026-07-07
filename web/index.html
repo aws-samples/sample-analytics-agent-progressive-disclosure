@@ -4,26 +4,32 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>App Analytics · AI 数据分析师</title>
-<link rel="stylesheet" href="/app/vendor/fonts/fonts.css">
+<link rel="stylesheet" href="/vendor/fonts/fonts.css">
+<!-- 部署期注入的运行配置(Cognito 池/客户端等);config.js 在 S3 站点根,随部署生成 -->
+<script src="/config.js"></script>
 <!-- nosemgrep: insecure-document-method —— 渲染的是 app/模型生成内容,回显的用户文本已 HTML 转义 -->
 <script>
 /* —— app 层 Cognito 登录(照搬 graph-cmdb/AVA 模式;浅色风格)——
- * 读 /api/config:authEnabled=false(本地)→ 不拦。authEnabled=true 且无有效 token → 弹登录浮层。
- * 包 window.fetch 给 /ask、/api/ 自动带 Authorization: Bearer <idToken>;401 → 清 token 回登录。
- * 认证全在 app 层,CloudFront/Lambda@Edge 不参与,静态资源因此可正常缓存。 */
+ * 读配置:authEnabled=false(本地)→ 不拦。authEnabled=true 且无有效 token → 弹登录浮层。
+ * 包 window.fetch 给 /ask、/api/ 自动带 X-Id-Token: <idToken>;401 → 清 token 回登录。
+ * 认证全在 app 层。线上 /ask 走同域 CloudFront → VPC origin → 内网 ALB → Fargate 中继,
+ * 回源零签名、JWT 原样到中继校验。(此前「Identity Pool 临时凭证 + 浏览器 SigV4 直连
+ * Function URL」方案已废弃:组织 SCP 拒绝浏览器侧主体调用 Function URL。) */
 (function(){
   var TOKEN_KEY='aa_id_token';
   var BASE=location.protocol.indexOf('http')===0?location.origin:'';
   var _fetch=window.fetch.bind(window);
+
   window.fetch=function(input,init){
     init=init||{};
     var url=(typeof input==='string')?input:(input&&input.url)||'';
+    // /ask(线上同域中继)与 /api/(本地 FastAPI 开发):自动带 X-Id-Token
     var needAuth=url.indexOf('/ask')!==-1||url.indexOf('/api/')!==-1;
     var tok=localStorage.getItem(TOKEN_KEY);
     if(needAuth&&tok){
-      var headers=new Headers((init&&init.headers)||(typeof input!=='string'&&input&&input.headers)||{});
-      if(!headers.has('Authorization'))headers.set('Authorization','Bearer '+tok);
-      init=Object.assign({},init,{headers:headers});
+      var hh=new Headers((init&&init.headers)||{});
+      if(!hh.has('X-Id-Token'))hh.set('X-Id-Token',tok);
+      init=Object.assign({},init,{headers:hh});
     }
     return _fetch(input,init).then(function(resp){
       if(resp.status===401&&needAuth&&window.__AA_AUTH__){
@@ -38,15 +44,19 @@
     try{var p=JSON.parse(atob(t.split('.')[1]));return p.exp&&(p.exp*1000>Date.now()+30000);}catch(e){return false;}
   }
   function loadScript(src){return new Promise(function(res,rej){var s=document.createElement('script');s.src=src;s.onload=res;s.onerror=rej;document.head.appendChild(s);});}
+  function applyCfg(cfg){
+    window.__AA_AUTH__=!!cfg.authEnabled;
+    if(!cfg.authEnabled)return;        // 未开认证:放行
+    if(tokenValid())return;            // 已登录:fetch 包装会带 X-Id-Token
+    localStorage.removeItem(TOKEN_KEY);
+    loadScript('/vendor/amazon-cognito-identity.min.js').then(function(){showLogin(cfg);})
+      .catch(function(){alert((localStorage.getItem('aa_lang')||'en')==='zh'?'登录组件加载失败,请检查网络后刷新。':'Failed to load the sign-in component. Check your network and refresh.');});
+  }
   document.addEventListener('DOMContentLoaded',function(){
-    _fetch(BASE+'/api/config').then(function(r){return r.json();}).then(function(cfg){
-      window.__AA_AUTH__=!!cfg.authEnabled;
-      if(!cfg.authEnabled)return;        // 本地开发:放行
-      if(tokenValid())return;            // 已登录:fetch 包装会带 token
-      localStorage.removeItem(TOKEN_KEY);
-      loadScript('/app/vendor/amazon-cognito-identity.min.js').then(function(){showLogin(cfg);})
-        .catch(function(){alert((localStorage.getItem('aa_lang')||'en')==='zh'?'登录组件加载失败,请检查网络后刷新。':'Failed to load the sign-in component. Check your network and refresh.');});
-    }).catch(function(){/* 配置端点拿不到就不拦,避免把人锁死在外面 */});
+    // 优先用部署期注入的 window.APP_CONFIG(config.js);本地 FastAPI 开发则回退 /api/config。
+    if(window.APP_CONFIG){applyCfg(window.APP_CONFIG);return;}
+    _fetch(BASE+'/api/config').then(function(r){return r.json();}).then(applyCfg)
+      .catch(function(){/* 配置拿不到就不拦,避免锁死 */});
   });
   function showLogin(cfg){
     var AC=window.AmazonCognitoIdentity;
@@ -126,7 +136,7 @@
   }
 })();
 </script>
-<script src="/app/vendor/echarts.min.js"></script>
+<script src="/vendor/echarts.min.js"></script>
 <style>
 :root{
   --paper:#F2EFE7;
@@ -1561,9 +1571,13 @@ function clearSession(){
 $('#clearBtn').onclick=clearSession;
 
 async function boot(){
+  // AgentCore 部署：配了 askUrl 即恒为在线(实时链路),无需网络探针(且未登录时无凭证探不了)。
+  if(window.APP_CONFIG&&window.APP_CONFIG.askUrl){
+    MODE='live';HEALTH={ok:true};BOOTED=true;$('#pulse').classList.remove('off');renderStatus();return;
+  }
   try{
     const ctrl=new AbortController();const to=setTimeout(()=>ctrl.abort(),2500);
-    const r=await fetch(API+'/health',{signal:ctrl.signal});clearTimeout(to);
+    const r=await fetch(API+'/ask',{signal:ctrl.signal});clearTimeout(to);
     const h=await r.json();
     if(h.ok){
       MODE='live';HEALTH=h;BOOTED=true;

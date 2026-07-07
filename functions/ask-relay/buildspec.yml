@@ -1,0 +1,10 @@
+# CodeBuild 一次性构建:本机无 docker,镜像在云端 build+push(与 agentcore 镜像同路)。
+version: 0.2
+phases:
+  pre_build:
+    commands:
+      - aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin $ECR_REPO_URI
+  build:
+    commands:
+      - docker build -t $ECR_REPO_URI:latest .
+      - docker push $ECR_REPO_URI:latest

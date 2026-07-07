@@ -1,0 +1,108 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Analytics Agent edge: CloudFront in front of the static UI (S3, OAC) and the
+  /ask relay via VPC origin to an internal ALB (relay stack). Single domain, no
+  CORS. VPC origin does no request signing, so the Cognito ID token travels in
+  X-Id-Token untouched and POST bodies pass through (unlike Lambda OAC, which
+  cannot sign bodies; and unlike Function URLs, which the org SCP blocks for
+  browser-side principals). /ask is uncached.
+
+# 参数账号相关,无默认值(SiteBucketName 取 foundation 栈输出,ALB 两项取 relay 栈输出)
+Parameters:
+  SiteBucketName:
+    Type: String
+  RelayAlbArn:
+    Type: String
+  RelayAlbDomain:
+    Type: String
+
+Resources:
+
+  S3Oac:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: analytics-agent-s3-oac
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  # /ask 回源走 VPC origin:CloudFront 在 VPC 里建 ENI,私网直达内网 ALB,零签名。
+  # ALB 的 SG 只放行 CloudFront origin-facing 托管前缀列表(relay 栈),链路不暴露公网。
+  RelayVpcOrigin:
+    Type: AWS::CloudFront::VpcOrigin
+    Properties:
+      VpcOriginEndpointConfig:
+        Name: analytics-ask-relay
+        Arn: !Ref RelayAlbArn
+        HTTPPort: 8000
+        OriginProtocolPolicy: http-only
+
+  # /ask 的自定义 origin request policy:转发 X-Id-Token(JWT)+ Content-Type/Accept。
+  # 沿用 X-Id-Token 而非 Authorization:CloudFront 禁止在 origin request policy 里
+  # 白名单 Authorization(须进 cache key 才转发),自定义头没有这个限制,前端也无需改协议。
+  AskOriginRequestPolicy:
+    Type: AWS::CloudFront::OriginRequestPolicy
+    Properties:
+      OriginRequestPolicyConfig:
+        Name: analytics-agent-ask-orp
+        HeadersConfig:
+          HeaderBehavior: whitelist
+          Headers: [X-Id-Token, Content-Type, Accept]
+        QueryStringsConfig: { QueryStringBehavior: all }
+        CookiesConfig: { CookieBehavior: none }
+
+  Distribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: analytics-agent (AgentCore-native) UI + /ask
+        DefaultRootObject: index.html
+        PriceClass: PriceClass_100
+        Origins:
+          - Id: s3-site
+            DomainName: !Sub "${SiteBucketName}.s3.${AWS::Region}.amazonaws.com"
+            OriginAccessControlId: !Ref S3Oac
+            S3OriginConfig:
+              OriginAccessIdentity: ""
+          - Id: ask-alb
+            DomainName: !Ref RelayAlbDomain
+            VpcOriginConfig:
+              VpcOriginId: !GetAtt RelayVpcOrigin.Id
+              # 中继每 15s 发 SSE 心跳,60s 读超时给足冗余
+              OriginReadTimeout: 60
+              OriginKeepaliveTimeout: 5
+        DefaultCacheBehavior:
+          TargetOriginId: s3-site
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods: [GET, HEAD, OPTIONS]
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6   # Managed-CachingOptimized
+        CacheBehaviors:
+          - PathPattern: /ask
+            TargetOriginId: ask-alb
+            ViewerProtocolPolicy: redirect-to-https
+            AllowedMethods: [GET, HEAD, OPTIONS, PUT, PATCH, POST, DELETE]
+            CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad   # Managed-CachingDisabled
+            OriginRequestPolicyId: !Ref AskOriginRequestPolicy    # 自定义:不转发 Authorization
+
+  # 允许 CloudFront(本分发)读私有站点桶
+  SiteBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref SiteBucketName
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowCloudFrontRead
+            Effect: Allow
+            Principal: { Service: cloudfront.amazonaws.com }
+            Action: s3:GetObject
+            Resource: !Sub "arn:aws:s3:::${SiteBucketName}/*"
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub "arn:aws:cloudfront::${AWS::AccountId}:distribution/${Distribution}"
+
+Outputs:
+  DistributionId: { Value: !Ref Distribution }
+  DistributionDomain: { Value: !GetAtt Distribution.DomainName }

@@ -1,0 +1,41 @@
+{
+  "$schema": "https://schema.agentcore.aws.dev/v1/agentcore.json",
+  "name": "analyticsagent",
+  "version": 1,
+  "managedBy": "CDK",
+  "tags": {
+    "agentcore:created-by": "agentcore-cli",
+    "agentcore:project-name": "analyticsagent"
+  },
+  "runtimes": [
+    {
+      "name": "analytics",
+      "build": "Container",
+      "entrypoint": "main.py",
+      "codeLocation": "app/analytics/",
+      "runtimeVersion": "PYTHON_3_14",
+      "networkMode": "VPC",
+      "networkConfig": {
+        "subnets": [
+          "subnet-096117a03fb97effd",
+          "subnet-0d45e85d5e02b0d4f"
+        ],
+        "securityGroups": [
+          "sg-08cce0e8c302fada7"
+        ],
+        "vpcId": "vpc-06d76974a9f937593"
+      },
+      "protocol": "HTTP"
+    }
+  ],
+  "memories": [],
+  "credentials": [],
+  "evaluators": [],
+  "onlineEvalConfigs": [],
+  "agentCoreGateways": [],
+  "policyEngines": [],
+  "harnesses": [],
+  "configBundles": [],
+  "abTests": [],
+  "httpGateways": []
+}

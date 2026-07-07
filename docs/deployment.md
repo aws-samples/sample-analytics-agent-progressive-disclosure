@@ -1,12 +1,15 @@
 # 部署指南
 
+> **云上部署已换代为 AgentCore-native 架构**(AgentCore Runtime + Aurora Serverless v2 + S3 知识库 + Fargate /ask 中继 + CloudFront VPC origin),对应 `infra/` 三个 CloudFormation 栈与 `analyticsagent/`(`@aws/agentcore` CDK CLI),演进脉络与各组件职责见 [PROJECT_STATUS.md](../PROJECT_STATUS.md) 阶段五。本文的「C. 云上部署(EC2)」是上一代形态,留作低成本单机替代路径。
+
 本项目有三种跑法,按需要选:
 
 | 场景 | 跑什么 | 怎么跑 |
 |------|--------|--------|
 | **A. 本地数据库** | 只起 Postgres(给 CLI Skill / 看数据用) | `docker compose up -d` |
 | **B. 本地 Web App** | Agent SDK + FastAPI + 前端,跑在本机 | `backend/run.sh` |
-| **C. 云上部署** | 部署到你自己的 EC2 + CloudFront | 见下文「云上部署」 |
+| **C. 云上部署(EC2,上一代)** | 部署到你自己的 EC2 + CloudFront | 见下文「云上部署」 |
+| **D. 云上部署(AgentCore,现行)** | `infra/` 三栈 + `analyticsagent/` Runtime | 见 [PROJECT_STATUS.md](../PROJECT_STATUS.md) 阶段五 |
 
 > 数据库统一用 Docker 容器版 Postgres:本地是 `docker-compose.yml` 的 db 容器,云上是 `docker-compose.cloud.yml` 的 db 容器(带持久卷)。
 

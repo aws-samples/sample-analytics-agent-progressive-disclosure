@@ -1,0 +1,201 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Analytics Agent /ask relay on Fargate behind an internal ALB. CloudFront reaches
+  the ALB via VPC origin (see edge.yaml); the ALB security group only admits the
+  CloudFront origin-facing managed prefix list, so the service is never public and
+  carries no 0.0.0.0/0 ingress. Replaces the Lambda Function URL relay, which the
+  org SCP blocks for browser-side principals.
+
+Parameters:
+  ProjectTag:
+    Type: String
+    Default: analytics-agent
+  # 以下参数账号相关,无默认值(取 foundation 栈输出 / 你自己的资源):
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+  PrivateSubnetA:
+    Type: AWS::EC2::Subnet::Id
+  PrivateSubnetB:
+    Type: AWS::EC2::Subnet::Id
+  # CloudFront origin-facing 托管前缀列表(区域级公共常量,us-west-2 为 pl-82a045eb;
+  # CFN 不能按名字查前缀列表,故作参数传入):
+  #   aws ec2 describe-managed-prefix-lists \
+  #     --filters Name=prefix-list-name,Values=com.amazonaws.global.cloudfront.origin-facing
+  CloudFrontOriginFacingPrefixList:
+    Type: String
+  ImageUri:
+    Type: String
+    Description: ECR image URI of functions/ask-relay
+  AgentRuntimeArn:
+    Type: String
+    Description: AgentCore Runtime ARN (agentcore deploy output)
+  CognitoUserPoolId:
+    Type: String
+  CognitoClientId:
+    Type: String
+
+Resources:
+
+  # ----------------------------- Security groups ----------------------------
+  AlbSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: internal ALB - 8000 from CloudFront origin-facing prefix list only
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 8000
+          ToPort: 8000
+          SourcePrefixListId: !Ref CloudFrontOriginFacingPrefixList
+          Description: CloudFront VPC origin only
+      Tags: [{ Key: Name, Value: !Sub "${ProjectTag}-relay-alb-sg" }]
+
+  ServiceSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: ask-relay Fargate tasks - 8000 from ALB only
+      VpcId: !Ref VpcId
+      Tags: [{ Key: Name, Value: !Sub "${ProjectTag}-relay-svc-sg" }]
+
+  ServiceIngressFromAlb:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref ServiceSG
+      IpProtocol: tcp
+      FromPort: 8000
+      ToPort: 8000
+      SourceSecurityGroupId: !Ref AlbSG
+      Description: from relay ALB
+
+  # --------------------------------- ALB ------------------------------------
+  Alb:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub "${ProjectTag}-relay"
+      Scheme: internal
+      Type: application
+      Subnets: [!Ref PrivateSubnetA, !Ref PrivateSubnetB]
+      SecurityGroups: [!Ref AlbSG]
+      LoadBalancerAttributes:
+        # agent 单轮 25-70s;中继有 15s SSE 心跳,120s 空闲上限给足余量
+        - { Key: idle_timeout.timeout_seconds, Value: "120" }
+
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      VpcId: !Ref VpcId
+      TargetType: ip
+      Protocol: HTTP
+      Port: 8000
+      HealthCheckPath: /health
+      HealthCheckIntervalSeconds: 15
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      TargetGroupAttributes:
+        - { Key: deregistration_delay.timeout_seconds, Value: "30" }
+
+  Listener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref Alb
+      Port: 8000
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroup
+
+  # --------------------------------- ECS ------------------------------------
+  Cluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Sub "${ProjectTag}-relay"
+
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /ecs/analytics-ask-relay
+      RetentionInDays: 14
+
+  ExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ecs-tasks.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+
+  TaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ecs-tasks.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: invoke-runtime
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: InvokeRuntime
+                Effect: Allow
+                Action: bedrock-agentcore:InvokeAgentRuntime
+                Resource:
+                  - !Ref AgentRuntimeArn
+                  - !Sub "${AgentRuntimeArn}/*"
+
+  TaskDef:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: analytics-ask-relay
+      RequiresCompatibilities: [FARGATE]
+      NetworkMode: awsvpc
+      Cpu: "256"
+      Memory: "512"
+      ExecutionRoleArn: !GetAtt ExecutionRole.Arn
+      TaskRoleArn: !GetAtt TaskRole.Arn
+      ContainerDefinitions:
+        - Name: relay
+          Image: !Ref ImageUri
+          PortMappings: [{ ContainerPort: 8000, Protocol: tcp }]
+          Environment:
+            - { Name: PORT, Value: "8000" }
+            - { Name: AWS_REGION, Value: !Ref "AWS::Region" }
+            - { Name: AGENT_RUNTIME_ARN, Value: !Ref AgentRuntimeArn }
+            - { Name: COGNITO_USER_POOL_ID, Value: !Ref CognitoUserPoolId }
+            - { Name: COGNITO_CLIENT_ID, Value: !Ref CognitoClientId }
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref LogGroup
+              awslogs-region: !Ref "AWS::Region"
+              awslogs-stream-prefix: relay
+
+  Service:
+    Type: AWS::ECS::Service
+    DependsOn: Listener
+    Properties:
+      ServiceName: ask-relay
+      Cluster: !Ref Cluster
+      TaskDefinition: !Ref TaskDef
+      LaunchType: FARGATE
+      DesiredCount: 1
+      HealthCheckGracePeriodSeconds: 30
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: DISABLED
+          Subnets: [!Ref PrivateSubnetA, !Ref PrivateSubnetB]
+          SecurityGroups: [!Ref ServiceSG]
+      LoadBalancers:
+        - ContainerName: relay
+          ContainerPort: 8000
+          TargetGroupArn: !Ref TargetGroup
+
+Outputs:
+  AlbArn: { Value: !Ref Alb }
+  AlbDnsName: { Value: !GetAtt Alb.DNSName }
