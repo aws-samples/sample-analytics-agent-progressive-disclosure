@@ -245,6 +245,42 @@ def _as_text(content) -> str:
     return str(content or "")
 
 
+def _as_list(v) -> list:
+    """工具入参防呆:模型偶尔把 list 字段写成标量/dict。非 list 一律回退空(单个字符串包成单元素)。"""
+    if isinstance(v, list):
+        return v
+    if isinstance(v, str) and v.strip():
+        return [v]
+    return []
+
+
+def _as_dict(v) -> dict:
+    return v if isinstance(v, dict) else {}
+
+
+def _norm_method(v) -> dict:
+    """present_result.method 规范化。schema 只约束到 dict,内部 steps/formula/stats 的形状
+    靠模型自觉,偶发把 formula 写成字符串 → 前端 (mt.formula||[]).map 直接抛异常被误判成
+    "后端连接失败"。这里在透传前把三个字段强制成前端约定的数组形状。"""
+    m = _as_dict(v)
+    if not m:
+        return {}
+    steps = [str(s) for s in _as_list(m.get("steps"))]
+    formula = []
+    for f in _as_list(m.get("formula")):
+        if isinstance(f, dict):
+            formula.append({"label": str(f.get("label", "")), "expr": str(f.get("expr", ""))})
+        elif isinstance(f, str) and f.strip():
+            formula.append({"label": "", "expr": f})
+    stats = []
+    for s in _as_list(m.get("stats")):
+        if isinstance(s, dict):
+            stats.append(s)
+        elif isinstance(s, str) and s.strip():
+            stats.append({"label": s, "value": ""})
+    return {"name": str(m.get("name", "")), "steps": steps, "formula": formula, "stats": stats}
+
+
 async def stream_events(client, question: str, deep: bool = False):
     """吃一个已连接的暖 ClaudeSDKClient + 一个问题，产出 UI 事件流。
     client 由 main.py 持有并复用（不在这里创建/销毁）。"""
@@ -310,14 +346,14 @@ async def stream_events(client, question: str, deep: bool = False):
                         yield {
                             "type": "result",
                             "interpreted": inp.get("interpreted", ""),
-                            "kpis": inp.get("kpis", []),
-                            "chart": inp.get("chart", {}),
-                            "charts": inp.get("charts", []),
+                            "kpis": _as_list(inp.get("kpis")),
+                            "chart": _as_dict(inp.get("chart")),
+                            "charts": _as_list(inp.get("charts")),
                             "insight": inp.get("insight", ""),
-                            "findings": inp.get("findings", []),
-                            "source": inp.get("source", {}),
-                            "method": inp.get("method", {}),
-                            "followups": inp.get("followups", []),
+                            "findings": _as_list(inp.get("findings")),
+                            "source": _as_dict(inp.get("source")),
+                            "method": _norm_method(inp.get("method")),
+                            "followups": _as_list(inp.get("followups")),
                         }
                 elif bc == "TextBlock" and not emitted_text:
                     t = getattr(b, "text", "")

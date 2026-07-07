@@ -1175,7 +1175,7 @@ function renderResult(p){
   if(currentCharts&&currentCharts.length){currentCharts.forEach(c=>{try{c.dispose();}catch(e){}});}
   currentCharts=[];
   const ACC=['var(--brand)','var(--coral)','var(--teal)','var(--gold)'];
-  const kpiHTML=(p.kpis||[]).map((k,i)=>{
+  const kpiHTML=(Array.isArray(p.kpis)?p.kpis:[]).map((k,i)=>{
     const isNum=typeof k.value==='number';
     const delta=(k.delta||k.note)?`<div class="delta ${k.dir||''}">${k.dir?(k.dir==='up'?'▲':'▼'):''} ${k.delta||''}${k.note?` <span class="lab">${k.note}</span>`:''}</div>`:'';
     // 对比基准(同环比/历史均值/目标值)——方向3:让 KPI 不只是一个孤数
@@ -1186,15 +1186,20 @@ function renderResult(p){
       ${delta}${base}</div>`;}).join('');
   // findings 洞察面板(方向3):驱动/异常/风险三类要点
   const FK={driver:{ic:'↑',cls:'f-driver',lab:t('find_driver')},anomaly:{ic:'⚠',cls:'f-anomaly',lab:t('find_anomaly')},risk:{ic:'▽',cls:'f-risk',lab:t('find_risk')}};
-  const findHTML=(p.findings||[]).map(f=>{const m=FK[f.kind]||{ic:'•',cls:'',lab:''};
+  const findHTML=(Array.isArray(p.findings)?p.findings:[]).map(f=>{const m=FK[f.kind]||{ic:'•',cls:'',lab:''};
     return `<div class="finding ${m.cls}"><span class="f-ic">${m.ic}</span><div class="f-body"><span class="f-tag">${m.lab}</span>${mdBold((f.text||'').replace(/</g,'&lt;'))}${f.evidence?`<span class="f-ev">${String(f.evidence).replace(/</g,'&lt;')}</span>`:''}</div></div>`;}).join('');
   // 分析方法面板(方向3·深度):先亮方法/步骤/公式/统计量,再看数据——体现"分析层做了干预"
+  // 防御:模型偶发把 steps/formula/stats 写成字符串而非数组(后端已规范化,这里双保险),
+  // 字符串有 .length 能骗过外层判断,.map 会抛异常并被误判成"后端连接失败"。
+  const _arr=v=>Array.isArray(v)?v:((typeof v==='string'&&v.trim())?[v]:[]);
   const mt=p.method||{};let methodHTML='';
+  const mtFormula=_arr(mt.formula).map(f=>typeof f==='string'?{label:'',expr:f}:(f||{}));
+  const mtStats=_arr(mt.stats).filter(x=>x&&typeof x==='object');
   // 只在有真材料(公式 or 统计量)时才展示方法面板——避免常规题挂一个空壳"统计分析方法"。
-  if((mt.formula&&mt.formula.length)||(mt.stats&&mt.stats.length)){
-    const stepsHTML=(mt.steps||[]).map(x=>`<li>${String(x).replace(/</g,'&lt;')}</li>`).join('');
-    const formHTML=(mt.formula||[]).map(f=>`<div class="m-frow"><div class="m-flab">${(f.label||'').replace(/</g,'&lt;')}</div><div class="m-fexpr">${(f.expr||'').replace(/</g,'&lt;')}</div></div>`).join('');
-    const statsHTML=(mt.stats||[]).map(st=>{const v=(typeof st.value==='number')?fmt(st.value):(st.value??'');
+  if(mtFormula.length||mtStats.length){
+    const stepsHTML=_arr(mt.steps).map(x=>`<li>${String(x).replace(/</g,'&lt;')}</li>`).join('');
+    const formHTML=mtFormula.map(f=>`<div class="m-frow"><div class="m-flab">${(f.label||'').replace(/</g,'&lt;')}</div><div class="m-fexpr">${(f.expr||'').replace(/</g,'&lt;')}</div></div>`).join('');
+    const statsHTML=mtStats.map(st=>{const v=(typeof st.value==='number')?fmt(st.value):(st.value??'');
       return `<div class="m-stat"><div class="m-sv">${v}${st.unit?`<span class="m-su">${String(st.unit).replace(/</g,'&lt;')}</span>`:''}</div><div class="m-sl">${(st.label||'').replace(/</g,'&lt;')}</div></div>`;}).join('');
     const toolTag=p.statsToolUsed?`<span class="m-tool" title="${t('stats_tool_title')}">${t('stats_tool_tag')}</span>`:'';
     methodHTML=`<div class="method reveal">
@@ -1232,7 +1237,7 @@ function renderResult(p){
   const thead=`<tr>${cols.map(c=>`<th>${c}</th>`).join('')}</tr>`;
   const tbody=rows.map(r=>`<tr>${r.map((c,i)=>`<td class="${numCols.includes(i)?'num':''}">${c==null?'':(typeof c==='number'?fmt(c):String(c).replace(/</g,'&lt;'))}</td>`).join('')}</tr>`).join('');
   // 多图(深度分析)优先用 charts 数组,否则回退单 chart
-  const chartList=(p.charts&&p.charts.length)?p.charts:(p.chart&&p.chart.type?[p.chart]:[]);
+  const chartList=(Array.isArray(p.charts)&&p.charts.length)?p.charts:(p.chart&&p.chart.type?[p.chart]:[]);
   const title=(chartList[0]&&chartList[0].title)||t('result_title');
   const chartsHTML=chartList.map((c,i)=>`<div class="chart" id="chartEl${i}"></div>`).join('');
 
