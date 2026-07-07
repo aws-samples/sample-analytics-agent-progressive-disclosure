@@ -10,7 +10,7 @@
 
 ![数据分析 Agent 架构图(动态)](docs/architecture.svg)
 
-> 这张图在渲染后的 README 里会动(GitHub 把 SVG 当图片嵌入)。蓝色 = 进行中的请求,青色 = 流式返回,天蓝 = Agent 的工具调用(`read_doc` 顺着知识树逐层读、`run_sql` / `call_metric` 打到 PostgreSQL)。
+> 这张图在渲染后的 README 里会动(GitHub 把 SVG 当图片嵌入)。蓝色 = 进行中的请求,青色 = 流式返回,绿色 = 冷启动时从 S3 同步知识树,天蓝 = `run_sql` 经 VPC 打到 Aurora。`/ask` 这一跳走 CloudFront VPC origin 到内网 ALB 和 Fargate 中继,由中继校验 Cognito JWT 并透传 AgentCore Runtime 的 SSE 流。
 
 ## 它长什么样
 

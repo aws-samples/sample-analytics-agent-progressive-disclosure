@@ -10,7 +10,7 @@ The dataset is deliberately messy: a content + commerce app (think a social-shop
 
 ![Analytics Agent architecture — animated](docs/architecture.svg)
 
-> The diagram animates in the rendered README (GitHub embeds the SVG as an image). Blue = request in-flight, teal = the streamed reply, sky = the agent's tool calls (`read_doc` walking the knowledge tree, `run_sql` / `call_metric` hitting PostgreSQL).
+> The diagram animates in the rendered README (GitHub embeds the SVG as an image). Blue = request in-flight, teal = the streamed reply, green = the knowledge tree synced from S3 at cold start, sky = `run_sql` hitting Aurora over the VPC. The `/ask` hop rides a CloudFront VPC origin to an internal ALB and a Fargate relay, which verifies the Cognito JWT and streams SSE from the AgentCore Runtime.
 
 ## What it looks like
 

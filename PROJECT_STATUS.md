@@ -92,7 +92,7 @@
 - 前端 S3 + CloudFront(OAC);认证仍是 app 层 Cognito(SRP 登录拿 idToken)。
 - **`/ask` 中继:Fargate + 内网 ALB + CloudFront VPC origin**(`functions/ask-relay/` + `infra/relay.yaml`)。原计划的 Lambda Function URL 方案(代码已移除)被账号的组织 SCP 堵死——公开 URL 和 Cognito 联合角色的 IAM 调用都被拒,而 CloudFront OAC 又签不了带 body 的 POST。改用同账号 graph-cmdb 已验证的模式:CloudFront 经 VPC origin 私网回源到内网 ALB(SG 只放行 CloudFront origin-facing 前缀列表,零公网暴露、零签名),JWT 走 `X-Id-Token` 直达中继校验后 `InvokeAgentRuntime` 透传 SSE(15s 心跳防读超时)。
 
-![架构:AgentCore-native](docs/target-architecture.svg)
+![架构:AgentCore-native](docs/architecture.svg)
 
 基建三个栈:`infra/foundation.yaml`(VPC/端点/NAT/Aurora/桶)、`infra/relay.yaml`(ECS+ALB)、`infra/edge.yaml`(CloudFront);Runtime 由 `@aws/agentcore` CDK CLI 部署(`analyticsagent/agentcore/`)。
 
