@@ -1,0 +1,231 @@
+{
+  "$comment": "Eval 用例集。每题: id/level/question/golden(金标口径, 可多个可接受变体)/judge(比对方式)。golden.sql 在与 agent 相同的只读边界下执行, 其结果就是期望答案。judge.mode: scalar=单数值(容差比对) | set=无序集合(行集合重叠) | toplist=有序排行(前K命中率) | pair=两数值对比(各自容差)。scalar 的 value_hint 仅为人读注释, 真值以金标 SQL 现算为准(数据重新生成后无需改用例)。",
+  "defaults": {"tolerance_pct": 0.5, "toplist_k": 5, "toplist_min_hit": 0.6},
+  "cases": [
+    {
+      "id": "L1-users-count",
+      "level": 1,
+      "question": "查一下目前有多少注册用户",
+      "judge": {"mode": "scalar"},
+      "golden": [
+        {"label": "all users", "sql": "SELECT count(*) FROM users"}
+      ],
+      "value_hint": 500
+    },
+    {
+      "id": "L1-order-count",
+      "level": 1,
+      "question": "查一下总订单数",
+      "judge": {"mode": "scalar"},
+      "golden": [
+        {"label": "all orders", "sql": "SELECT count(*) FROM orders"}
+      ],
+      "value_hint": 2000
+    },
+    {
+      "id": "L1-post-count",
+      "level": 1,
+      "question": "平台上一共发过多少帖子",
+      "judge": {"mode": "scalar"},
+      "golden": [
+        {"label": "all posts", "sql": "SELECT count(*) FROM posts"},
+        {"label": "published only", "sql": "SELECT count(*) FROM posts WHERE status='published'"}
+      ],
+      "value_hint": "2000 或 847(只算 published 也接受)"
+    },
+    {
+      "id": "L1-campaign-count",
+      "level": 1,
+      "question": "目前有多少营销活动",
+      "judge": {"mode": "scalar"},
+      "golden": [
+        {"label": "all campaigns", "sql": "SELECT count(*) FROM campaigns"},
+        {"label": "active only", "sql": "SELECT count(*) FROM campaigns WHERE status='active'"}
+      ],
+      "value_hint": "50 全部 / 11 active"
+    },
+    {
+      "id": "L1-dau-latest",
+      "level": 1,
+      "question": "最新一天的 DAU 是多少",
+      "judge": {"mode": "scalar"},
+      "golden": [
+        {"label": "events last day distinct users", "sql": "SELECT count(DISTINCT user_id) FROM events WHERE event_time::date=(SELECT max(event_time)::date FROM events) AND user_id IS NOT NULL"},
+        {"label": "mart_daily_kpi last day", "sql": "SELECT dau FROM mart_daily_kpi ORDER BY dt DESC LIMIT 1"}
+      ],
+      "value_hint": 27,
+      "trap": "必须以数据 max(event_time) 为锚, 用 current_date 会得 0"
+    },
+    {
+      "id": "L1-ab-running",
+      "level": 1,
+      "question": "正在进行的 A/B 测试有哪些",
+      "judge": {"mode": "set", "key_col": 0},
+      "golden": [
+        {"label": "status=running", "sql": "SELECT test_name FROM ab_tests WHERE status='running'"}
+      ],
+      "value_hint": "4 个 running 实验"
+    },
+    {
+      "id": "L1-channel-list",
+      "level": 1,
+      "question": "有哪些获客渠道",
+      "judge": {"mode": "set", "key_col": 0},
+      "golden": [
+        {"label": "all channels", "sql": "SELECT channel_name FROM channels"}
+      ],
+      "value_hint": "14 个渠道名"
+    },
+    {
+      "id": "L2-gender-dist",
+      "level": 2,
+      "question": "用户的性别分布是怎样的？男女各多少人？",
+      "judge": {"mode": "set", "key_col": 0, "val_col": 1},
+      "golden": [
+        {"label": "group by gender", "sql": "SELECT gender, count(*) FROM user_profiles GROUP BY gender"}
+      ],
+      "value_hint": "female 258 / male 242"
+    },
+    {
+      "id": "L2-device-dist",
+      "level": 2,
+      "question": "用户使用的设备类型分布，iOS 和 Android 各占多少设备",
+      "judge": {"mode": "set", "key_col": 0, "val_col": 1},
+      "golden": [
+        {"label": "device rows", "sql": "SELECT device_type, count(*) FROM user_devices GROUP BY device_type"},
+        {"label": "distinct users per type", "sql": "SELECT device_type, count(DISTINCT user_id) FROM user_devices GROUP BY device_type"}
+      ],
+      "value_hint": "android 372/305, ios 245/207 (两种口径都接受)"
+    },
+    {
+      "id": "L2-order-status-dist",
+      "level": 2,
+      "question": "各订单状态的数量分布",
+      "judge": {"mode": "set", "key_col": 0, "val_col": 1},
+      "golden": [
+        {"label": "group by status", "sql": "SELECT status, count(*) FROM orders GROUP BY status"}
+      ],
+      "value_hint": "delivered 1509 / cancelled 240 / refunded 145 / shipped 60 / paid 32 / pending 14"
+    },
+    {
+      "id": "L2-top-pages-7d",
+      "level": 2,
+      "question": "最近7天访问量最高的页面 Top 10",
+      "judge": {"mode": "toplist", "k": 10, "min_hit": 0.7},
+      "golden": [
+        {"label": "page_views 7d anchored", "sql": "SELECT page_name FROM page_views WHERE view_time >= (SELECT max(view_time)::date FROM page_views) - interval '6 days' GROUP BY page_name ORDER BY count(*) DESC LIMIT 10"}
+      ],
+      "trap": "时间锚点用 max(view_time); 用 current_date 得空结果"
+    },
+    {
+      "id": "L2-top-liked-posts",
+      "level": 2,
+      "question": "点赞数最多的帖子 Top 5",
+      "judge": {"mode": "toplist", "k": 5, "min_hit": 0.6},
+      "golden": [
+        {"label": "join post_likes", "sql": "SELECT p.title FROM posts p JOIN (SELECT post_id, count(*) c FROM post_likes GROUP BY post_id) l USING(post_id) ORDER BY l.c DESC LIMIT 5"},
+        {"label": "denormalized like_count", "sql": "SELECT title FROM posts ORDER BY like_count DESC LIMIT 5"}
+      ],
+      "trap": "冗余字段 like_count 与实际 post_likes 行数不一致, 两种口径都算对"
+    },
+    {
+      "id": "L2-coupon-usage-rate",
+      "level": 2,
+      "question": "优惠券的使用率是多少",
+      "judge": {"mode": "scalar", "unit": "pct"},
+      "golden": [
+        {"label": "used/total", "sql": "SELECT round(100.0*count(*) FILTER (WHERE status='used')/count(*),1) FROM user_coupons"}
+      ],
+      "value_hint": 49.7
+    },
+    {
+      "id": "L3-gmv-30d",
+      "level": 3,
+      "question": "过去30天的 GMV 是多少",
+      "judge": {"mode": "scalar", "tolerance_pct": 2.0},
+      "golden": [
+        {"label": "actual_amount valid status", "sql": "SELECT sum(actual_amount) FROM orders WHERE status IN ('paid','shipped','delivered') AND placed_at >= (SELECT max(placed_at)::date FROM orders) - interval '29 days'"},
+        {"label": "total_amount valid status", "sql": "SELECT sum(total_amount) FROM orders WHERE status IN ('paid','shipped','delivered') AND placed_at >= (SELECT max(placed_at)::date FROM orders) - interval '29 days'"},
+        {"label": "mart_daily_revenue 30d", "sql": "SELECT sum(gmv) FROM mart_daily_revenue WHERE dt >= (SELECT max(dt) FROM mart_daily_revenue) - 29"}
+      ],
+      "trap": "有效订单状态 + max(placed_at) 时间锚点, 双重口径陷阱",
+      "value_hint": "~284 万"
+    },
+    {
+      "id": "L3-top-products-gmv",
+      "level": 3,
+      "question": "GMV 最高的商品 Top 10，显示商品名称和销售额",
+      "judge": {"mode": "toplist", "k": 10, "min_hit": 0.6},
+      "golden": [
+        {"label": "order_items joined valid orders", "sql": "SELECT p.product_name FROM order_items oi JOIN orders o USING(order_id) JOIN products p USING(product_id) WHERE o.status IN ('paid','shipped','delivered') GROUP BY p.product_name ORDER BY sum(oi.actual_amount) DESC LIMIT 10"}
+      ],
+      "trap": "必须过滤有效订单状态并 join order_items"
+    },
+    {
+      "id": "L3-churn-30d",
+      "level": 3,
+      "question": "过去30天没有任何会话活动的用户有多少（流失用户）",
+      "judge": {"mode": "scalar", "tolerance_pct": 15.0},
+      "golden": [
+        {"label": "no session in 30d", "sql": "SELECT count(*) FROM users u WHERE NOT EXISTS (SELECT 1 FROM sessions s WHERE s.user_id=u.user_id AND s.start_time >= (SELECT max(start_time) FROM sessions) - interval '30 days')"},
+        {"label": "last_active_at variant", "sql": "SELECT count(*) FROM users WHERE last_active_at IS NULL OR last_active_at < (SELECT max(last_active_at) FROM users) - interval '30 days'"}
+      ],
+      "value_hint": "18 (sessions) / 174 (last_active_at) 两种口径差异大, 判分按命中任一"
+    },
+    {
+      "id": "L3-coupon-aov-compare",
+      "level": 3,
+      "question": "使用了优惠券的订单和未使用优惠券的订单，客单价对比",
+      "judge": {"mode": "pair", "tolerance_pct": 8.0},
+      "golden": [
+        {"label": "valid status", "sql": "SELECT round(avg(actual_amount) FILTER (WHERE coupon_id IS NOT NULL),1), round(avg(actual_amount) FILTER (WHERE coupon_id IS NULL),1) FROM orders WHERE status IN ('paid','shipped','delivered')"},
+        {"label": "all status", "sql": "SELECT round(avg(actual_amount) FILTER (WHERE coupon_id IS NOT NULL),1), round(avg(actual_amount) FILTER (WHERE coupon_id IS NULL),1) FROM orders"}
+      ],
+      "value_hint": "约 5070 vs 5476 (有效单口径)"
+    },
+    {
+      "id": "L4-funnel",
+      "level": 4,
+      "question": "从浏览商品 → 加入购物车 → 开始结算 → 支付成功的转化漏斗，各步骤的独立用户数",
+      "judge": {"mode": "funnel", "tolerance_pct": 10.0},
+      "golden": [
+        {"label": "all-time distinct users", "sql": "SELECT count(DISTINCT user_id) FILTER (WHERE event_name='view_product'), count(DISTINCT user_id) FILTER (WHERE event_name='add_to_cart'), count(DISTINCT user_id) FILTER (WHERE event_name='begin_checkout'), count(DISTINCT user_id) FILTER (WHERE event_name='purchase') FROM events"},
+        {"label": "30d anchored", "sql": "SELECT count(DISTINCT user_id) FILTER (WHERE event_name='view_product'), count(DISTINCT user_id) FILTER (WHERE event_name='add_to_cart'), count(DISTINCT user_id) FILTER (WHERE event_name='begin_checkout'), count(DISTINCT user_id) FILTER (WHERE event_name='purchase') FROM events WHERE event_time >= (SELECT max(event_time)::date FROM events) - interval '29 days'"}
+      ],
+      "trap": "事件名是 view_product/add_to_cart/begin_checkout/purchase, 知识库文档里的示例用了不同事件名, 必须以表文档实际枚举为准",
+      "value_hint": "394/385/396/373 (全期) 或 197/190/194/190 (30天)"
+    },
+    {
+      "id": "L4-arpu-by-channel",
+      "level": 4,
+      "question": "各获客渠道的用户 ARPU（人均消费）对比，给出最高的3个渠道",
+      "judge": {"mode": "toplist", "k": 3, "min_hit": 0.34},
+      "golden": [
+        {"label": "attribution join orders", "sql": "SELECT c.channel_name FROM user_attributions ua JOIN channels c USING(channel_id) LEFT JOIN orders o ON o.user_id=ua.user_id AND o.status IN ('paid','shipped','delivered') GROUP BY c.channel_name ORDER BY sum(o.actual_amount)/count(DISTINCT ua.user_id) DESC NULLS LAST LIMIT 3"}
+      ],
+      "trap": "归因表 first/last touch 各 175 行; 不指定归因口径时结果可能不同, min_hit 放宽到命中1个即可"
+    },
+    {
+      "id": "L5-repurchase-rate",
+      "level": 5,
+      "question": "用户的 30 天复购率是多少",
+      "judge": {"mode": "scalar", "unit": "pct", "tolerance_pct": 5.0},
+      "golden": [
+        {"label": "governed mart definition", "sql": "SELECT round(100.0*count(*) FILTER (WHERE is_repurchaser_30d)/NULLIF(count(*) FILTER (WHERE first_paid_date IS NOT NULL),0),1) FROM mart_user_summary"}
+      ],
+      "trap": "官方口径: 首单后30天内再有付费单, 分母只含有首单的用户 (governed_metrics.md); 自拼口径很容易错",
+      "value_hint": 62.4
+    },
+    {
+      "id": "L5-wow-gmv",
+      "level": 5,
+      "question": "最近7天的 GMV 和再往前7天相比是涨是跌？涨跌多少？",
+      "judge": {"mode": "pair", "tolerance_pct": 5.0},
+      "golden": [
+        {"label": "mart_daily_kpi wow", "sql": "WITH a AS (SELECT max(dt) m FROM mart_daily_kpi) SELECT (SELECT sum(gmv) FROM mart_daily_kpi, a WHERE dt > m-7), (SELECT sum(gmv) FROM mart_daily_kpi, a WHERE dt <= m-7 AND dt > m-14)"},
+        {"label": "raw orders wow", "sql": "WITH a AS (SELECT max(placed_at)::date m FROM orders) SELECT (SELECT sum(actual_amount) FROM orders, a WHERE status IN ('paid','shipped','delivered') AND placed_at::date > m-7), (SELECT sum(actual_amount) FROM orders, a WHERE status IN ('paid','shipped','delivered') AND placed_at::date <= m-7 AND placed_at::date > m-14)"}
+      ],
+      "value_hint": "675179 vs 708728, 跌约 4.7%; 方向判断也计入 insight 检查"
+    }
+  ]
+}
