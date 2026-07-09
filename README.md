@@ -120,7 +120,7 @@ If the backend is unreachable, `web/index.html` automatically falls back to an o
 sample-analytics-agent-progressive-disclosure/
 ├── README.md                    # this file (English)
 ├── README.zh-CN.md              # Chinese README
-├── PROJECT_STATUS.md            # evolution log (CLI Skill → Web App → cloud)
+├── PROJECT_STATUS.md            # evolution log (CLI Skill → Web App → EC2 → AgentCore)
 ├── docs/deployment.md           # deployment guide (local + cloud)
 ├── docker-compose.yml           # local: database container only
 ├── docker-compose.cloud.yml     # cloud: database + FastAPI app (two containers)
