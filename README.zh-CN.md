@@ -2,6 +2,11 @@
 
 # Analytics Agent · Progressive Disclosure
 
+[![License: MIT-0](https://img.shields.io/badge/License-MIT--0-blue.svg)](LICENSE)
+[![Python 3.11](https://img.shields.io/badge/Python-3.11-3776AB.svg?logo=python&logoColor=white)](backend/requirements.txt)
+[![Claude Agent SDK](https://img.shields.io/badge/Claude_Agent_SDK-Opus_4.8-cc785c.svg?logo=anthropic&logoColor=white)](https://docs.anthropic.com)
+[![Amazon Bedrock](https://img.shields.io/badge/Amazon_Bedrock-FF9900.svg?logo=amazonaws&logoColor=white)](https://aws.amazon.com/bedrock/)
+
 一个"问数"Demo:用大白话提问,Agent 自己定位表、写对 SQL、查数、出图给结论。
 
 它真正想证明的是一件事——**把数据库的表结构写成一棵可按需翻阅的"数据字典"md 文档树,让 Agent 顺着路由一层层读出来再写 SQL,会比"一股脑把全库 schema 塞进上下文"或"每次从头探索数据库"更准、更省**。这套机制就是 Agent Skill 的渐进式披露(progressive disclosure)。
