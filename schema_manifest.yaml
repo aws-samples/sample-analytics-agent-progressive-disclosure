@@ -1,0 +1,287 @@
+# schema_manifest.yaml —— 派生层表的单一真源（single source of truth）
+#
+# 这个文件是"表数轴"扩展的核心：每张派生表在这里登记一条记录，
+# scripts/manifest/render.py 据此生成三样东西，保证永远一致：
+#   1. database/10_derived.sql            —— CTAS DDL（依赖已灌好的 35 张基表）
+#   2. knowledge/domains/<domain>/<table>.md —— 数据字典卡片（中文，与手写卡片同格式）
+#   3. knowledge/domains/<domain>/_index.md  —— 域索引（含消歧路由）
+#
+# 35 张基表 + 4 张 mart 不在此登记（已有手写资产）；本文件只管理派生层。
+# 加一张表 = 加一条记录 + 跑 render.py，不手写任何下游文件。
+#
+# 设计意图（为什么要这些表）：企业真实数据库长到上百张表，靠的不是上百个业务，
+# 而是同一实体在不同层/粒度/口径/新鲜度下的重复存在。派生层刻意复刻这种"脏"：
+#   layer: dwd   —— 清洗明细层（源表的过滤/标准化副本，字段几乎同名 → 考"选哪张"）
+#   layer: dws   —— 汇总层（不同粒度各一张 → 考"粒度对不对"）
+#   layer: ads   —— 应用层（部门口径分叉 → 考"口径归属"）
+#   layer: noise —— 企业噪音（backup/tmp/v2/deprecated → 考"读文档才知道别用"）
+#
+# 字段说明：
+#   name/domain/layer     必填。domain 决定知识卡片落哪个目录。
+#   grain                 一行是什么（写进卡片，粒度消歧的依据）
+#   owner                 口径归属（如 finance/growth），ads 层必填
+#   status                active | deprecated。deprecated 的卡片会打上"禁用"横幅
+#   replaced_by           deprecated 时指向替代表
+#   summary               一句话表说明（进域索引表清单）
+#   use_when / avoid_when 消歧路由（进卡片和域索引；这是 progressive disclosure 的考点本体）
+#   sql                   CTAS 查询体（不含 CREATE TABLE ... AS 前缀，render 自动加）
+#   columns               [{name, type, desc}]；desc 进卡片字段表
+#   caveats               口径陷阱/坑（进卡片"注意"节）
+#   eval_trap             （可选）这张表设计用来考什么 —— eval 出题的素材登记
+
+version: 1
+
+defaults:
+  status: active
+
+tables:
+  # ───────────────────────── DWD 清洗层 ─────────────────────────
+  # 与源表字段几乎相同，差别只在"过滤了什么"。考点：读卡片才知道该用哪张。
+
+  - name: dwd_orders_valid
+    domain: transaction
+    layer: dwd
+    grain: 一行 = 一笔有效订单（status IN paid/shipped/delivered）
+    summary: 订单清洗层：只含有效订单，剔除 pending/cancelled/refunded
+    use_when: 计算 GMV、收入、客单价等只看有效成交的指标（省去每次写 status 过滤）
+    avoid_when: 分析取消率/退款率（被剔除的行恰恰是分子）——用原始 orders
+    sql: |
+      SELECT order_id, order_no, user_id, status,
+             total_amount, discount_amount, shipping_fee, actual_amount,
+             item_count, coupon_id, placed_at, paid_at
+      FROM orders
+      WHERE status IN ('paid','shipped','delivered')
+    columns:
+      - {name: order_id,        type: BIGINT,         desc: 主键，同 orders.order_id}
+      - {name: order_no,        type: VARCHAR(50),    desc: 订单编号}
+      - {name: user_id,         type: BIGINT,         desc: 用户ID}
+      - {name: status,          type: VARCHAR(30),    desc: 只会是 paid/shipped/delivered}
+      - {name: total_amount,    type: DECIMAL(12,2),  desc: 商品总金额（应付）}
+      - {name: discount_amount, type: DECIMAL(12,2),  desc: 优惠减免金额}
+      - {name: shipping_fee,    type: DECIMAL(10,2),  desc: 运费}
+      - {name: actual_amount,   type: DECIMAL(12,2),  desc: 实付金额（GMV 官方口径用这列）}
+      - {name: item_count,      type: INT,            desc: 商品件数}
+      - {name: coupon_id,       type: INT,            desc: 使用的优惠券ID，可空}
+      - {name: placed_at,       type: TIMESTAMP,      desc: 下单时间}
+      - {name: paid_at,         type: TIMESTAMP,      desc: 支付时间}
+    caveats:
+      - 行数少于 orders（≈75%），count(*) 结果与"总订单数"不同——总订单数用 orders
+    eval_trap: 问"总订单数"时若用了本表会得 1601 而非 2000；问"GMV"时用 orders 不过滤 status 会虚高
+
+  - name: dwd_events_app
+    domain: behavior
+    layer: dwd
+    grain: 一行 = 一条 App 端埋点事件（剔除 user_id 为空的匿名事件）
+    summary: 事件清洗层：只含可归到具体用户的事件，匿名/爬虫流量已剔除
+    use_when: 计算 DAU、人均事件数等以"用户"为分母的指标
+    avoid_when: 统计总流量/PV（匿名事件也算流量）——用原始 events
+    sql: |
+      SELECT event_id, user_id, session_id, event_name, event_time, page_name
+      FROM events
+      WHERE user_id IS NOT NULL
+    columns:
+      - {name: event_id,   type: BIGINT,       desc: 主键，同 events.event_id}
+      - {name: user_id,    type: BIGINT,       desc: 用户ID（本表内非空）}
+      - {name: session_id, type: BIGINT,       desc: 会话ID}
+      - {name: event_name, type: VARCHAR(100), desc: 事件名，枚举同 event_definitions}
+      - {name: event_time, type: TIMESTAMP,    desc: 事件时间}
+      - {name: page_name,  type: VARCHAR(100), desc: 页面名}
+    caveats:
+      - 与 events 的行数差 = 匿名事件量；两表算 DAU 结果相同（DAU 本就 count distinct user_id）
+
+  # ───────────────────────── DWS 汇总层 ─────────────────────────
+  # 同一主题不同粒度各一张。考点：问"每天"用 daily，问"每周"用 weekly，选错粒度要么重算要么错。
+
+  - name: dws_user_daily
+    domain: user
+    layer: dws
+    grain: 一行 = 一个用户 × 一天（仅该用户当天有事件/订单时存在）
+    summary: 用户日汇总：每用户每天的事件数、会话数、下单数、消费额
+    use_when: 用户粒度的日活跃分析、按用户聚合的时序（如"某用户最近的活跃趋势"）
+    avoid_when: 全站日指标（用 mart_daily_kpi，口径已冻结）；用户终身汇总（用 mart_user_summary）
+    sql: |
+      WITH ev AS (
+        SELECT user_id, event_time::date AS dt,
+               count(*) AS event_cnt, count(DISTINCT session_id) AS session_cnt
+        FROM events WHERE user_id IS NOT NULL GROUP BY 1, 2
+      ),
+      od AS (
+        SELECT user_id, placed_at::date AS dt,
+               count(*) AS order_cnt,
+               sum(actual_amount) FILTER (WHERE status IN ('paid','shipped','delivered')) AS paid_amount
+        FROM orders GROUP BY 1, 2
+      )
+      SELECT COALESCE(ev.user_id, od.user_id) AS user_id,
+             COALESCE(ev.dt, od.dt)           AS dt,
+             COALESCE(ev.event_cnt, 0)        AS event_cnt,
+             COALESCE(ev.session_cnt, 0)      AS session_cnt,
+             COALESCE(od.order_cnt, 0)        AS order_cnt,
+             COALESCE(od.paid_amount, 0)::numeric(14,2) AS paid_amount
+      FROM ev FULL OUTER JOIN od ON ev.user_id = od.user_id AND ev.dt = od.dt
+    columns:
+      - {name: user_id,     type: BIGINT,        desc: 用户ID}
+      - {name: dt,          type: DATE,          desc: 日期}
+      - {name: event_cnt,   type: BIGINT,        desc: 当天事件数}
+      - {name: session_cnt, type: BIGINT,        desc: 当天会话数}
+      - {name: order_cnt,   type: BIGINT,        desc: 当天下单数（含无效单）}
+      - {name: paid_amount, type: NUMERIC(14,2), desc: 当天有效订单实付金额}
+    caveats:
+      - 稀疏表：用户当天无活动则无行；算"平均每天"时分母要用日历天数而非行数
+      - order_cnt 含无效单，paid_amount 只含有效单——两列口径不同是有意的
+
+  - name: dws_channel_weekly
+    domain: attribution
+    layer: dws
+    grain: 一行 = 一个渠道 × 一个 ISO 周
+    summary: 渠道周汇总：每渠道每周的花费、新客数、周 CAC
+    use_when: 渠道效果的周级趋势、周报；周粒度环比
+    avoid_when: 日粒度分析（用 mart_channel_daily）；单日异常定位
+    sql: |
+      SELECT c.channel_id, c.channel_name,
+             date_trunc('week', d.date)::date AS week_start,
+             sum(d.cost)::numeric(14,2)  AS cost,
+             sum(d.installs)             AS installs,
+             count(DISTINCT ua.user_id)  AS new_users,
+             (sum(d.cost) / NULLIF(count(DISTINCT ua.user_id), 0))::numeric(12,2) AS weekly_cac
+      FROM channel_daily_costs d
+      JOIN channels c USING (channel_id)
+      LEFT JOIN user_attributions ua
+        ON ua.channel_id = d.channel_id
+       AND ua.attribution_type = 'last_touch'
+       AND ua.attributed_at::date >= date_trunc('week', d.date)::date
+       AND ua.attributed_at::date <  date_trunc('week', d.date)::date + 7
+      GROUP BY 1, 2, 3
+    columns:
+      - {name: channel_id,   type: INT,           desc: 渠道ID}
+      - {name: channel_name, type: VARCHAR(100),  desc: 渠道名}
+      - {name: week_start,   type: DATE,          desc: ISO 周一}
+      - {name: cost,         type: NUMERIC(14,2), desc: 当周投放花费}
+      - {name: installs,     type: BIGINT,        desc: 当周安装数（渠道上报）}
+      - {name: new_users,    type: BIGINT,        desc: 当周 last_touch 归因新客}
+      - {name: weekly_cac,   type: NUMERIC(12,2), desc: 周 CAC = cost / new_users，无新客时为空}
+    caveats:
+      - 归因口径固定 last_touch，与 mart_channel_daily 一致
+      - 首尾是残周；周环比要掐头去尾，或用完整 ISO 周
+
+  # ───────────────────────── ADS 应用层（口径分叉）─────────────────────────
+  # 同一个"日收入"，财务和增长两个部门各有一张表、两套口径，数字对不上是故意的。
+  # 考点：问"财务口径收入"或"确认收入"必须用 fin_，问"GMV/大盘"用 growth_ 或 mart。
+
+  - name: fin_daily_revenue
+    domain: transaction
+    layer: ads
+    owner: finance
+    grain: 一行 = 一天（按支付成功时间）
+    summary: 财务日收入：确认收入口径 —— 按 paid_at 记账、扣退款、不含运费
+    use_when: 财务/对账/确认收入问题（"财务口径""确认收入""净收入"）
+    avoid_when: 大盘 GMV/成交额（用 mart_daily_revenue 或 growth_daily_gmv，口径是下单额）
+    sql: |
+      WITH paid AS (
+        SELECT paid_at::date AS dt,
+               sum(actual_amount - shipping_fee) AS gross_revenue
+        FROM orders
+        WHERE status IN ('paid','shipped','delivered') AND paid_at IS NOT NULL
+        GROUP BY 1
+      ),
+      refunds AS (
+        SELECT refunded_at::date AS dt, sum(actual_amount) AS refund_amount
+        FROM orders WHERE status = 'refunded' AND refunded_at IS NOT NULL
+        GROUP BY 1
+      )
+      SELECT COALESCE(p.dt, r.dt) AS dt,
+             COALESCE(p.gross_revenue, 0)::numeric(14,2) AS gross_revenue,
+             COALESCE(r.refund_amount, 0)::numeric(14,2) AS refund_amount,
+             (COALESCE(p.gross_revenue, 0) - COALESCE(r.refund_amount, 0))::numeric(14,2) AS net_revenue
+      FROM paid p FULL OUTER JOIN refunds r USING (dt)
+    columns:
+      - {name: dt,             type: DATE,          desc: 日期（按支付/退款发生日）}
+      - {name: gross_revenue,  type: NUMERIC(14,2), desc: 毛收入 = 有效订单实付 - 运费，按 paid_at 记账}
+      - {name: refund_amount,  type: NUMERIC(14,2), desc: 当日发生的退款额}
+      - {name: net_revenue,    type: NUMERIC(14,2), desc: 净收入 = 毛收入 - 退款}
+    caveats:
+      - 与 mart_daily_revenue/growth_daily_gmv 数字对不上是【设计使然】——那边按 placed_at 计下单额、含运费、不扣退款
+      - 回答收入问题前先判断问的是哪个部门的口径；不确定时在结论里注明口径
+    eval_trap: 问"12月财务确认净收入"用 GMV 口径会明显偏高（差 = 运费+退款+跨日支付）
+
+  - name: growth_daily_gmv
+    domain: transaction
+    layer: ads
+    owner: growth
+    grain: 一行 = 一天（按下单时间）
+    summary: 增长日 GMV：下单口径 —— 按 placed_at、含运费、不扣退款，另含下单用户数
+    use_when: 增长/大盘/转化问题（"GMV""成交额""下单用户"）；与投放数据按下单日对齐
+    avoid_when: 财务确认收入（用 fin_daily_revenue）
+    sql: |
+      SELECT placed_at::date AS dt,
+             sum(actual_amount) FILTER (WHERE status IN ('paid','shipped','delivered'))::numeric(14,2) AS gmv,
+             count(*) FILTER (WHERE status IN ('paid','shipped','delivered'))          AS paid_orders,
+             count(DISTINCT user_id) FILTER (WHERE status IN ('paid','shipped','delivered')) AS paying_users,
+             count(*) AS all_orders
+      FROM orders
+      GROUP BY 1
+    columns:
+      - {name: dt,           type: DATE,          desc: 下单日期}
+      - {name: gmv,          type: NUMERIC(14,2), desc: 有效订单实付金额合计（含运费、不扣退款）}
+      - {name: paid_orders,  type: BIGINT,        desc: 有效订单数}
+      - {name: paying_users, type: BIGINT,        desc: 有效下单去重用户数}
+      - {name: all_orders,   type: BIGINT,        desc: 全部订单数（含取消/退款/待支付）}
+    caveats:
+      - gmv 与 mart_daily_revenue.gmv 同口径（可互相校验）；与 fin_daily_revenue.net_revenue 对不上是设计使然
+    eval_trap: 与 fin_daily_revenue 成对出题，考口径归属路由
+
+  # ───────────────────────── 噪音层（企业真实感）─────────────────────────
+  # 能查到、但不该用。考点：不读卡片就直接用会踩坑。
+
+  - name: orders_backup_20251201
+    domain: transaction
+    layer: noise
+    status: deprecated
+    replaced_by: orders
+    grain: 一行 = 一笔订单（截至 2025-12-01 的快照）
+    summary: 某次订单表结构变更前的手工备份快照，数据止于 2025-12-01
+    use_when: 仅用于追溯 2025-12-01 结构变更前的历史数据核对
+    avoid_when: 一切常规分析 —— 数据不全（缺 12 月之后），字段可能过时
+    sql: |
+      SELECT order_id, order_no, user_id, status,
+             total_amount, actual_amount, placed_at
+      FROM orders
+      WHERE placed_at < DATE '2025-12-01'
+    columns:
+      - {name: order_id,      type: BIGINT,        desc: 订单ID}
+      - {name: order_no,      type: VARCHAR(50),   desc: 订单编号}
+      - {name: user_id,       type: BIGINT,        desc: 用户ID}
+      - {name: status,        type: VARCHAR(30),   desc: 快照时点的订单状态（可能已过时）}
+      - {name: total_amount,  type: DECIMAL(12,2), desc: 商品总金额}
+      - {name: actual_amount, type: DECIMAL(12,2), desc: 实付金额}
+      - {name: placed_at,     type: TIMESTAMP,     desc: 下单时间（全部 < 2025-12-01）}
+    caveats:
+      - 数据止于 2025-12-01，用它算"最近 30 天"会得到空结果或旧数据
+      - 快照时点后发生的状态流转（发货/退款）不在本表
+    eval_trap: 表名含 orders 且能查通，靠表名猜会选错；正确行为是读卡片后改用 orders
+
+  - name: tmp_campaign_roi_analysis
+    domain: marketing
+    layer: noise
+    status: deprecated
+    replaced_by: mart_channel_daily
+    grain: 一行 = 一个渠道（某分析师 2026-01 的一次性快照）
+    summary: 某分析师做活动复盘时留下的一次性 ROI 中间表，未再维护
+    use_when: 不要用。仅保留作历史参照
+    avoid_when: 一切分析。ROI 问题走 mart_channel_daily（官方口径）或 call_metric
+    sql: |
+      SELECT c.channel_id, c.channel_name,
+             sum(d.cost)::numeric(14,2) AS total_cost,
+             NULL::numeric(14,2)        AS attributed_gmv,
+             NULL::numeric(8,4)         AS roi
+      FROM channel_daily_costs d JOIN channels c USING (channel_id)
+      WHERE d.date < DATE '2026-01-10'
+      GROUP BY 1, 2
+    columns:
+      - {name: channel_id,     type: INT,           desc: 渠道ID}
+      - {name: channel_name,   type: VARCHAR(100),  desc: 渠道名}
+      - {name: total_cost,     type: NUMERIC(14,2), desc: 截至 2026-01-10 的累计花费}
+      - {name: attributed_gmv, type: NUMERIC(14,2), desc: 【全为空】当时没算完}
+      - {name: roi,            type: NUMERIC(8,4),  desc: 【全为空】当时没算完}
+    caveats:
+      - attributed_gmv / roi 两列全为 NULL —— 这张表根本没算完，任何用它的结论都是错的
+    eval_trap: 表名带 roi 且能查通，问 ROI 时靠名字猜会掉进 NULL 列

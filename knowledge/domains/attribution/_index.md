@@ -51,3 +51,7 @@ ad_creatives ─┬── user_attributions (1:N)
 3. **素材 A/B 测试**: 加载 `ad_creatives.md` + `channel_daily_costs.md`
 4. **用户获取路径**: 加载 `user_attributions.md`
 5. **预算消耗监控**: 加载 `ad_campaigns.md` + `channel_daily_costs.md`
+
+## 派生层附录
+
+本域还有派生表（清洗层/汇总层/口径表/历史遗留）。**遇到同名近义表拿不准选哪张时，读 `_index.derived.md`**。

@@ -53,3 +53,7 @@ event_definitions (元数据)
 4. **漏斗转化分析**: 加载 `events.md`
 5. **用户行为路径**: 加载 `sessions.md` + `page_views.md` + `events.md`
 6. **渠道归因分析**: 加载 `sessions.md` + `events.md`
+
+## 派生层附录
+
+本域还有派生表（清洗层/汇总层/口径表/历史遗留）。**遇到同名近义表拿不准选哪张时，读 `_index.derived.md`**。
