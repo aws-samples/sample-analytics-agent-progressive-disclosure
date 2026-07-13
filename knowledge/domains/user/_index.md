@@ -40,3 +40,7 @@ users (主表)
 2. **用户画像分布**: 加载 `users.md` + `user_profiles.md`
 3. **设备渗透率**: 加载 `user_devices.md`
 4. **分群效果分析**: 加载 `user_segments.md` + `user_segment_members.md`
+
+## 派生层附录
+
+本域还有派生表（清洗层/汇总层/口径表/历史遗留）。**遇到同名近义表拿不准选哪张时，读 `_index.derived.md`**。

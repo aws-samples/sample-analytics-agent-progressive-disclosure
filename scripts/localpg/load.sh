@@ -51,9 +51,9 @@ for t in "${tables[@]}"; do
   fi
 done
 
-# 3. mart(CTAS,依赖已灌数据)
-echo "[load 3/5] 建 mart (09)"
-for f in "$DDL_DIR"/09_*.sql; do
+# 3. mart + 派生层(CTAS,依赖已灌数据;10_derived.sql 由 scripts/manifest/render.py 生成)
+echo "[load 3/5] 建 mart + 派生层 (09-10)"
+for f in "$DDL_DIR"/09_*.sql "$DDL_DIR"/10_*.sql; do
   [ -f "$f" ] && { echo "  $(basename "$f")"; psql -q -f "$f"; }
 done
 

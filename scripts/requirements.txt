@@ -1,1 +1,2 @@
 numpy>=2.0
+pyyaml>=6.0

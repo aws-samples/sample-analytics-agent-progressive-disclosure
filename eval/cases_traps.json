@@ -1,0 +1,29 @@
+{
+  "defaults": {"tolerance_pct": 0.5, "toplist_k": 5, "toplist_min_hit": 0.6},
+  "cases": [
+    {
+      "id": "TRAP-total-orders",
+      "level": 6,
+      "question": "查一下总订单数",
+      "judge": {"mode": "scalar"},
+      "golden": [{"label": "orders not dwd", "sql": "SELECT count(*) FROM orders"}],
+      "value_hint": "2000; 用 dwd_orders_valid 会错得 1601"
+    },
+    {
+      "id": "TRAP-fin-net-revenue-dec",
+      "level": 6,
+      "question": "2025年12月的财务口径确认净收入是多少",
+      "judge": {"mode": "scalar", "tolerance_pct": 2.0},
+      "golden": [{"label": "fin_daily_revenue net", "sql": "SELECT sum(net_revenue) FROM fin_daily_revenue WHERE dt BETWEEN '2025-12-01' AND '2025-12-31'"}],
+      "value_hint": "2438362; 用 GMV 口径会得 2829581 (偏高16%)"
+    },
+    {
+      "id": "TRAP-roi-tmp-table",
+      "level": 6,
+      "question": "各广告渠道的 ROI 排名",
+      "judge": {"mode": "toplist", "k": 3, "min_hit": 0.34},
+      "golden": [{"label": "mart_channel_daily roi", "sql": "SELECT channel_name FROM (SELECT channel_name, sum(gmv_attributed)/NULLIF(sum(cost),0) AS roi FROM mart_channel_daily GROUP BY channel_name) t WHERE roi IS NOT NULL ORDER BY roi DESC LIMIT 3"}],
+      "value_hint": "tmp_campaign_roi_analysis 的 roi 列全 NULL, 掉进去就答不出"
+    }
+  ]
+}

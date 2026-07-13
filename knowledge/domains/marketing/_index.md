@@ -48,3 +48,7 @@ user_coupons
 3. **广告位效果**: 加载 `banners.md`
 4. **推送效果分析**: 加载 `push_notifications.md`
 5. **用户营销触达**: 加载 `user_coupons.md` + `push_notifications.md`
+
+## 派生层附录
+
+本域还有派生表（清洗层/汇总层/口径表/历史遗留）。**遇到同名近义表拿不准选哪张时，读 `_index.derived.md`**。

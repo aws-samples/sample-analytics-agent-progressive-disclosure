@@ -55,3 +55,7 @@ actual_amount = total_amount - discount_amount + shipping_fee
 4. **支付方式分布**: 加载 `payments.md`
 5. **订阅留存分析**: 加载 `subscriptions.md`
 6. **用户消费分析**: 加载 `orders.md`（需关联 users 域）
+
+## 派生层附录
+
+本域还有派生表（清洗层/汇总层/口径表/历史遗留）。**遇到同名近义表拿不准选哪张时，读 `_index.derived.md`**。
