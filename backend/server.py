@@ -134,8 +134,10 @@ async def api_catalog(refresh: int = 0):
         return JSONResponse(await asyncio.to_thread(catalog.build, bool(refresh)))
     except Exception as e:
         # 目录挂了不该让整个页面白屏：回 200 + error，前端退回静态文案。
-        return JSONResponse({"error": f"{type(e).__name__}: {e}",
-                             "source": "unavailable"})
+        # 异常原文（含 boto3 报错里的 ARN / 账号 / 内部路径）只进服务端日志，
+        # 客户端只拿异常类名 —— 与 /ask 的错误事件同一口径（CodeQL py/stack-trace-exposure）。
+        log.exception("catalog build failed")
+        return JSONResponse({"error": type(e).__name__, "source": "unavailable"})
 
 
 @app.get("/api/config")
