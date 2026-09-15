@@ -8,8 +8,8 @@
  "region": "ap-northeast-1",
  "totals": {
   "tables": 48,
-  "rows": 79924448,
-  "rows_all_layers": 96491202,
+  "rows": 79921903,
+  "rows_all_layers": 91294056,
   "domains": 10,
   "columns": 476,
   "by_layer": {
@@ -71,7 +71,7 @@
       "paid_amount"
      ],
      "column_count": 6,
-     "rows": 6863106,
+     "rows": 1662040,
      "layer": "dws",
      "status": "active",
      "summary": "用户日汇总：每用户每天的事件数、会话数、下单数、消费额",
@@ -332,7 +332,7 @@
       "paid_at"
      ],
      "column_count": 12,
-     "rows": 640800,
+     "rows": 647265,
      "layer": "dwd",
      "status": "active",
      "summary": "订单清洗层：只含有效订单，剔除 pending/cancelled/refunded",
@@ -467,7 +467,7 @@
       "created_at"
      ],
      "column_count": 14,
-     "rows": 691800,
+     "rows": 689255,
      "layer": "base",
      "status": "active",
      "summary": "",
@@ -1175,7 +1175,8 @@
    "table_count": 1
   }
  ],
- "generated_at": "2026-08-04 09:44:36",
+ "generated_at": "2026-08-11 13:21:07",
  "snapshot": true,
- "generated_at_utc": "2026-08-04 01:44:36 UTC"
+ "generated_at_utc": "2026-08-11 13:21:07 UTC",
+ "row_counts_source": "eval/baseline/consistency.redshift.postdatafix.json"
 }

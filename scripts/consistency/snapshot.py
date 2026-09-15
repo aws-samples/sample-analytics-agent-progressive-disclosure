@@ -40,6 +40,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+
+ROOT = Path(__file__).resolve().parents[2]
 # 数值型：SUM（定点化后）
 NUMERIC_TYPES = {
     "smallint", "integer", "bigint",
@@ -65,12 +67,11 @@ DECIMAL_CAST = "DECIMAL(38,4)"
 #
 # 所以这两个机制在被脱敏的列上是互斥的：要么对账，要么脱敏，不能既读到原文又保证不可读。
 # 取舍是脱敏优先（PII 保护比对账覆盖率重要），代价是这几列失去搬迁损耗的自动校验。
-# 加新的 masking policy 时必须同步这里，否则对账会报假失败。
-MASKED_COLUMNS = {
-    ("users", "email"),
-    ("users", "phone"),
-    ("user_profiles", "birth_date"),
-}
+# 列集合从 data_classification.yaml 派生，避免治理 SQL、reconcile 与一致性工具各存一份名单。
+sys.path.insert(0, str(ROOT / "scripts" / "governance"))
+from classification import expected_governance, load_inventory  # noqa: E402
+
+MASKED_COLUMNS = set(expected_governance(load_inventory())[0])
 
 
 # ---------------------------------------------------------------- backends
@@ -263,6 +264,9 @@ def compare(a: dict, b: dict, subset: bool = False) -> list[str]:
     for t in sorted(set(ta) & set(tb)):
         ma, mb = ta[t], tb[t]
         for k in sorted(set(ma) | set(mb)):
+            _, sep, column = k.partition(":")
+            if sep and (t, column) in MASKED_COLUMNS:
+                continue              # 一侧可能是旧的原文基线，另一侧按 DDM 设计不采集
             va, vb = ma.get(k, "<无>"), mb.get(k, "<无>")
             if va != vb:
                 diffs.append(f"[不一致] {t}.{k}：A={va}  B={vb}")

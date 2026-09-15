@@ -1,0 +1,199 @@
+# 数据分类清单：声明“哪些列已审阅、敏感级别与治理处置”。
+# reviewed_columns 必须列全；新增列不会继承清单，reconcile G 类检查会失败。
+# 普通列继承 defaults；PII/restricted 列必须显式声明，保留明文时必须写 reason。
+version: 1
+
+defaults:
+  level: internal
+  treatment: none
+  reason: 合成分析数据，未包含已识别的直接标识符
+
+tables:
+  ab_test_assignments:
+    reviewed_columns: [id, user_id, test_id, variant_id, assigned_at, first_exposure_at]
+  ab_test_variants:
+    reviewed_columns: [variant_id, test_id, variant_name, variant_key, description, traffic_percentage, config_json, is_control, created_at]
+  ab_tests:
+    reviewed_columns: [test_id, test_name, test_key, hypothesis, description, primary_metric, secondary_metrics, target_segment_ids, traffic_percentage, min_sample_size, start_date, end_date, status, conclusion, winner_variant_id, owner, created_at, updated_at]
+  ad_campaigns:
+    reviewed_columns: [ad_campaign_id, channel_id, campaign_name, campaign_type, objective, budget_total, budget_daily, start_date, end_date, target_audience, status, created_at, updated_at]
+  ad_creatives:
+    reviewed_columns: [creative_id, ad_campaign_id, creative_name, creative_type, creative_format, content_url, headline, description, call_to_action, status, created_at]
+  banners:
+    reviewed_columns: [banner_id, position, banner_name, image_url, target_url, target_type, target_id, sort_order, start_date, end_date, is_active, click_count, impression_count, created_at, updated_at]
+  campaigns:
+    reviewed_columns: [campaign_id, campaign_name, campaign_type, description, start_date, end_date, target_segment_ids, budget, status, owner, created_at, updated_at]
+  categories:
+    reviewed_columns: [category_id, parent_id, category_name, level, sort_order, icon_url, is_active, created_at, updated_at]
+  channel_daily_costs:
+    reviewed_columns: [id, channel_id, ad_campaign_id, creative_id, date, impressions, clicks, installs, cost, currency, created_at]
+  channels:
+    reviewed_columns: [channel_id, channel_name, channel_type, platform, description, is_active, created_at]
+  coupons:
+    reviewed_columns: [coupon_id, coupon_code, coupon_name, coupon_type, discount_value, min_purchase, max_discount, valid_days, start_date, end_date, total_quota, per_user_limit, applicable_products, status, created_at]
+  dwd_events_app:
+    reviewed_columns: [event_id, user_id, session_id, event_name, event_time, page_name]
+  dwd_orders_valid:
+    reviewed_columns: [order_id, order_no, user_id, status, total_amount, discount_amount, shipping_fee, actual_amount, item_count, coupon_id, placed_at, paid_at]
+  dws_channel_weekly:
+    reviewed_columns: [channel_id, channel_name, week_start, cost, installs, new_users, weekly_cac]
+  dws_user_daily:
+    reviewed_columns: [user_id, dt, event_cnt, session_cnt, order_cnt, paid_amount]
+  event_definitions:
+    reviewed_columns: [event_name, event_category, description, properties_schema, owner, is_core_event, created_at, updated_at]
+  events:
+    reviewed_columns: [event_id, user_id, device_id, session_id, event_name, event_time, properties, page_name, referrer, ip_address, created_at]
+    columns:
+      device_id:
+        level: pii
+        treatment: none
+        reason: 合成设备标识，用于跨事件分析；真实标识符需脱敏或令牌化
+      ip_address:
+        level: pii
+        treatment: none
+        reason: 样例仅生成 RFC1918 私网地址；接入真实 IP 前必须改为 mask
+  fin_daily_revenue:
+    reviewed_columns: [dt, gross_revenue, refund_amount, net_revenue]
+  growth_daily_gmv:
+    reviewed_columns: [dt, gmv, paid_orders, paying_users, all_orders]
+  mart_channel_daily:
+    reviewed_columns: [dt, channel_id, channel_name, channel_type, cost, impressions, clicks, installs, new_users_attributed, gmv_attributed]
+  mart_daily_kpi:
+    reviewed_columns: [dt, dau, new_users, orders, paying_users, gmv, refund_amt, new_subscriptions]
+  mart_daily_revenue:
+    reviewed_columns: [dt, channel_id, channel_name, channel_type, is_new_user, order_cnt, paying_user_cnt, gmv]
+  mart_user_summary:
+    reviewed_columns: [user_id, register_date, register_channel, first_paid_date, paid_order_cnt, total_gmv, is_repurchaser_30d, last_active_date]
+  meta_snapshot:
+    reviewed_columns: [as_of_date, data_start]
+  order_items:
+    reviewed_columns: [item_id, order_id, product_id, product_name, sku_id, sku_name, quantity, unit_price, discount_amount, actual_amount, created_at]
+  orders:
+    reviewed_columns: [order_id, order_no, user_id, status, total_amount, discount_amount, shipping_fee, actual_amount, item_count, coupon_id, shipping_address, remark, placed_at, paid_at, shipped_at, delivered_at, cancelled_at, cancel_reason, refunded_at, refund_reason, created_at, updated_at]
+    columns:
+      shipping_address:
+        level: pii
+        treatment: none
+        reason: 样例仅含省市且无详细地址；接入真实地址前必须 mask
+  orders_backup_20251201:
+    reviewed_columns: [order_id, order_no, user_id, status, total_amount, actual_amount, placed_at]
+    level: internal
+    treatment: no_grant
+    reason: 历史备份陷阱表，不授权以防误用陈旧数据
+  page_views:
+    reviewed_columns: [page_view_id, user_id, session_id, page_name, page_url, referrer, duration_seconds, scroll_depth_pct, view_time, created_at]
+  payments:
+    reviewed_columns: [payment_id, payment_no, order_id, user_id, amount, payment_method, payment_channel, status, transaction_id, paid_at, failure_reason, refund_amount, refunded_at, created_at]
+    columns:
+      transaction_id:
+        level: pii
+        treatment: none
+        reason: 样例为合成交易标识；真实支付标识需令牌化或脱敏
+  post_comments:
+    reviewed_columns: [comment_id, post_id, user_id, parent_comment_id, content, like_count, status, created_at]
+    columns:
+      content:
+        level: pii
+        treatment: none
+        reason: 样例为合成 UGC；真实用户内容需按业务目的和保留策略复审
+  post_likes:
+    reviewed_columns: [user_id, post_id, created_at]
+  post_shares:
+    reviewed_columns: [share_id, user_id, post_id, share_channel, created_at]
+  posts:
+    reviewed_columns: [post_id, user_id, content_type, title, content, media_urls, tags, location, product_ids, view_count, like_count, comment_count, share_count, status, is_featured, published_at, created_at, updated_at]
+    columns:
+      content:
+        level: pii
+        treatment: none
+        reason: 样例为合成 UGC；真实用户内容需按业务目的和保留策略复审
+      location:
+        level: pii
+        treatment: none
+        reason: 样例为合成位置；真实精确位置必须脱敏或降精度
+  product_tags:
+    reviewed_columns: [id, product_id, tag_name, tag_type, created_at]
+  products:
+    reviewed_columns: [product_id, product_name, category_id, brand, description, price, original_price, cost, stock, sold_count, view_count, favorite_count, rating_avg, rating_count, main_image_url, image_urls, status, is_featured, created_at, updated_at]
+  push_notifications:
+    reviewed_columns: [push_id, user_id, campaign_id, push_type, title, content, deep_link, scheduled_at, sent_at, delivered_at, opened_at, is_delivered, is_opened, failure_reason, created_at]
+  sessions:
+    reviewed_columns: [session_id, user_id, device_id, start_time, end_time, duration_seconds, event_count, page_view_count, is_bounce, entry_page, exit_page, traffic_source, utm_source, utm_medium, utm_campaign, created_at]
+  subscriptions:
+    reviewed_columns: [subscription_id, user_id, plan_name, plan_price, start_date, end_date, auto_renew, status, payment_id, cancelled_at, cancel_reason, created_at, updated_at]
+  tmp_campaign_roi_analysis:
+    reviewed_columns: [channel_id, channel_name, total_cost, attributed_gmv, roi]
+    level: internal
+    treatment: no_grant
+    reason: 临时分析陷阱表，不授权以防误用未完成口径
+  user_attributions:
+    reviewed_columns: [attribution_id, user_id, channel_id, ad_campaign_id, creative_id, attribution_type, click_time, install_time, attributed_at, days_to_install, tracking_params]
+  user_coupons:
+    reviewed_columns: [id, user_id, coupon_id, coupon_code, received_at, expire_at, used_at, order_id, status, source]
+  user_devices:
+    reviewed_columns: [device_id, user_id, device_type, os_version, device_model, device_brand, app_version, push_token, is_primary, first_seen_at, last_seen_at, created_at]
+    columns:
+      device_id:
+        level: pii
+        treatment: none
+        reason: 合成设备标识，用于设备分析；真实标识符需脱敏或令牌化
+      push_token:
+        level: pii
+        treatment: none
+        reason: 样例值为 tok_<id> 且不可用于推送；真实 token 必须 mask
+  user_follows:
+    reviewed_columns: [follower_id, following_id, created_at]
+  user_messages:
+    reviewed_columns: [message_id, sender_id, receiver_id, content, message_type, related_post_id, related_product_id, is_read, sent_at, read_at]
+    level: restricted
+    treatment: no_grant
+    reason: 私信正文属于通信内容，不是分析素材
+  user_profiles:
+    reviewed_columns: [user_id, age, gender, birth_date, city, province, country, interests, occupation, income_level, created_at, updated_at]
+    columns:
+      age:
+        level: pii
+        treatment: none
+        reason: 分析所需年龄值；样例为合成数据
+      gender:
+        level: pii
+        treatment: none
+        reason: 分析所需人口属性；样例为合成数据
+      birth_date:
+        level: pii
+        treatment: mask
+        policy: mask_birthdate
+        reason: 精确出生日期只保留年份
+      city:
+        level: pii
+        treatment: none
+        reason: 仅城市级粒度，保留用于地域聚合；真实数据需复审
+      occupation:
+        level: pii
+        treatment: none
+        reason: 分析所需人口属性；样例为合成数据
+      income_level:
+        level: pii
+        treatment: none
+        reason: 已分桶的合成收入级别，保留用于聚合分析
+  user_segment_members:
+    reviewed_columns: [user_id, segment_id, entered_at, exited_at]
+  user_segments:
+    reviewed_columns: [segment_id, segment_name, segment_type, description, rules_json, owner, status, created_at, updated_at]
+  users:
+    reviewed_columns: [user_id, username, email, phone, registered_at, registration_source, status, user_level, is_vip, last_active_at, created_at, updated_at]
+    columns:
+      username:
+        level: pii
+        treatment: none
+        reason: 合成的稳定化名，样例中保留用于展示；接入真实用户名时必须复审
+      email:
+        level: pii
+        treatment: mask
+        policy: mask_email
+        reason: 直接联系标识符
+      phone:
+        level: pii
+        treatment: mask
+        policy: mask_phone
+        reason: 直接联系标识符

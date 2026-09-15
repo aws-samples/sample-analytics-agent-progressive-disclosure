@@ -46,7 +46,9 @@ GRANT SELECT ON dws_channel_weekly  TO ROLE analytics_agent_ro;
 GRANT SELECT ON fin_daily_revenue   TO ROLE analytics_agent_ro;
 GRANT SELECT ON growth_daily_gmv    TO ROLE analytics_agent_ro;
 
--- 明细表：取数/探口径要用，给 SELECT。PII 列由第 2 层脱敏兜底。
+-- 明细表：取数/探口径要用，给 SELECT。只有 data_classification.yaml 中明确标为
+-- treatment: mask 的列由第 2 层脱敏兜底；其余敏感候选列的保留理由也在清单中显式记录，
+-- 覆盖完整性由 scripts/glue/reconcile.py 的 G 类检查保证。
 GRANT SELECT ON users, user_profiles, user_devices, user_segment_members TO ROLE analytics_agent_ro;
 GRANT SELECT ON sessions, events, page_views TO ROLE analytics_agent_ro;
 GRANT SELECT ON posts, post_likes, post_comments, post_shares, user_follows TO ROLE analytics_agent_ro;

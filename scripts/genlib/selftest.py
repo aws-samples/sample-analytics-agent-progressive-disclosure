@@ -1,4 +1,5 @@
 """
+LEGACY（v1 PostgreSQL 路径，不属于 v2 L0–L9 验收梯）：
 genlib 自测 —— 证明 4 个 blocker-killer 正确 + 确定性 + CSV 可被 Postgres COPY 吃下。
 独立可跑:  python scripts/genlib/selftest.py
 退出码 0 = 全过。

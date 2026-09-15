@@ -327,11 +327,11 @@ backend/.venv/bin/python scripts/audit/run.py L5 --secret "$SEC"
 
 ```
 days  missing_in_kpi  kpi_gmv_ne  revenue_gmv_ne  detail_total  kpi_total    revenue_total
-91    0               0           0               149685621.0   149685621.0  149685621.0
+91    0               0           0               151238025.32  151238025.32 151238025.32
 ```
 
 91 天逐日 GMV，`mart_daily_kpi`、`mart_daily_revenue`、明细三者**完全一致**，
-总额都是 149,685,621，没有一天有偏差。治理层是照定义算对了的。
+总额都是 151,238,025.32，没有一天有偏差。治理层是照定义算对了的。
 
 要注意它的口径：`sum(orders.actual_amount) where status in (paid,shipped,delivered)`，
 **采信订单头，不采信 `order_items`**。所以 mart 自身无懈可击，但它继承了 L4.1

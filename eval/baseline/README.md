@@ -55,7 +55,7 @@ python3 scripts/consistency/snapshot.py --compare \
 ## Glue 元数据对账（2026-08-04）
 
 `reconcile.glue.md` —— 接上真 Glue federated catalog（`123456789012:analytics_agent_rs`）
-之后的三方对账结果，六类检查全绿（`--strict` exit 0）。
+之后的三方对账结果，当时六类检查全绿（`--strict` exit 0）。
 
 这是第三条基线，跟前两条分工不同：
 

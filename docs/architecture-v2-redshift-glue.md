@@ -70,7 +70,7 @@ agent 照卡片写 `SELECT updated_at FROM channels` 会直接报错。
 写 `status='unused'` 在新数据上查出 0 行。四方里三方一致，孤例是 DDL 注释，所以按
 `unused` 对齐。**列名对账查不出枚举值漂移，这是 reconcile 当前的已知缺口。**
 
-接上真 Glue catalog 后再跑，六类检查全绿（`--strict` exit 0）：
+接上真 Glue catalog 后再跑，当时六类检查全绿（`--strict` exit 0）；当前版本另增加 G 类治理覆盖检查：
 
 ```
 声明态（DDL）      35 张表

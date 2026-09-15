@@ -18,4 +18,4 @@ catalog: `123456789012:analytics_agent_rs`  ·  region: ap-northeast-1
 对账通过 ✅  三方一致，DDM 在 GetTable 路径上确认生效
 ```
 
-exit 0 = 六类检查全绿。
+exit 0 = 当时六类检查全绿；当前版本另有 G 类治理覆盖检查。

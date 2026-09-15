@@ -23,7 +23,7 @@
 这跟 Terraform 的 plan/apply、K8s 的 desired/actual 是同构的：数据字典也该有
 声明态和实际态，只有一份的那种叫文档，两份加对账的那种叫平台。
 
-## 六类检查
+## 七类检查
 
 | 编号 | 症状 | 说明 |
 |---|---|---|
@@ -33,6 +33,7 @@
 | D | 治理指标 SQL 引用的列不存在 | 官方口径静默失效，最阴险的一类 |
 | E | 挂了 DDM 的表能被 `GetTable` 读到 | 脱敏没挂上，治理兜底层失效 |
 | F | Glue 里没有任何表 | 尚未注册，或注册失败 |
+| G | 分类清单与 schema / DDM / GRANT 不一致 | 新列未审阅，或声明的治理处置没有落地 |
 
 ## E 的语义：一条被实测推翻的设计假设
 
@@ -69,15 +70,18 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts" / "gen"))
+sys.path.insert(0, str(ROOT / "scripts" / "governance"))
 sys.path.insert(0, str(ROOT / "backend"))
 
-# 挂了 DDM 的表（与 database/redshift/04_governance.sql 保持一致）。
-# 实测行为见模块 docstring「E 的语义」：它们在 GetTables 里照常出现，
-# 只在 GetTable 上被挡。加新的 masking policy 时要同步这里。
-DDM_TABLES = ["users", "user_profiles"]
-# 连 GRANT 都没给的表。注意它**会**出现在 Glue 目录里（目录不反映 GRANT），
-# 防线在查询时生效，不在发现时生效。
-UNGRANTED_TABLES = ["user_messages"]
+from classification import (  # noqa: E402
+    expected_governance,
+    governance_findings,
+    load_inventory,
+    structural_findings,
+)
+
+# DDM 表与未授权表不再在这里手工维护；它们由 data_classification.yaml 派生，
+# 避免“治理 SQL 改了但检查器名单没改”的第二真源。
 
 # 不放域卡片、但在别处成文的表：表名 → 成文位置（相对仓库根）。
 #
@@ -275,18 +279,52 @@ def metric_columns() -> dict[str, set[str]]:
     return out
 
 
+def redshift_governance_state(region: str) -> tuple[dict[tuple[str, str], str], set[str]]:
+    """用管理员/owner 视角读取实际 DDM 与角色授权；只读角色看这些视图会得到 0 行。"""
+    sys.path.insert(0, str(ROOT / "scripts" / "redshift"))
+    from rsql import Client
+
+    client = Client(region=region)
+    mask_rows = client.execute(
+        "SELECT table_name, input_columns, policy_name "
+        "FROM svv_attached_masking_policy WHERE lower(grantee)='public'"
+    ).get("rows", [])
+    grant_rows = client.execute(
+        "SELECT relation_name FROM svv_relation_privileges "
+        "WHERE identity_name='analytics_agent_ro' AND privilege_type='SELECT'"
+    ).get("rows", [])
+    if not mask_rows or not grant_rows:
+        raise RuntimeError(
+            "治理系统视图返回 0 行；G1/G2 必须使用 admin/owner 凭证，"
+            "只读审计角色请改做掩码值与 permission denied 负测"
+        )
+
+    attached: dict[tuple[str, str], str] = {}
+    for table, raw_columns, policy in mask_rows:
+        columns = re.findall(r"[a-z_][a-z0-9_]*", str(raw_columns).lower())
+        for column in columns:
+            attached[(str(table), column)] = str(policy)
+    granted = {str(row[0]) for row in grant_rows}
+    return attached, granted
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="元数据三方对账")
     ap.add_argument("--catalog", default="", help="Glue federated catalog id（形如 acct:name）")
     ap.add_argument("--database", help="只查这个 Glue database（省略则遍历全部）")
     ap.add_argument("--region", default="ap-northeast-1")
     ap.add_argument("--strict", action="store_true", help="有问题则 exit 1")
+    ap.add_argument("--governance-state", action="store_true",
+                    help="以 admin/owner 凭证对账实际 DDM 与 analytics_agent_ro GRANT")
     a = ap.parse_args()
 
     declared = declared_columns()
     cards = card_columns()
     metrics = metric_columns()
     actual = glue_columns(a.catalog, a.database, a.region)
+    inventory = load_inventory()
+    expected_masks, ungranted_tables = expected_governance(inventory)
+    ddm_tables = sorted({table for table, _ in expected_masks})
 
     findings: list[tuple[str, str]] = []
 
@@ -294,10 +332,13 @@ def main() -> int:
     print(f"实际态（Glue）     {len(actual)} 张表")
     print(f"语义层（卡片）     {len(cards)} 张表卡片")
     print(f"治理指标           {len(metrics)} 张表被指标引用")
+    print(f"数据分类清单       {len(inventory['tables'])} 张表已审阅")
     print()
 
     if not actual:
         findings.append(("F", "Glue Catalog 里读不到任何表：尚未注册，或注册失败/无权限"))
+    else:
+        findings += [("G", msg) for msg in structural_findings(actual, inventory)]
 
     # A. Glue 有表、语义层没卡片
     for t in sorted(set(actual) - set(cards)):
@@ -341,36 +382,52 @@ def main() -> int:
             findings.append(("D", f"{t}：指标 SQL 引用了表里没有的标识符 {unknown}"))
 
     # E. 挂了 DDM 的表在 GetTable 路径上必须被挡住（验证机制生效，不是验证缺席）
-    readable = glue_gettable_readable(a.catalog, a.database, a.region, DDM_TABLES)
-    for t in DDM_TABLES:
+    readable = glue_gettable_readable(a.catalog, a.database, a.region, ddm_tables)
+    for t in ddm_tables:
         if readable.get(t):
             findings.append(("E", f"{t}：挂了 DDM 的表却能被 GetTable 读到，"
                                   f"脱敏可能没挂上（检查 04_governance.sql 是否跑过）"))
 
     # 常驻说明：不计入 findings。见 docstring「E 的语义」——这是 AWS 的既有行为，
     # 修不掉，反复报成问题只会让人不再信 findings。
-    leaked = {t: sorted(actual[t] & {"email", "phone", "birth_date"})
-              for t in DDM_TABLES if t in actual}
+    masked_column_names = {column for _, column in expected_masks}
+    leaked = {t: sorted(actual[t] & masked_column_names)
+              for t in ddm_tables if t in actual}
     leaked = {t: v for t, v in leaked.items() if v}
     print("目录可见面实测（不是缺陷，是必须知道的边界）：")
-    print(f"  GetTable 被挡住的 DDM 表   {[t for t in DDM_TABLES if not readable.get(t)]}")
+    print(f"  GetTable 被挡住的 DDM 表   {[t for t in ddm_tables if not readable.get(t)]}")
     if leaked:
         print(f"  但 GetTables 仍暴露列名   {leaked}")
     print(f"  未 GRANT 的表仍在目录里    "
-          f"{[t for t in UNGRANTED_TABLES if t in actual]}（目录不反映 GRANT）")
+          f"{[t for t in sorted(ungranted_tables) if t in actual]}（目录不反映 GRANT）")
     print("  → Glue federated catalog 是 schema 投影，不是权限投影。")
     print("    真正生效的防线是查询时的 GRANT 与 DDM，别把目录可见性当访问控制。")
     print()
 
+    if a.governance_state:
+        try:
+            attached, granted = redshift_governance_state(a.region)
+            findings += [("G", msg) for msg in governance_findings(inventory, attached, granted)]
+            print(f"治理实际态对账：DDM {len(attached)} 列，SELECT {len(granted)} 张表")
+        except Exception as exc:  # 身份不可见也必须显式失败，不能把 0 行当成无策略
+            findings.append(("G", f"治理实际态不可验证：{type(exc).__name__}: {exc}"))
+    else:
+        print("治理实际态未查询（加 --governance-state；需要 admin/owner 凭证）")
+    print()
+
     if not findings:
-        print("对账通过 ✅  三方一致，DDM 在 GetTable 路径上确认生效")
+        if a.governance_state:
+            print("对账通过 ✅  三方一致，分类覆盖完整，DDM/GRANT 与声明一致")
+        else:
+            print("对账通过 ✅  三方一致，分类覆盖完整（未查询 GRANT 实际态）")
         return 0
 
     by_kind: dict[str, list[str]] = {}
     for kind, msg in findings:
         by_kind.setdefault(kind, []).append(msg)
     labels = {"A": "未文档化的表", "B": "陈旧文档（幻觉来源）", "C": "生成链断裂",
-              "D": "治理口径失效", "E": "治理防护失效", "F": "目录不可用"}
+              "D": "治理口径失效", "E": "治理防护失效", "F": "目录不可用",
+              "G": "治理覆盖缺口"}
     print(f"发现 {len(findings)} 处问题：\n")
     for kind in sorted(by_kind):
         print(f"[{kind}] {labels.get(kind, '')}  {len(by_kind[kind])} 处")

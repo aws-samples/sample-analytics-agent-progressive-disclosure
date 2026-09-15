@@ -37,8 +37,6 @@ sys.path.insert(0, str(BACKEND))
 import db  # noqa: E402  (backend/db.py — 与 agent 同一个只读边界)
 
 CASES_PATH = HERE / "cases.json"
-REPORT_MD = HERE / "report.md"
-REPORT_JSON = HERE / "report.json"
 
 
 # ---------------------------------------------------------------- utilities
@@ -331,10 +329,16 @@ async def main() -> int:
     ap = argparse.ArgumentParser(description="analytics agent eval harness")
     ap.add_argument("--level", type=int, nargs="*", help="只跑这些 level")
     ap.add_argument("--case", nargs="*", help="只跑这些 case id")
+    ap.add_argument("--cases", type=Path, default=CASES_PATH,
+                    help="用例文件（默认 eval/cases.json）")
     ap.add_argument("--dry-run", action="store_true", help="只验证金标 SQL 可执行")
     args = ap.parse_args()
 
-    spec = json.loads(CASES_PATH.read_text())
+    cases_path = args.cases.resolve()
+    spec = json.loads(cases_path.read_text(encoding="utf-8"))
+    suffix = "" if cases_path == CASES_PATH.resolve() else f".{cases_path.stem}"
+    report_md = HERE / f"report{suffix}.md"
+    report_json = HERE / f"report{suffix}.json"
     cases = spec["cases"]
     if args.level:
         cases = [c for c in cases if c["level"] in args.level]
@@ -361,12 +365,12 @@ async def main() -> int:
         "avg_docs": round(sum(r.get("n_docs", 0) for r in done) / len(done), 1) if done else "-",
         "avg_sql": round(sum(r.get("n_sql", 0) for r in done) / len(done), 1) if done else "-",
     }
-    REPORT_JSON.write_text(json.dumps({"meta": meta, "records": records},
+    report_json.write_text(json.dumps({"meta": meta, "records": records},
                                       ensure_ascii=False, indent=2, default=str))
     if not args.dry_run:
-        REPORT_MD.write_text(render_report(records, meta))
+        report_md.write_text(render_report(records, meta))
         print(f"\n通过 {sum(1 for r in done if r['status']=='pass')}/{len(done)}"
-              f" · 报告: {REPORT_MD.relative_to(HERE.parent)} / report.json")
+              f" · 报告: {report_md.relative_to(HERE.parent)} / {report_json.name}")
     else:
         bad = [r for r in records if r["status"] == "golden_error"]
         print(f"\n金标验证: {len(records)-len(bad)}/{len(records)} OK"

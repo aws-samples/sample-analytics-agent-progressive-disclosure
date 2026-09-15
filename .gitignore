@@ -41,6 +41,7 @@ data/events.csv
 
 # Claude Code 本地会话配置
 .claude/
+.kiro/
 # 本地部署参数(含账号相关资源 ID)
 infra/deploy.local.sh
 

@@ -79,6 +79,8 @@ hdr "L0 静态自测（无云依赖）"
 grep_run "生成器 fillers 自测"   "全部通过" python3 scripts/gen/selftest_fillers.py
 grep_run "生成器跨表闭环自测"    "全部通过" python3 scripts/gen/selftest_closures.py
 grep_run "pg→redshift 方言自测" "全部通过" python3 scripts/gen/pg_to_redshift.py --selftest
+grep_run "manifest 声明态校验" "manifest OK" python3 scripts/manifest/render.py --check
+grep_run "数据分类清单自测" "全部通过" python3 scripts/governance/selftest_classification.py
 
 hdr "L1 云资源状态"
 grep_run "Glue catalog 注册状态（5 步幂等 + 48 张表）" \
@@ -87,14 +89,14 @@ grep_run "Glue catalog 注册状态（5 步幂等 + 48 张表）" \
 hdr "L2 元数据对账（两条独立路径）"
 grep_run "DDL ⟷ Redshift information_schema（含列顺序）" \
   "一致 ✅" python3 scripts/gen/verify_ddl_vs_redshift.py
-grep_run "DDL ⟷ Glue ⟷ 知识库卡片（六类检查）" \
-  "对账通过 ✅" python3 scripts/glue/reconcile.py --catalog "$CATALOG" --strict
+grep_run "DDL ⟷ Glue ⟷ 知识库 ⟷ 治理覆盖（七类检查）" \
+  "对账通过 ✅" python3 scripts/glue/reconcile.py --catalog "$CATALOG" --governance-state --strict
 
 hdr "L3 数据一致性"
 grep_run "归档回归（生成器预期值 ⟷ 已归档 Redshift 快照）" "一致 ✅" \
   python3 scripts/consistency/snapshot.py --compare \
-    eval/baseline/consistency.generator-expected.json \
-    eval/baseline/consistency.redshift.json --subset
+    eval/baseline/consistency.generator-expected.postdatafix.json \
+    eval/baseline/consistency.redshift.postdatafix.json --subset
 
 if [[ $FULL -eq 1 ]]; then
   TMP=$(mktemp -t rs-live-XXXXXX.json)
@@ -103,7 +105,7 @@ if [[ $FULL -eq 1 ]]; then
        --out "$TMP" >/dev/null 2>&1; then
     grep_run "真实检查（生成器预期值 ⟷ 现查 Redshift）" "一致 ✅" \
       python3 scripts/consistency/snapshot.py --compare \
-        eval/baseline/consistency.generator-expected.json "$TMP" --subset
+        eval/baseline/consistency.generator-expected.postdatafix.json "$TMP" --subset
   else
     printf '  \033[31mFAIL\033[0m  真实快照取不到\n'
     FAIL=$((FAIL + 1))
@@ -129,18 +131,25 @@ grep_run "GRANT：user_messages 未授权（0 行）" \
   "SELECT relation_name FROM svv_relation_privileges WHERE identity_name='analytics_agent_ro' AND relation_name='user_messages'"
 
 hdr "L5 查询路径"
-grep_run "四条独立路径 GMV 完全相等" "149685621\.44.*149685621\.44.*149685621\.44.*149685621\.44" \
+grep_run "四条独立路径 GMV 完全相等" "GMV_PATHS_AGREE" \
   python3 scripts/redshift/rsql.py "
-WITH a AS (SELECT SUM(gmv) v FROM mart_daily_kpi),
-     b AS (SELECT SUM(gmv) v FROM mart_daily_revenue),
-     c AS (SELECT SUM(gmv) v FROM growth_daily_gmv),
-     d AS (SELECT SUM(actual_amount) v FROM orders
-           WHERE status IN ('paid','shipped','delivered'))
-SELECT CAST(a.v AS DECIMAL(20,2)) p1, CAST(b.v AS DECIMAL(20,2)) p2,
-       CAST(c.v AS DECIMAL(20,2)) p3, CAST(d.v AS DECIMAL(20,2)) p4 FROM a,b,c,d"
+WITH paths AS (
+  SELECT CAST(SUM(gmv) AS DECIMAL(20,2)) v FROM mart_daily_kpi
+  UNION ALL SELECT CAST(SUM(gmv) AS DECIMAL(20,2)) FROM mart_daily_revenue
+  UNION ALL SELECT CAST(SUM(gmv) AS DECIMAL(20,2)) FROM growth_daily_gmv
+  UNION ALL SELECT CAST(SUM(actual_amount) AS DECIMAL(20,2)) FROM orders
+    WHERE status IN ('paid','shipped','delivered')
+)
+SELECT CASE WHEN COUNT(*) = 4 AND COUNT(v) = 4 AND MIN(v) = MAX(v)
+            THEN 'GMV_PATHS_AGREE' ELSE 'GMV_PATHS_DIFFER' END AS verdict,
+       MAX(v) AS gmv
+FROM paths"
 
 grep_run "21 条金标 SQL 均可在 Redshift 执行" \
   "金标验证: 21/21 OK" env DB_BACKEND=redshift python3 eval/run_eval.py --dry-run
+grep_run "3 条陷阱金标 SQL 均可在 Redshift 执行" \
+  "金标验证: 3/3 OK" env DB_BACKEND=redshift python3 eval/run_eval.py \
+  --cases eval/cases_traps.json --dry-run
 
 hdr "L6 服务与前端渲染契约"
 # 这一层自己起后端、测完就关，不依赖外部已有服务。
@@ -187,6 +196,8 @@ rm -f "$SRVLOG"
 # 这条路没法人工验（要浏览器 + Cognito 登录），而它失败时页面**照常渲染**，
 # 只是「背后的数据」停在 v1 静态原文。不依赖后端和凭证，只要快照在就能跑。
 if command -v node >/dev/null 2>&1 && [[ -f web/catalog.json ]]; then
+  grep_run "线上 catalog 快照与 post-data-fix baseline 一致" \
+    "catalog 快照新鲜度通过" python3 scripts/deploy/check_catalog_freshness.py
   grep_run "线上路径渲染契约（/api/catalog 403 → ./catalog.json 兜底）" \
     "全部通过" node scripts/ui/render_test_prod.mjs
 else
@@ -202,8 +213,9 @@ fi
 cat <<'EOF'
   L0–L6 全绿 ✅
 
-  还没覆盖的两层（见 docs/test-plan-v2.md）：
+  还没覆盖的三层（见 docs/test-plan-v2.md）：
     L7  端到端 agent：./backend/.venv/bin/python eval/run_eval.py
         （会烧 token，并覆盖 eval/report.md；基线在 eval/baseline/）
-    L8  负测：六类注入，验证检查器该报时真会报（会临时改文件）
+    L8  负测：七类注入，验证检查器该报时真会报（会临时改文件）
+    L9  数据质量人读审计（无 PASS/FAIL，不进门禁）：python3 scripts/audit/run.py all
 EOF

@@ -61,7 +61,7 @@ v2 把数据层从 Aurora Postgres 搬到了 Redshift Serverless，元数据进 
 `snapshot: true`，界面会在摘要行显示「快照时间」，不冒充实时。顶栏的「实时链路」
 只指后端是真实 AgentCore 链路，不指元数据。
 
-数据集变了就重新发一次（`deploy_web.sh --fresh`）。真需要实时，补中继路由即可，
+部署默认会重新生成快照；只有显式 `deploy_web.sh --reuse-snapshot` 才复用，并仍会与 post-data-fix baseline 对账。真需要实时，补中继路由即可，
 前端已经是实时优先。
 
 ## 相关的闸

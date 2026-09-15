@@ -5,8 +5,9 @@
 # (Cognito 池/客户端 ID)，本地只有 config.example.js。sync 会把它覆盖成示例值或
 # 直接 --delete 掉，登录立刻挂。vendor/ 同理，没变就不动。
 #
-#   bash scripts/deploy/deploy_web.sh              # 用现有 web/catalog.json
-#   bash scripts/deploy/deploy_web.sh --fresh      # 先重新查 Glue 生成快照再发
+#   bash scripts/deploy/deploy_web.sh              # 默认重新查 Glue 生成快照再发
+#   bash scripts/deploy/deploy_web.sh --reuse-snapshot  # 复用现有快照（仍做 baseline 新鲜度校验）
+#   bash scripts/deploy/deploy_web.sh --fresh      # 兼容旧调用；与默认行为相同
 #   bash scripts/deploy/deploy_web.sh --dry-run    # 只打印要做什么
 #
 # 前置：web/catalog.json 必须存在且来源为 glue（线上元数据就靠它，见
@@ -23,10 +24,11 @@ cd "$(dirname "$0")/../.."
 REGION="${SITE_REGION:-us-west-2}"
 STACK="${EDGE_STACK:-analytics-agent-edge}"
 
-FRESH=0; DRY=0
+FRESH=1; DRY=0
 for a in "$@"; do
   case "$a" in
     --fresh) FRESH=1 ;;
+    --reuse-snapshot) FRESH=0 ;;
     --dry-run) DRY=1 ;;
     *) echo "未知参数: $a"; exit 2 ;;
   esac
@@ -51,10 +53,14 @@ say "账号 $ACCT · 桶 $BUCKET · 区域 $REGION"
 
 # ---- 快照 ----
 if [[ $FRESH -eq 1 ]]; then
-  say "重新生成 catalog.json（查 Glue，约 1 分钟）"
-  PY=./backend/.venv/bin/python
-  [[ -x "$PY" ]] || PY=python3
-  "$PY" scripts/deploy/build_catalog_json.py || die "快照生成失败，未部署"
+  if [[ $DRY -eq 1 ]]; then
+    say "（--dry-run）正式部署会先重新生成 catalog.json"
+  else
+    say "重新生成 catalog.json（查 Glue，约 1 分钟）"
+    PY=./backend/.venv/bin/python
+    [[ -x "$PY" ]] || PY=python3
+    "$PY" scripts/deploy/build_catalog_json.py || die "快照生成失败，未部署"
+  fi
 fi
 
 [[ -f web/catalog.json ]] || die "缺 web/catalog.json，先跑 build_catalog_json.py"
@@ -62,6 +68,8 @@ SRC=$(python3 -c 'import json;print(json.load(open("web/catalog.json")).get("sou
 TBL=$(python3 -c 'import json;print(json.load(open("web/catalog.json"))["totals"]["tables"])')
 GEN=$(python3 -c 'import json;d=json.load(open("web/catalog.json"));print(d.get("generated_at_utc") or d.get("generated_at"))')
 [[ "$SRC" == "glue" ]] || die "catalog.json 来源是 $SRC 不是 glue，拒绝部署（会把降级元数据固化上线）"
+python3 scripts/deploy/check_catalog_freshness.py \
+  || die "catalog.json 与 post-data-fix baseline 不一致，拒绝部署"
 say "快照 $TBL 张表 · 生成于 $GEN"
 
 # ---- 分发 ID ----
