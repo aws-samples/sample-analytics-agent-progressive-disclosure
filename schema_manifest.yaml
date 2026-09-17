@@ -25,6 +25,14 @@
 #   summary               一句话表说明（进域索引表清单）
 #   use_when / avoid_when 消歧路由（进卡片和域索引；这是 progressive disclosure 的考点本体）
 #   sql                   CTAS 查询体（不含 CREATE TABLE ... AS 前缀，render 自动加）
+#                         **写 Postgres 方言**：DDL 产物给 v1 本地库用，知识卡片则由
+#                         render.py 过一遍 scripts/gen/pg_to_trino.py 转成 Trino——
+#                         因为 agent 读的是卡片、查的是 Athena。所以这里的 SQL 必须
+#                         **两边都成立**，别用只有一边认的写法：
+#                         - JOIN 一律写显式 ON，不写 USING()：Trino 的 USING 会把连接列
+#                           合并成一列，之后 `c.channel_id` 就无法限定（COLUMN_NOT_FOUND）。
+#                         - 日期加天数写 `+ interval '7 days'`，不写 `+ 7`：转换器能把前者
+#                           改成 Trino 的 `interval '7' day`，后者在 Trino 里是 date+整数，报类型错。
 #   columns               [{name, type, desc}]；desc 进卡片字段表
 #   caveats               口径陷阱/坑（进卡片"注意"节）
 #   eval_trap             （可选）这张表设计用来考什么 —— eval 出题的素材登记
@@ -144,24 +152,26 @@ tables:
              count(DISTINCT ua.user_id)  AS new_users,
              (sum(d.cost) / NULLIF(count(DISTINCT ua.user_id), 0))::numeric(12,2) AS weekly_cac
       FROM channel_daily_costs d
-      JOIN channels c USING (channel_id)
+      JOIN channels c ON c.channel_id = d.channel_id
       LEFT JOIN user_attributions ua
         ON ua.channel_id = d.channel_id
        AND ua.attribution_type = 'last_touch'
        AND ua.attributed_at::date >= date_trunc('week', d.date)::date
-       AND ua.attributed_at::date <  date_trunc('week', d.date)::date + 7
+       AND ua.attributed_at::date <  date_trunc('week', d.date)::date + interval '7 days'
       GROUP BY 1, 2, 3
     columns:
       - {name: channel_id,   type: INT,           desc: 渠道ID}
       - {name: channel_name, type: VARCHAR(100),  desc: 渠道名}
       - {name: week_start,   type: DATE,          desc: ISO 周一}
-      - {name: cost,         type: NUMERIC(14,2), desc: 当周投放花费}
-      - {name: installs,     type: BIGINT,        desc: 当周安装数（渠道上报）}
-      - {name: new_users,    type: BIGINT,        desc: 当周 last_touch 归因新客}
-      - {name: weekly_cac,   type: NUMERIC(12,2), desc: 周 CAC = cost / new_users，无新客时为空}
+      - {name: cost,         type: NUMERIC(14,2), desc: 当周投放花费。⚠️【虚高，倍数随数据规模变】归因表在聚合前 LEFT JOIN，一条成本行匹配 N 条归因就被数 N 遍。虚高的倍数就是"每条成本行平均匹配到几条归因"，所以它跟着数据规模走：2026-09-17 实测本表合计 524993074.37 而真实花费 4351988.47（120.6 倍），v1 那批只有 1.21 倍。**记机制不要记数字**；要准确花费查 channel_daily_costs 或 mart_channel_daily}
+      - {name: installs,     type: BIGINT,        desc: 当周安装数（渠道上报）。⚠️ 同 cost，被同一个 join 扇出重复计数}
+      - {name: new_users,    type: BIGINT,        desc: 当周 last_touch 归因新客。这一列用了 count(DISTINCT)，【不受】扇出影响，可以放心用}
+      - {name: weekly_cac,   type: NUMERIC(12,2), desc: 周 CAC = cost / new_users，无归因新客时为 NULL 而不是 0。⚠️ 两件事：① 分子 cost 虚高（见上），本列同样偏高；② 2026-09-17 实测 414 行里 288 行是 NULL，且**全部**落在 week_start > 2026-01-24 那一侧——成本轴铺到 2026-09-01 而归因止于业务日历末端，那些周有花费、零新客。业务日历内 126 行 126 行都有值，所以读到 NULL 应当理解成"这一周在业务日历外"，不是"这周的 CAC 算不出来"}
     caveats:
       - 归因口径固定 last_touch，与 mart_channel_daily 一致
       - 首尾是残周；周环比要掐头去尾，或用完整 ISO 周
+      - ⚠️ cost / installs / weekly_cac 因 join 扇出偏高（v1 照搬的既有缺陷，不是本表算错）。问"花费""预算""CAC""ROI"的准确值请改用 mart_channel_daily 或 channel_daily_costs；本表只适合看 new_users 的周趋势
+      - ⚠️ weekly_cac 的空值有两种来源，只有一种曾经是缺陷。**现在这一种不是**：week_start 越过业务日历（2026-01-24）的那 288 周没有归因新客，NULL 是正确答案，掐掉日历外的周（`WHERE week_start <= (SELECT max(as_of_date) FROM meta_snapshot)`）就干净了。**曾经那一种已经消失**：湖还是 v1 那批时 user_attributions.attributed_at 整列等于灌数那一瞬，于是连日历内的周也几乎全空（当时 137 行里 134 行 NULL）；全量重灌之后 attributed_at 有 147485 个不同取值、跨 2025-10-26 至 2026-01-24，日历内已经 126/126 有值
 
   # ───────────────────────── ADS 应用层（口径分叉）─────────────────────────
   # 同一个"日收入"，财务和增长两个部门各有一张表、两套口径，数字对不上是故意的。
@@ -173,7 +183,7 @@ tables:
     owner: finance
     grain: 一行 = 一天（按支付成功时间）
     summary: 财务日收入：确认收入口径 —— 按 paid_at 记账、扣退款、不含运费
-    use_when: 财务/对账/确认收入问题（"财务口径""确认收入""净收入"）
+    use_when: 财务/对账/确认收入问题（"财务口径""确认收入""净收入"）；**任何"退款总额/累计退款/一共退了多少"** —— 本表是退款的唯一全量口径
     avoid_when: 大盘 GMV/成交额（用 mart_daily_revenue 或 growth_daily_gmv，口径是下单额）
     sql: |
       WITH paid AS (
@@ -192,15 +202,17 @@ tables:
              COALESCE(p.gross_revenue, 0)::numeric(14,2) AS gross_revenue,
              COALESCE(r.refund_amount, 0)::numeric(14,2) AS refund_amount,
              (COALESCE(p.gross_revenue, 0) - COALESCE(r.refund_amount, 0))::numeric(14,2) AS net_revenue
-      FROM paid p FULL OUTER JOIN refunds r USING (dt)
+      FROM paid p FULL OUTER JOIN refunds r ON p.dt = r.dt
     columns:
       - {name: dt,             type: DATE,          desc: 日期（按支付/退款发生日）}
       - {name: gross_revenue,  type: NUMERIC(14,2), desc: 毛收入 = 有效订单实付 - 运费，按 paid_at 记账}
-      - {name: refund_amount,  type: NUMERIC(14,2), desc: 当日发生的退款额}
+      - {name: refund_amount,  type: NUMERIC(14,2), desc: 当日发生的退款额。本表按 refunded_at 建轴，所以 sum 是【全量退款】—— 问退款总额用这一列}
       - {name: net_revenue,    type: NUMERIC(14,2), desc: 净收入 = 毛收入 - 退款}
     caveats:
       - 与 mart_daily_revenue/growth_daily_gmv 数字对不上是【设计使然】——那边按 placed_at 计下单额、含运费、不扣退款
       - 回答收入问题前先判断问的是哪个部门的口径；不确定时在结论里注明口径
+      - 退款问题优先用本表：mart_daily_kpi.refund_amt 的日期轴由 placed_at 决定、不含 refunded_at，轴末之后的退款被 LEFT JOIN 丢掉，合计偏低；差值就是轴外退款
+      - ⚠️ 本表轴末是 2026-02-02（退款发生日），比其他表的下单日轴末 2026-01-24 晚 9 天——最后一批订单下在 01-24，退款一路发生到 02-02。所以本表的"最近 7/30 天"与 GMV 的同名窗口**不是同一段日期**；同时报多个指标时要统一写显式日期区间，或在结论里标明每个数的区间
     eval_trap: 问"12月财务确认净收入"用 GMV 口径会明显偏高（差 = 运费+退款+跨日支付）
 
   - name: growth_daily_gmv
@@ -273,7 +285,7 @@ tables:
              sum(d.cost)::numeric(14,2) AS total_cost,
              NULL::numeric(14,2)        AS attributed_gmv,
              NULL::numeric(8,4)         AS roi
-      FROM channel_daily_costs d JOIN channels c USING (channel_id)
+      FROM channel_daily_costs d JOIN channels c ON c.channel_id = d.channel_id
       WHERE d.date < DATE '2026-01-10'
       GROUP BY 1, 2
     columns:

@@ -14,7 +14,7 @@
 | actual_amount | DECIMAL(12,2) | 实付金额 |
 | item_count | INT | 商品件数 |
 | coupon_id | INT | 使用的优惠券ID |
-| shipping_address | JSONB | 收货地址信息 |
+| shipping_address | `string` | 收货地址（JSON 文本；**不是 Postgres 的 JSONB**，取值用 `json_extract_scalar`）。**种子数据里整列为 NULL** |
 | remark | TEXT | 订单备注 |
 | placed_at | TIMESTAMP | 下单时间 |
 | paid_at | TIMESTAMP | 支付时间 |
@@ -88,7 +88,7 @@ SELECT
     ROUND(AVG(CASE WHEN status NOT IN ('cancelled')
         THEN actual_amount END), 2) AS avg_order_value
 FROM orders
-WHERE placed_at >= CURRENT_DATE - INTERVAL '30 days'
+WHERE placed_at >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '30' day
 GROUP BY DATE(placed_at)
 ORDER BY order_date DESC;
 ```
@@ -101,7 +101,7 @@ SELECT
     ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER(), 2) AS pct,
     SUM(actual_amount) AS total_amount
 FROM orders
-WHERE placed_at >= CURRENT_DATE - INTERVAL '30 days'
+WHERE placed_at >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '30' day
 GROUP BY status
 ORDER BY order_count DESC;
 ```
@@ -116,7 +116,7 @@ SELECT
     ROUND(COUNT(CASE WHEN status = 'cancelled' THEN 1 END) * 100.0 / COUNT(*), 2) AS cancel_rate,
     ROUND(COUNT(CASE WHEN status = 'refunded' THEN 1 END) * 100.0 / COUNT(*), 2) AS refund_rate
 FROM orders
-WHERE placed_at >= CURRENT_DATE - INTERVAL '30 days'
+WHERE placed_at >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '30' day
 GROUP BY DATE(placed_at)
 ORDER BY order_date DESC;
 ```

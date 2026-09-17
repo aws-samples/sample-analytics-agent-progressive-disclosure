@@ -56,7 +56,7 @@ SELECT
     COUNT(CASE WHEN exited_at IS NOT NULL THEN 1 END) AS exited
 FROM user_segment_members
 WHERE segment_id = ?
-  AND entered_at >= CURRENT_DATE - INTERVAL '30 days'
+  AND entered_at >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '30' day
 GROUP BY DATE(entered_at)
 ORDER BY date;
 ```

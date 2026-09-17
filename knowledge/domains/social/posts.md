@@ -34,13 +34,15 @@
 | review | 商品评测/种草笔记 |
 
 ### status 内容状态
-| 值 | 说明 |
-|----|------|
-| draft | 草稿 |
-| pending | 待审核 |
-| published | 已发布 |
-| hidden | 已隐藏（违规或用户删除） |
-| deleted | 已删除 |
+| 值 | 说明 | 实测行数 |
+|----|------|------|
+| published | 已发布 | 847 |
+| under_review | 审核中 | 55 |
+| draft | 草稿 | 49 |
+| deleted | 已删除 | 49 |
+
+> 审核态的值是 `under_review`，**不是** `pending`；也没有 `hidden`。
+> 只统计公开内容时用 `status = 'published'`。
 
 ## 索引
 
@@ -57,7 +59,7 @@ SELECT
     COUNT(*) AS post_count
 FROM posts
 WHERE status = 'published'
-    AND published_at >= CURRENT_DATE - INTERVAL '30 days'
+    AND published_at >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '30' day
 GROUP BY DATE(published_at), content_type
 ORDER BY pub_date DESC, post_count DESC;
 ```
@@ -74,7 +76,7 @@ SELECT
     ROUND(AVG((like_count + comment_count + share_count) * 100.0 / NULLIF(view_count, 0)), 2) AS avg_engagement_rate
 FROM posts
 WHERE status = 'published'
-    AND published_at >= CURRENT_DATE - INTERVAL '30 days'
+    AND published_at >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '30' day
 GROUP BY content_type
 ORDER BY avg_engagement_rate DESC;
 ```
@@ -89,10 +91,10 @@ SELECT
     SUM(po.like_count) AS total_likes,
     COUNT(DISTINCT po.user_id) AS creator_count
 FROM posts po
-CROSS JOIN LATERAL unnest(po.product_ids) AS p(product_id)
+CROSS JOIN UNNEST(po.product_ids) AS p(product_id)
 JOIN products pr ON p.product_id = pr.product_id
 WHERE po.status = 'published'
-    AND po.published_at >= CURRENT_DATE - INTERVAL '30 days'
+    AND po.published_at >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '30' day
 GROUP BY p.product_id, pr.product_name
 HAVING COUNT(DISTINCT po.post_id) >= 5
 ORDER BY total_exposure DESC

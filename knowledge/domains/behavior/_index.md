@@ -42,7 +42,9 @@ event_definitions (元数据)
 | 事件定义、事件分类、核心事件、事件schema | `event_definitions.md` |
 | 会话、session、访问时长、跳出率、入口页、退出页 | `sessions.md` |
 | 页面浏览、PV、停留时长、滚动深度 | `page_views.md` |
-| 事件、行为、点击、转化、漏斗、埋点 | `events.md` |
+| 事件、行为、点击、埋点 | `events.md` |
+| 转化、漏斗、转化率、流失在哪 | `events.md` **+ `analysis/funnel_analysis.md`**（漏斗有口径硬约束，两个都要读，哪怕只是取数） |
+| 留存、cohort、第N天还在吗、粘性 | `events.md`（活跃源）**+ `analysis/retention_curve.md`**（分子必须限定在 cohort 内；且曲线不衰减时留存结论不可用——算完要按那份文档的判据看形状，两个都要读，哪怕只是取数） |
 | 流量来源、UTM、渠道归因 | `sessions.md` |
 
 ## 常见分析场景
@@ -50,7 +52,9 @@ event_definitions (元数据)
 1. **事件埋点管理**: 加载 `event_definitions.md`
 2. **会话分析/流量分析**: 加载 `sessions.md`
 3. **页面浏览分析**: 加载 `page_views.md`
-4. **漏斗转化分析**: 加载 `events.md`
+4. **漏斗转化分析**: 加载 `events.md` + `analysis/funnel_analysis.md`
+   （**取数题也要读后者**：漏斗每步必须是上一步的子集，各步各数一遍会得出
+   「结算人数 > 浏览人数」这种反向结论，本项目真踩过）
 5. **用户行为路径**: 加载 `sessions.md` + `page_views.md` + `events.md`
 6. **渠道归因分析**: 加载 `sessions.md` + `events.md`
 

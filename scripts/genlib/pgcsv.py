@@ -15,6 +15,7 @@ CSV 约定(与 \copy ... WITH CSV HEADER 对齐):
 """
 from __future__ import annotations
 import csv
+import datetime as dt
 import io
 import json
 import numpy as np
@@ -55,6 +56,16 @@ def _cell(v):
         return json.dumps(v, ensure_ascii=False)
     if isinstance(v, np.datetime64):
         return np.datetime_as_string(v, unit='s')
+    if isinstance(v, (dt.datetime, dt.date)):
+        # 走到这里的是 **object 列里的** 时间戳：条件时间列（`_cond_ts` / `ts_offset`
+        # 那类要按掩码置空的）只能用 object 数组表达,None 与 datetime 混在一起,
+        # 所以 write_table 上面那段整列向量化转换不认它,逐格落到这里。
+        #
+        # 必须显式给一支,不能落到下面的 str()：`str(datetime)` 用**空格**分隔日期与时间,
+        # 而 datetime64 那一支给的是 ISO 的 `T`。同一个文件里两种分隔符混着出现,而且
+        # 只在「可空的时间列」上出现——这类列恰好是最少被抽查的。isoformat() 与
+        # np.datetime_as_string(unit='s') 逐字符一致。
+        return v.isoformat()
     return str(v)
 
 
@@ -76,7 +87,13 @@ def write_table(path: str, columns: dict[str, np.ndarray],
             prepared[k] = arr
 
     with open(path, 'w', encoding='utf-8', newline='') as f:
-        w = csv.writer(f, quoting=csv.QUOTE_MINIMAL)  # nosemgrep: use-defusedcsv —— 写出的是本项目生成的演示数据,非不可信输入
+        # lineterminator 必须显式给 '\n'：csv.writer 的默认值是 **'\r\n'**,而这些文件
+        # 的下游是 Hadoop 的 LineRecordReader（S3 → Iceberg 装载),它只按 '\n' 切行,
+        # 于是每行末尾多出的 '\r' 会留在最后一列的值里。最后一列往往是 created_at,
+        # 结果是 `CAST(... AS timestamp(6))` 在装载时报错,而报错完全指不到成因;
+        # 若最后一列恰好是文本列则更糟——不报错,值里静默多一个不可见字符。
+        # 仓库里现有的 data/csv/*.csv 是 LF,load.py 的 preflight 有一条断言盯着这件事。
+        w = csv.writer(f, quoting=csv.QUOTE_MINIMAL, lineterminator='\n')  # nosemgrep: use-defusedcsv —— 写出的是本项目生成的演示数据,非不可信输入
         w.writerow(names)
         for start in range(0, n, chunk_rows):
             end = min(start + chunk_rows, n)

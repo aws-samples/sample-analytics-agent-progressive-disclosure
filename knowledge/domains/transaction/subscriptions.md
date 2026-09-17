@@ -22,30 +22,27 @@
 
 ### status 订阅状态
 
-| 值 | 说明 |
-|----|------|
-| active | 生效中 |
-| cancelled | 已取消（用户主动取消） |
-| expired | 已过期（到期未续费） |
+| 值 | 说明 | 实测行数 |
+|----|------|------|
+| active | 生效中 | 36 |
+| expired | 已过期（到期未续费） | 14 |
 
-### plan_name 常见订阅计划
+> 全表 50 行，只有这两个值；`cancelled` 在业务上存在，但种子数据里没有。
 
-| 值 | 说明 | 价格（示例） |
-|----|------|--------------|
-| monthly_basic | 月度基础会员 | 9.9 |
-| monthly_premium | 月度高级会员 | 19.9 |
-| yearly_basic | 年度基础会员 | 99 |
-| yearly_premium | 年度高级会员 | 199 |
+### plan_name 订阅计划
 
-### cancel_reason 常见取消原因
+| 值 | 说明 | 实测行数 |
+|----|------|------|
+| 月度会员 | 按月订阅 | 29 |
+| 季度会员 | 按季订阅 | 12 |
+| 年度会员 | 按年订阅 | 9 |
 
-| 值 | 说明 |
-|----|------|
-| too_expensive | 价格太贵 |
-| not_useful | 功能不需要 |
-| found_alternative | 找到替代产品 |
-| temporary | 临时不需要 |
-| other | 其他原因 |
+> **是中文值**，不是 `monthly_basic` 那套英文枚举（旧文档写过）。价格看 `plan_price` 列。
+
+### cancel_reason 取消原因
+
+> ⚠️ **这一列在种子数据里整列为 NULL**（50 行全空，因为没有 `cancelled` 状态的订阅）。
+> 做流失原因分析在这份数据上无素材。
 
 ## 索引
 
@@ -76,13 +73,15 @@ SELECT
     COUNT(CASE WHEN status = 'expired' THEN 1 END) AS expired,
     ROUND(COUNT(CASE WHEN status = 'active' THEN 1 END) * 100.0 / COUNT(*), 2) AS retention_rate
 FROM subscriptions
-WHERE start_date >= CURRENT_DATE - INTERVAL '12 months'
+WHERE start_date >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '12' month
 GROUP BY DATE_TRUNC('month', start_date)
 ORDER BY start_month DESC;
 ```
 
 ### 取消原因分析
 ```sql
+-- ⚠️ 在种子数据上这条查询返回空集：没有 cancelled 状态的订阅，cancel_reason 整列 NULL。
+-- 保留它是为了说明写法，别把空结果解读成「没人取消订阅」。
 SELECT
     plan_name,
     cancel_reason,
@@ -90,7 +89,7 @@ SELECT
     ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER(PARTITION BY plan_name), 2) AS pct
 FROM subscriptions
 WHERE status = 'cancelled'
-  AND cancelled_at >= CURRENT_DATE - INTERVAL '90 days'
+  AND cancelled_at >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '90' day
 GROUP BY plan_name, cancel_reason
 ORDER BY plan_name, cancel_count DESC;
 ```

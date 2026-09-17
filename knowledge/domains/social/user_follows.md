@@ -59,7 +59,7 @@ SELECT
     COUNT(*) AS new_follows
 FROM user_follows
 WHERE following_id = :target_user_id
-    AND created_at >= CURRENT_DATE - INTERVAL '30 days'
+    AND created_at >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '30' day
 GROUP BY DATE(created_at)
 ORDER BY follow_date;
 ```

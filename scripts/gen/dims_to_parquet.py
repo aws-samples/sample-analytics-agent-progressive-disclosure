@@ -33,7 +33,10 @@ import ddl  # noqa: E402
 ROOT = HERE.parent.parent
 CSV_DIR = ROOT / "data" / "csv"
 
-DIMS = ["categories", "products", "product_tags", "channels", "event_definitions",
+# products / product_tags **不在这里**：它们已由 scripts/gen 生成（tables.py 的
+# _prep_products / _prep_product_tags，见 D-02）。留在这个清单里会让 data/csv 的 200 行
+# v1 商品覆盖生成器产出的 4133 行——同一张表两个来源，谁最后写谁赢，还取决于跑的顺序。
+DIMS = ["categories", "channels", "event_definitions",
         "user_segments", "campaigns", "coupons", "banners", "ab_tests",
         "ab_test_variants", "ad_campaigns", "ad_creatives", "channel_daily_costs"]
 

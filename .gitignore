@@ -46,3 +46,17 @@ infra/deploy.local.sh
 
 # 本地环境覆盖(真实账号守卫等,见 .env.local.example)
 .env.local
+
+# eval 的非主报告:--dry-run 的产物(只证明金标 SQL 能跑,不含任何判定结果)和
+# --cases cases_traps.json 那份补充集的报告。eval/report.md + eval/report.json
+# 是**跟踪**的(它们是"上一次全量跑到底是什么结果"的原件);要归档一轮结果请写进
+# eval/baseline/,别让这几个中间产物混进 diff。
+eval/report.dryrun*.json
+eval/report.traps.json
+eval/report.traps.md
+
+# 本机 pip 离线轮子缓存(127 MB,给没网的环境装 backend/requirements.txt 用)。
+# 它不是交付物,进了 git 就是把整份依赖二进制塞进仓库历史。
+backend/wheelhouse/
+# 别家 CLI 的本地配置,与本项目的运行无关。
+.codex/

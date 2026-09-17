@@ -17,6 +17,7 @@
 """
 from __future__ import annotations
 
+import statistics
 import zlib
 
 import numpy as np
@@ -96,28 +97,72 @@ def expand_ids(parent_ids: np.ndarray, counts: np.ndarray) -> np.ndarray:
 
 
 def unique_pairs(rng: np.random.Generator, n: int, a_start: int, a_n: int,
-                 b_start: int, b_n: int, sigma: float = SIGMA_DEFAULT
+                 b_start: int, b_n: int, sigma: float = SIGMA_DEFAULT,
+                 sigma_b: float = 0.0, recip: float = 0.0
                  ) -> tuple[np.ndarray, np.ndarray]:
     """生成 n 对互不相同、且两端不相等的 (a, b)。用于关注关系这类无向/有向唯一边。
 
     做法：超量抽样 → 复合键去重 → 去自环 → 截断到 n。超采样系数按经验 1.6 起，
     不够就加倍重试，避免稀疏图上死循环。
+
+    ## 两端各自的集中度必须能分开设（sigma / sigma_b）
+
+    原来只有一个 `sigma`，且**固定作用在 a 端**、b 端一律 `fk_uniform`。用在
+    `post_likes(user_id, post_id)` 上就是「少数用户点很多赞、而每个帖子拿到的赞
+    几乎一样多」——把偏斜给错了一侧。真实形态是反过来的：内容热度的长尾远比
+    用户勤奋度的长尾陡。`user_follows` 同理，粉丝数（入度）该重尾，关注数（出度）
+    不该那么重。这两处的判据见 `scripts/lakehouse/verify_behavior.py` 的
+    `like_post_tail` / `follow_in_tail` / `follow_gini_gap`。
+
+    `sigma_b=0` 时走 `fk_uniform`，**与加这个参数之前逐位相同**（rng 调用序列不变），
+    所以 `user_segment_members` / `ab_test_assignments` 这些老调用点不受影响。
+
+    ## recip：有向图的互关比例
+
+    `recip>0` 时把约 `recip` 比例的边改写成「互关」（同时存在 a→b 和 b→a）。
+    独立抽两端的话互关率就是随机基线（约 `n/(a_n·b_n)`），社交图不长这样。
+
+    实现是**原地改写**，不是追加：从「反向边尚不存在」的行里取头部 k 条当种子，
+    把尾部 k 条的槽位改写成种子的反向边。不能写成「先 append 反向边再截断到 n」——
+    追加的边全落在尾部，而截断恰好把尾部切掉，于是互关率一条都没涨、还完全静默。
+    结果集 = (原边 − 尾部 k 条) ∪ (头部 k 条的反向边)，三条性质由构造保证：行数仍是
+    `n`、复合键仍唯一（反向边原本不在集合里）、无自环（非自环的反向边也非自环）。
+
+    只在两端同域（`a_start==b_start` 且 `a_n==b_n`，即关注关系这类同构图）时有意义。
     """
     need = n
     factor = 1.6
     for _ in range(8):
         m = int(need * factor)
         a = fk_skewed(rng, m, a_start, a_n, sigma)
-        b = fk_uniform(rng, m, b_start, b_n)
+        b = (fk_uniform(rng, m, b_start, b_n) if sigma_b <= 0
+             else fk_skewed(rng, m, b_start, b_n, sigma_b))
         keep = a != b
         a, b = a[keep], b[keep]
         composite = a.astype(np.int64) * (b_n + 1) + (b - b_start)
         _, uidx = np.unique(composite, return_index=True)
         a, b = a[np.sort(uidx)], b[np.sort(uidx)]
         if len(a) >= need:
-            return a[:need], b[:need]
+            return _add_recip(a[:need], b[:need], b_start, b_n, recip)
         factor *= 2
-    return a, b          # 图太稀疏，返回能拿到的最大唯一集
+    return _add_recip(a, b, b_start, b_n, recip)   # 图太稀疏，返回能拿到的最大唯一集
+
+
+def _add_recip(a: np.ndarray, b: np.ndarray, b_start: int, b_n: int, recip: float
+               ) -> tuple[np.ndarray, np.ndarray]:
+    """把约 recip 比例的边原地改写成互关。理由与不变量见 `unique_pairs` docstring。"""
+    if recip <= 0 or len(a) == 0:
+        return a, b
+    key = a * (b_n + 1) + (b - b_start)
+    rev = b * (b_n + 1) + (a - b_start)
+    free = np.flatnonzero(~np.isin(rev, key))       # 反向边尚不存在的行
+    k = min(int(len(a) * recip / 2.0), len(free) // 2)
+    if k <= 0:
+        return a, b
+    seeds, slots = free[:k], free[len(free) - k:]
+    a2, b2 = a.copy(), b.copy()
+    a2[slots], b2[slots] = b[seeds], a[seeds]
+    return a2, b2
 
 
 # ---------------------------------------------------------------- 枚举 / 标量
@@ -142,6 +187,44 @@ def int_weighted(rng: np.random.Generator, n: int, values: list[int],
     w = np.asarray(weights, dtype=np.float64)
     vals = np.asarray(values, dtype=np.int64)
     return vals[rng.choice(len(vals), size=n, replace=True, p=w / w.sum())]
+
+
+_ND = statistics.NormalDist()
+
+
+def _z_cuts(weights: list[float]) -> np.ndarray:
+    """加权档位的累积概率 → 标准正态分位点。用于把「按权重抽档」表达成「切 z 轴」。"""
+    w = np.asarray(weights, dtype=np.float64)
+    cum = np.cumsum(w / w.sum())[:-1]
+    return np.array([_ND.inv_cdf(float(c)) for c in cum], dtype=np.float64)
+
+
+def coupled_ladders(rng: np.random.Generator, n: int,
+                    values_a: list[int], weights_a: list[float],
+                    values_b: list[int], weights_b: list[float],
+                    rho: float) -> tuple[np.ndarray, np.ndarray]:
+    """两列有序档位按相关系数 rho 联动，**两边的边缘分布逐档精确不变**。
+
+    用在「停留时长 ⟷ 滚动深度」这类本该同向的一对列上：各自独立抽的话相关系数是 0，
+    于是「读得久的页面滚得更深」这条最基本的行为常识在数据里不成立
+    （判据 `pv_dwell_scroll_corr`）。
+
+    做法是**高斯 copula**：两个标准正态 z1、z2 → `z_b = ρ·z1 + √(1−ρ²)·z2`，
+    z_b 仍是标准正态，所以两列各按自己的 z 分位点切档，边缘分布不受影响。
+    先试过更朴素的「先抽 u，再加噪声 u+N(0,σ) 后裁剪到 [0,1)」——裁剪把质量堆到两端，
+    实测把时长均值从 33.2 顶到 39.4，**为了造相关性把分布本身改掉了**。
+
+    性能上刻意不逐行算 `erf`：改成把累积权重一次性映到 z 空间（`_z_cuts`），
+    再对原始正态做 `searchsorted`。page_views 在全量规模上是千万行级，
+    `np.vectorize(math.erf)` 在那个量级是分钟级的开销。
+    """
+    z1 = rng.standard_normal(n)
+    z2 = rng.standard_normal(n)
+    zb = rho * z1 + np.sqrt(max(1.0 - rho * rho, 0.0)) * z2
+    va = np.asarray(values_a, dtype=np.int64)
+    vb = np.asarray(values_b, dtype=np.int64)
+    return (va[np.searchsorted(_z_cuts(weights_a), z1, side="right")],
+            vb[np.searchsorted(_z_cuts(weights_b), zb, side="right")])
 
 
 def bool_p(rng: np.random.Generator, n: int, p: float) -> np.ndarray:
@@ -238,6 +321,65 @@ def token_text(rng: np.random.Generator, n: int, prefix: str, width: int = 16) -
     v = rng.integers(0, 16 ** 8, size=n, dtype=np.int64)
     hexed = np.array([f"{x:08x}" for x in v], dtype=object)   # n 通常不大的列才用
     return np.char.add(prefix, hexed.astype("U32"))
+
+
+def combine(rng: np.random.Generator, n: int, *pools: np.ndarray) -> np.ndarray:
+    """从多个词池各抽一次、按位拼接（组合式词池）。
+
+    单池的基数就是列的基数——旧 `device_model` 只有 40 种、旧 `utm_campaign` 只有
+    50 种，`GROUP BY` 一下就露馅。组合后基数是各池之积，既有多样性又不必手写几万条。
+    各槽位共用该列的 rng（逐槽抽取），确定性契约不变：仍只由 (seed, 表, 列, 块) 决定。
+    """
+    parts = [np.asarray(from_pool(rng, n, p), dtype=str) for p in pools]
+    out = parts[0]
+    for p in parts[1:]:
+        out = np.char.add(out, p)
+    return out
+
+
+_HEX = np.array(list("0123456789abcdef"), dtype="U1")
+
+
+def _hex_of(v: np.ndarray, width: int) -> np.ndarray:
+    """uint64 → 定长小写十六进制。
+
+    向量化实现：查表填一个 (n, width) 的 U1 矩阵，再把相邻 U1 直接重解释成定长串
+    （U1 每字符 4 字节，view 到 U{width} 即为逐行拼接）。不逐行 f-string——
+    `events.device_id` 在 8000 万规模上有 850 万行，per-row f-string 会跑成分钟级。
+    """
+    digits = np.empty((len(v), width), dtype="U1")
+    for k in range(width):
+        digits[:, width - 1 - k] = _HEX[(v >> np.uint64(4 * k)) & np.uint64(0xF)]
+    return np.ascontiguousarray(digits).view(f"U{width}").reshape(len(v))
+
+
+_MIX = np.uint64(0x9E3779B97F4A7C15)          # 黄金比例奇数
+
+
+def opaque_id(ids: np.ndarray, width: int = 16) -> np.ndarray:
+    """int64 id → 稳定的不透明十六进制串（形如 `9e1c4a07b3d2f865`）。
+
+    device_id 要同时满足三件事，缺一件都不行：
+    1. 看起来像真实设备标识，不是 `dev_1`；
+    2. 同一个 id 在任何表、任何分块里映射到同一个串——`sessions` / `events` /
+       `user_devices` 三张表的 device_id 必须继续对得上（它们各自从 user_id 或
+       行号推，这里只换编码，不换被编码的那个整数）；
+    3. 不撞：`user_devices.device_id` 是 PK。
+
+    乘奇数与 xorshift 在 mod 2^64 上都是双射，复合仍是双射，所以第 3 点由构造保证、
+    不靠概率。**前提是 width=16（64 bit 全留）**；调小会截断，双射性随之失效。
+    """
+    v = np.asarray(ids, dtype=np.int64).astype(np.uint64) * _MIX
+    v ^= v >> np.uint64(29)
+    v *= _MIX
+    v ^= v >> np.uint64(32)
+    return _hex_of(v, width)
+
+
+def rand_hex(rng: np.random.Generator, n: int, width: int = 64) -> np.ndarray:
+    """随机定长十六进制串（push_token 这类不透明令牌，真实形态就是一串 hex）。"""
+    d = _HEX[rng.integers(0, 16, size=(n, width))]
+    return np.ascontiguousarray(d).view(f"U{width}").reshape(n)
 
 
 def null_out(rng: np.random.Generator, arr: np.ndarray, p: float) -> np.ndarray:

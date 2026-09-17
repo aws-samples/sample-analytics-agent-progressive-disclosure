@@ -29,6 +29,9 @@
 
 ## 构建口径（本表如何从基表算出）
 
+> 方言为 Trino（Athena）。真源是 `schema_manifest.yaml` 里的 Postgres 写法，
+> 由 `scripts/gen/pg_to_trino.py` 转换而来。
+
 ```sql
 SELECT event_id, user_id, session_id, event_name, event_time, page_name
 FROM events

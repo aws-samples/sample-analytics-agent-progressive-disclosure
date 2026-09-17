@@ -23,11 +23,17 @@
 ## 字段枚举值
 
 ### push_type 推送类型
-| 值 | 说明 |
-|----|------|
-| marketing | 营销推送（促销、活动通知） |
-| transactional | 交易推送（订单状态、物流更新） |
-| reminder | 提醒推送（购物车提醒、签到提醒） |
+| 值 | 说明 | 实测行数 |
+|----|------|------|
+| reminder | 提醒推送（购物车提醒、签到提醒） | 2,066 |
+| social | 社交推送（关注、评论、私信提醒） | 2,033 |
+| promotion | 营销推送（促销、活动通知） | 1,999 |
+| order | 交易推送（订单状态、物流更新） | 1,967 |
+| system | 系统通知 | 1,935 |
+
+> 全表 10,000 行、5 类，**分布均匀**（1,935–2,066）。营销推送的值是 `promotion`
+> （**不是** `marketing`）、交易推送是 `order`（**不是** `transactional`）——旧文档两个都写错了，
+> 还漏了 `social` 和 `system`。
 
 ### 状态判断逻辑
 | 场景 | 判断条件 |
@@ -37,14 +43,14 @@
 | 发送失败 | `failure_reason IS NOT NULL` |
 | 待发送 | `scheduled_at IS NOT NULL AND sent_at IS NULL` |
 
-### failure_reason 常见失败原因
-| 值 | 说明 |
-|----|------|
-| device_unregistered | 设备未注册推送 |
-| token_expired | 推送token过期 |
-| user_opted_out | 用户关闭推送权限 |
-| rate_limited | 推送频率限制 |
-| network_error | 网络错误 |
+### failure_reason 失败原因
+
+> ⚠️ **这一列在种子数据里 10,000 行全为 NULL**。旧文档列过 `device_unregistered` /
+> `token_expired` / `user_opted_out` / `rate_limited` / `network_error`，数据里一个都没有。
+>
+> 连带影响上面的「状态判断逻辑」：**按 `failure_reason IS NOT NULL` 判失败恒为 0 行**，
+> 所以这份数据上算不出推送失败率，也做不了失败原因分析。
+> 能算的是送达率（`is_delivered`）和打开率（`is_opened`）。
 
 ## 索引
 
@@ -86,7 +92,7 @@ SELECT
     ROUND(COUNT(CASE WHEN is_opened THEN 1 END) * 100.0 /
           NULLIF(COUNT(CASE WHEN is_delivered THEN 1 END), 0), 2) AS open_rate
 FROM push_notifications
-WHERE sent_at >= CURRENT_DATE - INTERVAL '30 days'
+WHERE sent_at >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '30' day
 GROUP BY push_type
 ORDER BY total_sent DESC;
 ```
@@ -99,7 +105,7 @@ SELECT
     ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER(), 2) AS pct
 FROM push_notifications
 WHERE failure_reason IS NOT NULL
-  AND sent_at >= CURRENT_DATE - INTERVAL '7 days'
+  AND sent_at >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '7' day
 GROUP BY failure_reason
 ORDER BY failure_count DESC;
 ```

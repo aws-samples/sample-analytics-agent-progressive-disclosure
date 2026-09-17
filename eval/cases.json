@@ -1,5 +1,5 @@
 {
-  "$comment": "Eval 用例集。每题: id/level/question/golden(金标口径, 可多个可接受变体)/judge(比对方式)。golden.sql 在与 agent 相同的只读边界下执行, 其结果就是期望答案。judge.mode: scalar=单数值(容差比对) | set=无序集合(行集合重叠) | toplist=有序排行(前K命中率) | pair=两数值对比(各自容差)。scalar 的 value_hint 仅为人读注释, 真值以金标 SQL 现算为准(数据重新生成后无需改用例)。",
+  "$comment": "Eval 用例集。每题: id/level/question/golden(金标口径, 可多个可接受变体)/judge(比对方式)。golden.sql 在与 agent 相同的只读边界下执行, 其结果就是期望答案。judge.mode: scalar=单数值(容差比对) | set=无序集合(行集合重叠) | toplist=有序排行(前K命中率) | pair=两数值对比(各自容差)。scalar 的 value_hint 仅为人读注释, 真值以金标 SQL 现算为准(数据重新生成后无需改用例)。 金标写 Postgres 方言, 由 run_eval.py 按后端就地改写(Redshift 走 pg_to_redshift.py, Athena 走 pg_to_trino.py), 所以口径只有一份。为此金标必须写在「两种方言都能转」的子集里: 日期减天数写 - interval '7 days' 而不是 - 7(转换器认不出裸整数减的左边是不是日期, 而 Trino 的 date - integer 直接报类型错)。改完金标跑一遍 EXPLAIN 再提交。",
   "defaults": {
     "tolerance_pct": 0.5,
     "toplist_k": 5,
@@ -84,15 +84,15 @@
       "golden": [
         {
           "label": "events last day distinct users",
-          "sql": "SELECT count(DISTINCT user_id) FROM events WHERE event_time::date=(SELECT max(event_time)::date FROM events) AND user_id IS NOT NULL"
+          "sql": "SELECT count(DISTINCT user_id) FROM events WHERE event_time::date=(SELECT max(as_of_date) FROM meta_snapshot) AND user_id IS NOT NULL"
         },
         {
           "label": "mart_daily_kpi last day",
-          "sql": "SELECT dau FROM mart_daily_kpi ORDER BY dt DESC LIMIT 1"
+          "sql": "SELECT dau FROM mart_daily_kpi WHERE dt=(SELECT max(as_of_date) FROM meta_snapshot)"
         }
       ],
-      "value_hint": 27,
-      "trap": "必须以数据 max(event_time) 为锚, 用 current_date 会得 0"
+      "value_hint": "30159（2026-09-17 全量批次实测；重灌会变，判分以金标现算为准）",
+      "trap": "锚点必须是 (SELECT max(as_of_date) FROM meta_snapshot): 用 current_date 得 0（不报错、静默空集）；用 max(event_time) 这类逐表 max 是另一种错——它在 events 上恰好等于锚点，换一张表就不等了（sessions.start_time 越到 2026-01-25，channel_daily_costs 铺到 2026-09-01），而且不查空、只给一个错的数。金标本身曾经写的就是逐表 max，等于在奖励这个反模式"
     },
     {
       "id": "L1-ab-running",
@@ -193,10 +193,10 @@
       "golden": [
         {
           "label": "page_views 7d anchored",
-          "sql": "SELECT page_name FROM page_views WHERE view_time >= (SELECT max(view_time)::date FROM page_views) - interval '6 days' GROUP BY page_name ORDER BY count(*) DESC LIMIT 10"
+          "sql": "SELECT page_name FROM page_views WHERE view_time >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '6 days' GROUP BY page_name ORDER BY count(*) DESC LIMIT 10"
         }
       ],
-      "trap": "时间锚点用 max(view_time); 用 current_date 得空结果"
+      "trap": "时间锚点用 (SELECT max(as_of_date) FROM meta_snapshot); 用 current_date 得空结果, 用 max(view_time) 这类逐表 max 得错数"
     },
     {
       "id": "L2-top-liked-posts",
@@ -217,7 +217,7 @@
           "sql": "SELECT title FROM posts ORDER BY like_count DESC LIMIT 5"
         }
       ],
-      "trap": "冗余字段 like_count 与实际 post_likes 行数不一致, 两种口径都算对"
+      "trap": "原意是「冗余字段 like_count 与 post_likes 行数不一致, 两种口径都算对」。2026-08-28 实测: 线上库 posts.like_count 1000 行全为 0(comment_count / share_count 同样整列 0, view_count 正常 136~99782, post_likes 有 35668 行真数据), 所以第二个 golden 变体 ORDER BY like_count DESC LIMIT 5 是死的——它返回任取 5 行, 「两种口径」此刻只有一种活着。成因是重灌缺口不是回归: 生成器已改成三计数器从明细回填(scripts/gen/tables.py 的 _post_counters, selftest_closures.py 断言 posts.like_count == post_likes 行数, L8 有 like-counter-drift 负例), 线上库装的是 data/csv 的 v1 产出。重灌后此条自动恢复。另注: 判分是 toplist k=5 min_hit=0.6, 而 post_likes 口径下 Top5 的第 5 名是 51 赞五路并列, 并列由 min_hit 吸收; golden 用 p.title 认帖子(1000 行 / 961 个不同标题, 38 个标题重复覆盖 77 行)也靠 Top5 恰好互不重名才没发作——改成 post_id 要动金标, 需一次完整 L7"
     },
     {
       "id": "L2-coupon-usage-rate",
@@ -247,19 +247,19 @@
       "golden": [
         {
           "label": "actual_amount valid status",
-          "sql": "SELECT sum(actual_amount) FROM orders WHERE status IN ('paid','shipped','delivered') AND placed_at >= (SELECT max(placed_at)::date FROM orders) - interval '29 days'"
+          "sql": "SELECT sum(actual_amount) FROM orders WHERE status IN ('paid','shipped','delivered') AND placed_at >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '29 days'"
         },
         {
           "label": "total_amount valid status",
-          "sql": "SELECT sum(total_amount) FROM orders WHERE status IN ('paid','shipped','delivered') AND placed_at >= (SELECT max(placed_at)::date FROM orders) - interval '29 days'"
+          "sql": "SELECT sum(total_amount) FROM orders WHERE status IN ('paid','shipped','delivered') AND placed_at >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '29 days'"
         },
         {
           "label": "mart_daily_revenue 30d",
-          "sql": "SELECT sum(gmv) FROM mart_daily_revenue WHERE dt >= (SELECT max(dt) FROM mart_daily_revenue) - 29"
+          "sql": "SELECT sum(gmv) FROM mart_daily_revenue WHERE dt >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '29 days'"
         }
       ],
-      "trap": "有效订单状态 + max(placed_at) 时间锚点, 双重口径陷阱",
-      "value_hint": "~284 万"
+      "trap": "有效订单状态 + meta_snapshot 锚点, 双重口径陷阱（锚点不许写 current_date, 也不许写 max(placed_at) 这类逐表 max）",
+      "value_hint": "5767 万（2026-09-17 全量批次实测 57673919.78；种子那一批是约 284 万）"
     },
     {
       "id": "L3-top-products-gmv",
@@ -289,14 +289,15 @@
       "golden": [
         {
           "label": "no session in 30d",
-          "sql": "SELECT count(*) FROM users u WHERE NOT EXISTS (SELECT 1 FROM sessions s WHERE s.user_id=u.user_id AND s.start_time >= (SELECT max(start_time) FROM sessions) - interval '30 days')"
+          "sql": "SELECT count(*) FROM users u WHERE NOT EXISTS (SELECT 1 FROM sessions s WHERE s.user_id=u.user_id AND s.start_time >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '30 days')"
         },
         {
           "label": "last_active_at variant",
-          "sql": "SELECT count(*) FROM users WHERE last_active_at IS NULL OR last_active_at < (SELECT max(last_active_at) FROM users) - interval '30 days'"
+          "sql": "SELECT count(*) FROM users WHERE last_active_at IS NULL OR last_active_at < (SELECT max(as_of_date) FROM meta_snapshot) - interval '30 days'"
         }
       ],
-      "value_hint": "18 (sessions) / 174 (last_active_at) 两种口径差异大, 判分按命中任一"
+      "value_hint": "91291 (sessions) / 38591 (last_active_at) 两种口径差异大, 判分按命中任一（2026-09-17 全量批次实测；种子那一批是 18 / 174）",
+      "trap": "sessions.start_time 的 max 是 2026-01-25T00:00:42（跨过零点、伸出业务日历），所以这题用逐表 max 当锚点会把窗口整体推后一天；锚点一律用 meta_snapshot"
     },
     {
       "id": "L3-coupon-aov-compare",
@@ -328,16 +329,16 @@
       },
       "golden": [
         {
-          "label": "all-time distinct users",
-          "sql": "SELECT count(DISTINCT user_id) FILTER (WHERE event_name='view_product'), count(DISTINCT user_id) FILTER (WHERE event_name='add_to_cart'), count(DISTINCT user_id) FILTER (WHERE event_name='begin_checkout'), count(DISTINCT user_id) FILTER (WHERE event_name='purchase') FROM events"
+          "label": "all-time subset funnel",
+          "sql": "WITH w AS (SELECT user_id, event_name FROM events WHERE event_name IN ('view_product','add_to_cart','begin_checkout','purchase')), s1 AS (SELECT DISTINCT user_id FROM w WHERE event_name='view_product'), s2 AS (SELECT DISTINCT user_id FROM w WHERE event_name='add_to_cart' AND user_id IN (SELECT user_id FROM s1)), s3 AS (SELECT DISTINCT user_id FROM w WHERE event_name='begin_checkout' AND user_id IN (SELECT user_id FROM s2)), s4 AS (SELECT DISTINCT user_id FROM w WHERE event_name='purchase' AND user_id IN (SELECT user_id FROM s3)) SELECT (SELECT count(*) FROM s1), (SELECT count(*) FROM s2), (SELECT count(*) FROM s3), (SELECT count(*) FROM s4)"
         },
         {
-          "label": "30d anchored",
-          "sql": "SELECT count(DISTINCT user_id) FILTER (WHERE event_name='view_product'), count(DISTINCT user_id) FILTER (WHERE event_name='add_to_cart'), count(DISTINCT user_id) FILTER (WHERE event_name='begin_checkout'), count(DISTINCT user_id) FILTER (WHERE event_name='purchase') FROM events WHERE event_time >= (SELECT max(event_time)::date FROM events) - interval '29 days'"
+          "label": "30d anchored subset funnel",
+          "sql": "WITH w AS (SELECT user_id, event_name FROM events WHERE event_name IN ('view_product','add_to_cart','begin_checkout','purchase') AND event_time::date > (SELECT max(as_of_date) FROM meta_snapshot) - interval '30 days' AND event_time::date <= (SELECT max(as_of_date) FROM meta_snapshot)), s1 AS (SELECT DISTINCT user_id FROM w WHERE event_name='view_product'), s2 AS (SELECT DISTINCT user_id FROM w WHERE event_name='add_to_cart' AND user_id IN (SELECT user_id FROM s1)), s3 AS (SELECT DISTINCT user_id FROM w WHERE event_name='begin_checkout' AND user_id IN (SELECT user_id FROM s2)), s4 AS (SELECT DISTINCT user_id FROM w WHERE event_name='purchase' AND user_id IN (SELECT user_id FROM s3)) SELECT (SELECT count(*) FROM s1), (SELECT count(*) FROM s2), (SELECT count(*) FROM s3), (SELECT count(*) FROM s4)"
         }
       ],
-      "trap": "事件名是 view_product/add_to_cart/begin_checkout/purchase, 知识库文档里的示例用了不同事件名, 必须以表文档实际枚举为准",
-      "value_hint": "394/385/396/373 (全期) 或 197/190/194/190 (30天)"
+      "trap": "两个坑。(1) 事件名是 view_product/add_to_cart/begin_checkout/purchase, 必须以表文档实际枚举为准。(2) **每步各数一遍再排在一起不是漏斗**——那是四个互不相干的集合, 会得到 394/385/396/373（结算 396 > 浏览 394, 非单调）, 而这个非漏斗形态极易被误解释成「数据不衰减、是随机种子数据的问题」。第 i+1 步必须约束成第 i 步的子集, 见 knowledge/analysis/funnel_analysis.md 的约束 A。",
+      "value_hint": "394/314/258/199 (全期) 或 197/101/58/32 (30天锚定)。逐层流失 20%/18%/23%, 单调递减。旧金标写的 394/385/396/373 是独立计数的错口径, 已改。"
     },
     {
       "id": "L4-arpu-by-channel",
@@ -355,6 +356,28 @@
         }
       ],
       "trap": "归因表 first/last touch 各 175 行; 不指定归因口径时结果可能不同, min_hit 放宽到命中1个即可"
+    },
+    {
+      "id": "L5-retention-cohort",
+      "level": 5,
+      "question": "按注册周做留存 cohort 分析，最近 8 个注册周的周留存矩阵是什么样？",
+      "judge": {
+        "mode": "retention",
+        "tolerance_pct": 5.0,
+        "min_hit": 6
+      },
+      "golden": [
+        {
+          "label": "weekly matrix counts (full-window cohorts)",
+          "sql": "WITH a AS (SELECT max(as_of_date) AS d FROM meta_snapshot), cohort AS (SELECT user_id, date_trunc('week', registered_at::date) AS cw FROM users, a WHERE registered_at::date > a.d - interval '56 days'), activity AS (SELECT DISTINCT user_id, date_trunc('week', event_time::date) AS aw FROM events), m AS (SELECT c.cw, count(DISTINCT c.user_id) AS n, count(DISTINCT CASE WHEN act.aw = c.cw + interval '7 days' THEN c.user_id END) AS w1, count(DISTINCT CASE WHEN act.aw = c.cw + interval '14 days' THEN c.user_id END) AS w2, count(DISTINCT CASE WHEN act.aw = c.cw + interval '21 days' THEN c.user_id END) AS w3, count(DISTINCT CASE WHEN act.aw = c.cw + interval '28 days' THEN c.user_id END) AS w4 FROM cohort c LEFT JOIN activity act ON act.user_id = c.user_id GROUP BY c.cw) SELECT n, w1, w2, w3, w4 FROM m, a WHERE cw <= a.d - interval '28 days' AND n >= 10 ORDER BY cw"
+        },
+        {
+          "label": "weekly matrix pct (full-window cohorts)",
+          "sql": "WITH a AS (SELECT max(as_of_date) AS d FROM meta_snapshot), cohort AS (SELECT user_id, date_trunc('week', registered_at::date) AS cw FROM users, a WHERE registered_at::date > a.d - interval '56 days'), activity AS (SELECT DISTINCT user_id, date_trunc('week', event_time::date) AS aw FROM events), m AS (SELECT c.cw, count(DISTINCT c.user_id) AS n, count(DISTINCT CASE WHEN act.aw = c.cw + interval '7 days' THEN c.user_id END) AS w1, count(DISTINCT CASE WHEN act.aw = c.cw + interval '14 days' THEN c.user_id END) AS w2, count(DISTINCT CASE WHEN act.aw = c.cw + interval '21 days' THEN c.user_id END) AS w3, count(DISTINCT CASE WHEN act.aw = c.cw + interval '28 days' THEN c.user_id END) AS w4 FROM cohort c LEFT JOIN activity act ON act.user_id = c.user_id GROUP BY c.cw) SELECT round(100.0*w1/n,1), round(100.0*w2/n,1), round(100.0*w3/n,1), round(100.0*w4/n,1) FROM m, a WHERE cw <= a.d - interval '28 days' AND n >= 10 ORDER BY cw"
+        }
+      ],
+      "trap": "这道题的坑不在数值，在**结论**，而且第三个坑本身随数据变过一次。(1) cohort 时间列是 registered_at，users 上 created_at 也存在且逐行不相等，写错了 EXPLAIN 照样过、结果照样出。(2) 分子必须 JOIN 回 cohort 名单，只按时间筛活跃会算出 >100%（种子那一批实测 219/43 = 509%）。(3) **最难的一条**：结论怎么写取决于曲线是不是衰减的。v1 种子样本的活跃度与注册生命周期独立抽样，曲线不衰减，那是项目自己审计出来的 P0（docs/data-audit.md 把留存整类列为不可信），当时的正确答案是「给数字 + 明说这份数据算不出留存」，答成「曲线平稳、留得住」就是把数据缺陷报成了正面业务发现。全量重灌那一批的生成器给用户配了活跃半衰期（scripts/gen/tables.py 的 ENGAGEMENT_HALFLIFE），2026-09-17 实测 W1→W4 是 71.6→37.2（W4/W1≈0.52），曲线**是**衰减的——这时反过来照抄那句警告也是错的。判据写在 knowledge/analysis/retention_curve.md：W4/W1 ≥ 0.8 视为不衰减。judge_retention 现从金标的 pct 那一份量这个比值，再决定要不要开结论闸；写死的那一版在数据换掉之后开始要求 agent 说假话。另外两句两批都成立：最早那个 cohort 常是**部分周**（人数小、W1 偏高，实测 89.6%），右下角三角的 0 是右删失——都对，但都不能替代对曲线形状的判断。",
+      "value_hint": "2026-09-17 实测（锚点 2026-01-24，全量批次）：满窗 cohort 5 个（注册周 2025-11-24 部分周 / 12-01 / 12-08 / 12-15 / 12-22），人数 2630/15843/16545/17106/17606，W1→W4 百分比分别是 89.6/59.8/47.6/40.8、72.9/53.4/44.7/39.0、71.6/51.9/42.3/37.2、71.0/51.3/42.3/37.4、70.0/50.1/41.9/32.9。前陡后平、W4/W1≈0.52，是正常衰减（种子那一批同口径是 4 个 cohort 41/37/41/49 人、W1 43.9/48.6/43.9/40.8% 到 W4 41.5/37.8/46.3/46.9%，几乎水平——那才是数据缺陷）。首行 89.6% 高是因为它只有 11-30 一天的注册人。"
     },
     {
       "id": "L5-repurchase-rate",
@@ -385,14 +408,104 @@
       "golden": [
         {
           "label": "mart_daily_kpi wow",
-          "sql": "WITH a AS (SELECT max(dt) m FROM mart_daily_kpi) SELECT (SELECT sum(gmv) FROM mart_daily_kpi, a WHERE dt > m-7), (SELECT sum(gmv) FROM mart_daily_kpi, a WHERE dt <= m-7 AND dt > m-14)"
+          "sql": "WITH a AS (SELECT max(as_of_date) m FROM meta_snapshot) SELECT (SELECT sum(gmv) FROM mart_daily_kpi, a WHERE dt > m - interval '7 days'), (SELECT sum(gmv) FROM mart_daily_kpi, a WHERE dt <= m - interval '7 days' AND dt > m - interval '14 days')"
         },
         {
           "label": "raw orders wow",
-          "sql": "WITH a AS (SELECT max(placed_at)::date m FROM orders) SELECT (SELECT sum(actual_amount) FROM orders, a WHERE status IN ('paid','shipped','delivered') AND placed_at::date > m-7), (SELECT sum(actual_amount) FROM orders, a WHERE status IN ('paid','shipped','delivered') AND placed_at::date <= m-7 AND placed_at::date > m-14)"
+          "sql": "WITH a AS (SELECT max(as_of_date) m FROM meta_snapshot) SELECT (SELECT sum(actual_amount) FROM orders, a WHERE status IN ('paid','shipped','delivered') AND placed_at::date > m - interval '7 days'), (SELECT sum(actual_amount) FROM orders, a WHERE status IN ('paid','shipped','delivered') AND placed_at::date <= m - interval '7 days' AND placed_at::date > m - interval '14 days')"
         }
       ],
-      "value_hint": "675179 vs 708728, 跌约 4.7%; 方向判断也计入 insight 检查"
+      "value_hint": "13926391.12 vs 14280957.12, 跌约 2.5%; 方向判断也计入 insight 检查（2026-09-17 全量批次实测；种子那一批是 675179 vs 708728, 跌 4.7%）"
+    },
+    {
+      "id": "L3-refund-total",
+      "level": 3,
+      "question": "这段时间一共退了多少钱？退款总额是多少？",
+      "judge": {
+        "mode": "scalar"
+      },
+      "golden": [
+        {
+          "label": "全量退款 (fin_daily_revenue, 按 refunded_at 建轴)",
+          "sql": "SELECT sum(refund_amount) FROM fin_daily_revenue"
+        },
+        {
+          "label": "同口径的基表校验",
+          "sql": "SELECT sum(actual_amount) FROM orders WHERE status = 'refunded' AND refunded_at IS NOT NULL"
+        }
+      ],
+      "trap": "mart_daily_kpi.refund_amt 的日期轴由 placed_at 决定、不含 refunded_at, 轴末之后的退款被 LEFT JOIN 丢掉且不报错——全量退款一律走 fin_daily_revenue。**这个缺陷在当前这批数据上不显现**: 2026-09-17 实测三个数全等 9897495.82（种子那一批是 963560.92 ⟷ 925471.33, 偏低 3.95%）, 因为重灌后没有一笔退款落在轴末之后。缺陷代码一字未改, 只是这批数据碰不到它, 所以别把「数相等」读成「口径对齐了」。verify_mart_parity.py 的 QUIRKS 钉的是机制（等号两边现场用 SQL 复刻）而不是数值, agent 侧靠表卡片的路由警告",
+      "value_hint": "9897495.82（2026-09-17 全量批次实测；种子那一批是 963560.92）"
+    },
+    {
+      "id": "L3-channel-cost-total",
+      "level": 3,
+      "question": "各渠道投放一共花了多少钱？总花费是多少？",
+      "judge": {
+        "mode": "scalar"
+      },
+      "golden": [
+        {
+          "label": "真实花费 (channel_daily_costs 明细)",
+          "sql": "SELECT sum(cost) FROM channel_daily_costs"
+        },
+        {
+          "label": "同口径的集市层校验 (mart_channel_daily)",
+          "sql": "SELECT sum(cost) FROM mart_channel_daily"
+        }
+      ],
+      "trap": "查 dws_channel_weekly.cost 会得 524993074.37 —— 归因表在聚合前 LEFT JOIN, 一条成本行匹配 N 条归因就被数 N 遍。**虚高的倍数跟着归因表的规模走, 不是个固定值**: 2026-09-17 实测 120.6 倍（4351988.47 → 524993074.37）, 种子那一批只有 1.21 倍（1449872.13 → 1758934.34）。同表的 installs / weekly_cac 同样受扇出影响, 但 new_users 用了 count(DISTINCT) 不受影响",
+      "value_hint": "4351988.47（2026-09-17 全量批次实测；种子那一批是 1449872.13）"
+    },
+    {
+      "id": "L4-cac-lowest-channel",
+      "level": 4,
+      "question": "哪个渠道的获客成本最低？",
+      "judge": {
+        "mode": "toplist",
+        "k": 2,
+        "min_hit": 0.5
+      },
+      "golden": [
+        {
+          "label": "CAC 升序 (成本限制在业务日历轴内)",
+          "sql": "SELECT channel_name FROM mart_channel_daily WHERE dt <= (SELECT max(as_of_date) FROM meta_snapshot) GROUP BY channel_name HAVING sum(cost) > 0 AND sum(new_users_attributed) > 0 ORDER BY sum(cost)/sum(new_users_attributed) LIMIT 3"
+        }
+      ],
+      "trap": "两个坑叠在一起, 都不报错。① 成本表铺到 2026-09-01 而归因数据止于 2026-01-24: 不加 dt <= 锚点 就是拿轴外成本除轴内新客, 会答成「微博KOL 938.77 元最低」—— 那个渠道轴内一分钱没花 (成本行全在 2026-05-01~05-09), 便宜只是因为成本数据只覆盖 9 天; 次低的微信朋友圈广告同样轴内 0 成本。榜首两名恰好是轴内没花过钱的两个渠道。② CAC 的分子若是裸 sum(cost), 无成本渠道会返回 0.0 而不是 NULL, 于是 14 个渠道里 10 个「CAC 0 元」, 包括全量花了 25.2 万的快手信息流。所以 HAVING 必须同时排除 sum(cost)=0。金标别把锚点简化成 max(dt) —— 那正是 ① 的成因。指标层用 clamp_to_anchor + NULLIF 钉住这两条, verify_mart_parity.py --numbers 有对应回归",
+      "value_hint": 1373.55
+    },
+    {
+      "id": "L4-roi-cac-by-channel",
+      "level": 4,
+      "question": "最近30天各渠道的 ROI 和 CAC 分别是多少？",
+      "judge": {
+        "mode": "pair"
+      },
+      "golden": [
+        {
+          "label": "抖音搜索 近30天的 ROI 与 CAC (同锚点、带上界)",
+          "sql": "SELECT sum(gmv_attributed)/sum(cost) AS roi, sum(cost)/sum(new_users_attributed) AS cac FROM mart_channel_daily WHERE dt > (SELECT max(as_of_date) FROM meta_snapshot) - interval '30 days' AND dt <= (SELECT max(as_of_date) FROM meta_snapshot) AND channel_name = '抖音搜索'"
+        }
+      ],
+      "trap": "时间窗必须**同时**有下界和上界, 且锚点用 meta_snapshot.as_of_date 而不是 max(dt)。只写下界: 会把成本表 2026-09-01 的行捞进来, CAC 从 1816 涨到 15137。锚点用表自身 max(dt): 窗口落到 2026-08-02~09-01, 那段有成本、没有任何归因新客, CAC 返回 NULL、ROI 返回 0.0, agent 会照着报「最近 30 天 ROI 为 0」。14 个渠道里只有 4 个在这段窗口内既有成本又有归因 (抖音搜索/百度搜索/小红书搜索/B站UP主), 其余返回 NULL, 报结论时要说明可比范围",
+      "value_hint": "抖音搜索 ROI 20.662 / CAC 1353.29"
+    },
+    {
+      "id": "L3-cac-overall",
+      "level": 3,
+      "question": "整体的获客成本 CAC 是多少？",
+      "judge": {
+        "mode": "scalar"
+      },
+      "golden": [
+        {
+          "label": "全量 CAC (成本限制在业务日历轴内)",
+          "sql": "SELECT sum(cost)/sum(new_users_attributed) FROM mart_channel_daily WHERE dt <= (SELECT max(as_of_date) FROM meta_snapshot)"
+        }
+      ],
+      "trap": "不加 dt <= 锚点 会得 8284.98 (1449872.13/175): 分子含轴外 94.6 万无归因可配的成本, 分母只有轴内的人。这是 toplist 类用例抓不到的那一半 —— 前 K 名判定只看渠道名对不对, 数值错了照样通过, 所以这条用 scalar 单独钉住数值。注意这个 clamp 是**按指标**声明的 (metrics_def 的 clamp_to_anchor), 不是全局规则: refund_amount 轴外那 9 天是轴内订单真实产生的退款, 一起 clamp 掉退款总额就从 963560.92 掉回 925471.33",
+      "value_hint": 2880.14
     }
   ]
 }

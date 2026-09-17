@@ -26,21 +26,23 @@
 ## 字段枚举值
 
 ### status 测试状态
-| 值 | 说明 |
-|----|------|
-| draft | 草稿，实验配置中 |
-| running | 运行中，正在收集数据 |
-| paused | 暂停，临时停止分流 |
-| completed | 已完成，实验结束并有结论 |
+| 值 | 说明 | 实测行数 |
+|----|------|------|
+| running | 运行中，正在收集数据 | 4 |
+| completed | 已完成，实验结束并有结论 | 4 |
+| draft | 草稿，实验配置中 | 4 |
 
-### primary_metric 常见主要指标
-| 值 | 说明 |
-|----|------|
-| conversion_rate | 转化率 |
-| revenue_per_user | 人均收入 |
-| retention_d7 | 7日留存率 |
-| session_duration | 会话时长 |
-| click_through_rate | 点击率 |
+> 全表 12 行，只有这 3 个值。**没有** `paused`（旧文档写过），按它筛是空集。
+
+### primary_metric 主要指标
+
+> 这一列**不是枚举**：它装的是指标名，12 个实验里有 11 种取值，基本一实验一指标。
+> 别照着固定列表筛，要看有哪些就 `SELECT DISTINCT primary_metric FROM ab_tests`。
+> 实测取值：`add_to_cart_rate`(2)、`average_order_value`、`coupon_claim_rate`、
+> `push_open_rate`、`membership_conversion_rate`、`next_7day_repurchase_rate`、
+> `homepage_ctr`、`day1_retention`、`purchase_conversion_rate`、`search_result_ctr`、
+> `checkout_completion_rate`（各 1）。旧文档写的 `conversion_rate` / `retention_d7` /
+> `revenue_per_user` / `session_duration` / `click_through_rate` 一个都不存在。
 
 ## 索引
 

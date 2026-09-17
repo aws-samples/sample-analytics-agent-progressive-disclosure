@@ -23,6 +23,13 @@ Tags defined in `agentcore.json` flow through to deployed CloudFormation resourc
    `agentcore validate` to check.
 4. **Resource Removal:** Use `agentcore remove` to remove resources. Run `agentcore deploy` after removal to tear down
    deployed infrastructure.
+5. **Generated agent code (本仓库特有):** `app/analytics/` 下的 `db.py`、`tools.py`、
+   `athena.py`、`metric_layer.py`、`metrics_def.py`、`stats.py` 是**生成物**，由
+   `scripts/deploy/sync_agent_code.py` 从仓库根的 `backend/` 与 `scripts/lakehouse/` 拷来
+   （文件顶上有横幅）。`agent.py` 的提示词与共享辅助函数同样由它同步，只有暖客户端驱动
+   （`build_options` / `stream_events`）是本目录独有的。
+   **改这些文件请改源文件再跑 `--apply`**；直接在这里改会被下次同步覆盖，而且
+   `scripts/test_all.sh` 的 L0（`--check`）会红。理由见 `README.md` 顶部。
 
 ## Directory Structure
 

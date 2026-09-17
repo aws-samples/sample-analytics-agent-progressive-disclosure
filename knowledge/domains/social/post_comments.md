@@ -43,7 +43,7 @@ SELECT
     COUNT(DISTINCT user_id) AS commenter_count
 FROM post_comments
 WHERE status = 'visible'
-    AND created_at >= CURRENT_DATE - INTERVAL '30 days'
+    AND created_at >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '30' day
 GROUP BY DATE(created_at)
 ORDER BY comment_date;
 ```
@@ -60,7 +60,7 @@ FROM post_comments c
 JOIN users u ON c.user_id = u.user_id
 JOIN posts p ON c.post_id = p.post_id
 WHERE c.status = 'visible'
-    AND c.created_at >= CURRENT_DATE - INTERVAL '7 days'
+    AND c.created_at >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '7' day
 ORDER BY c.like_count DESC
 LIMIT 50;
 ```

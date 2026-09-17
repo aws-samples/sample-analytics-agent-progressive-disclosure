@@ -26,12 +26,22 @@ RUN pip install --no-cache-dir -r /app/backend/requirements.txt
 COPY backend/ /app/backend/
 COPY web/ /app/web/
 COPY knowledge/ /app/knowledge/
+# Athena 客户端。db.py::_athena() 先裸 import 一次(那是 AgentCore 那份平铺布局),
+# 失败才回退到仓库布局 ../scripts/lakehouse —— 这个镜像走的是后者,所以这行必须有:
+# 少了它 DB_BACKEND=athena(现在是默认值)会在第一条查询上抛 SqlError,
+# 而 /health 之前一切正常,报错指向"找不到模块"而不是"镜像少拷了一个文件"。
+COPY scripts/lakehouse/athena.py /app/scripts/lakehouse/athena.py
 # 安全网:本地产物若混入则清掉(正常打包已剔除)
 RUN rm -rf /app/backend/.venv /app/backend/.pgdata /app/backend/__pycache__
 
-# 默认走 Bedrock;PG 指向 compose 里的 db 服务。运行时可被 compose env 覆盖。
+# 默认走 Bedrock。区域必须是 us-west-2:S3 Tables 表桶、Glue 目录、Athena 工作组
+# 都在那儿。这里原来兜底成 us-east-1(v1 时代 Bedrock 的习惯值),而 db.py 的默认
+# 后端现在是 athena —— 区域错了不会报"区域错",报的是工作组/表不存在。
+#
+# PG* 是 v1 那条自带库路径的兜底(docker-compose.cloud.yml 会连同 DB_BACKEND=postgres
+# 一起覆盖)。DB_BACKEND 不在这里钉:留空就用 db.py 的默认值 athena。
 ENV CLAUDE_CODE_USE_BEDROCK=1 \
-    AWS_REGION=us-east-1 \
+    AWS_REGION=us-west-2 \
     ANTHROPIC_MODEL=global.anthropic.claude-opus-4-8 \
     PGHOST=db PGPORT=5432 PGDATABASE=app_analytics PGUSER=postgres PGPASSWORD=postgres \
     PORT=8000

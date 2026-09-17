@@ -24,15 +24,19 @@
 ## 字段枚举值
 
 ### traffic_source 流量来源
-| 值 | 说明 |
-|----|------|
-| direct | 直接访问 |
-| organic_search | 自然搜索 |
-| paid_search | 付费搜索 |
-| social | 社交媒体 |
-| referral | 外部引荐 |
-| email | 邮件营销 |
-| push | 推送通知 |
+| 值 | 说明 | 实测行数 |
+|----|------|------|
+| referral | 外部引荐 | 868 |
+| social | 社交媒体 | 846 |
+| paid | 付费流量 | 826 |
+| organic | 自然流量 | 825 |
+| direct | 直接访问 | 824 |
+| email | 邮件营销 | 811 |
+
+> 全表 5,000 行，6 个值，**分布均匀**（811–868）。旧文档写的 `organic_search` /
+> `paid_search` / `push` 都不存在——自然量是 `organic`、付费是 `paid`，没有细分搜索。
+> 注意这套值跟 `channels.channel_type`（paid / kol / organic / referral / direct）
+> 只是**部分重叠**：这里有 `social`/`email`，那边有 `kol`，两张表不能直接按值 JOIN。
 
 ### is_bounce 跳出判定规则
 | 条件 | 值 |
@@ -40,17 +44,49 @@
 | page_view_count = 1 | TRUE |
 | page_view_count > 1 | FALSE |
 
-### 常见 utm_source 值
-```
-google, baidu, weixin, weibo, douyin,
-xiaohongshu, taobao, jd, facebook, instagram
-```
+### utm_source 流量来源平台
+| 值 | 说明 | 实测行数 |
+|----|------|------|
+| weixin | 微信 | 861 |
+| douyin | 抖音 | 849 |
+| baidu | 百度 | 835 |
+| xiaohongshu | 小红书 | 832 |
+| organic | 自然流量 | 816 |
+| direct | 直接访问 | 807 |
 
-### 常见 utm_medium 值
-```
-cpc, cpm, banner, email, social, organic,
-affiliate, referral, display, video
-```
+> 只有这 6 个，全是国内平台。旧文档写的 `google` / `weibo` / `taobao` / `jd` /
+> `facebook` / `instagram` **都不存在**，这一列也没有 NULL，也没有字符串 `'none'`。
+
+### utm_medium 投放形式
+| 值 | 说明 | 实测行数 |
+|----|------|------|
+| organic | 自然 | 1008 |
+| push | 推送 | 1007 |
+| paid | 付费 | 1007 |
+| referral | 引荐 | 1004 |
+| banner | 横幅 | 974 |
+
+> 只有这 5 个。旧文档写的 `cpc` / `cpm` / `social` / `affiliate` / `display` / `video`
+> **都不存在**；`email` 也不在这里（它是 `traffic_source` 的值）。
+
+### utm_campaign 活动标记
+| 值 | 说明 | 实测行数 |
+|----|------|------|
+| 618 | 618 大促 | 745 |
+| new_user | 新客 | 732 |
+| brand_day | 品牌日 | 708 |
+| spring_sale | 春季促销 | 702 |
+| double11 | 双 11 | 695 |
+| recall | 召回 | 679 |
+
+> 另有 739 行为 NULL——这是本表 UTM 三列里唯一有空值的一列，做归因时记得
+> `COALESCE(utm_campaign, '(未标记)')`，否则这 15% 的会话会在 GROUP BY 里悄悄变成一个空行。
+
+> 上面三列 2026-08-28 从围栏代码块改写成表格。取值和实测行数一个没动——改的只是**形态**：
+> `scripts/lakehouse/verify_enums.py` 的 `parse_card()` 只认「`### 列名`＋`| 值 | 说明 |`」，
+> 围栏块里的声明它一律不收（那条行为它自己的自测还专门断言过）。于是这三列虽然写在卡片上，
+> 却从未被任何一层比对过，`utm_medium` 的生成器一直在产这张表明文否认的 `cpc` / `social` /
+> `email`。声明写成看得见的形态，是这条被发现的前提。
 
 ## 索引
 
@@ -69,7 +105,7 @@ SELECT
     AVG(duration_seconds) AS avg_session_duration,
     AVG(page_view_count) AS avg_pages_per_session
 FROM sessions
-WHERE start_time >= CURRENT_DATE - INTERVAL '7 days'
+WHERE start_time >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '7' day
     AND user_id IS NOT NULL
 GROUP BY DATE(start_time)
 ORDER BY date DESC;
@@ -86,7 +122,7 @@ SELECT
     AVG(duration_seconds) AS avg_duration,
     SUM(CASE WHEN is_bounce THEN 1 ELSE 0 END) * 100.0 / COUNT(*) AS bounce_rate
 FROM sessions
-WHERE start_time >= CURRENT_DATE - INTERVAL '7 days'
+WHERE start_time >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '7' day
 GROUP BY utm_source, traffic_source, utm_medium, utm_campaign
 ORDER BY sessions DESC
 LIMIT 20;
@@ -100,7 +136,7 @@ SELECT
     SUM(CASE WHEN is_bounce THEN 1 ELSE 0 END) AS bounce_sessions,
     ROUND(SUM(CASE WHEN is_bounce THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 2) AS bounce_rate
 FROM sessions
-WHERE start_time >= CURRENT_DATE - INTERVAL '30 days'
+WHERE start_time >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '30' day
 GROUP BY DATE(start_time)
 ORDER BY date DESC;
 ```

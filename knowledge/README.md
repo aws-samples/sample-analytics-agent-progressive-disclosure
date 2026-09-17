@@ -23,7 +23,8 @@ Agent 运行时通过 `read_doc` 工具按路由**逐层按需读取**(渐进式
 
 - **表结构**:以 `database/*.sql` 的 DDL 为准;本目录的表卡片是给 agent 读的说明层。
 - **治理指标口径**:结构化定义在 `backend/metrics_def.py`(机器读,`call_metric` 用),`metrics/governed_metrics.md` 是同一套口径的人读版。**两者以代码为准**;主要指标一律走 `call_metric` 工具,不手写 SQL。
-- **静态样本铁律**:数据止于 2026-01-24,"最近/上周/本月"一律以 `max(dt)` 为今天,**禁用 `current_date`/`now()`**(否则查空)。
+- **静态样本铁律**:数据止于 2026-01-24,"最近/上周/本月"一律以 `(SELECT max(as_of_date) FROM meta_snapshot)` 为今天。**禁用 `current_date`/`now()`**(会查空),**也禁用该表自己的 `max(时间列)`**(不查空,查出错数——有十几根轴伸出业务日历,最远的 `subscriptions.end_date` 到 2027-01-24)。
+  `meta_snapshot` 这张表**不在任何业务域下**,列清单写在 `domains/_index.md`(agent 路由第一步就会读到);轴末普查表在 `metrics/governed_metrics.md` §时间锚点。这两处是 agent 读得到的,`connection.md` 面向人、agent 不会打开它,所以锚点相关的内容不要只写在那边。
 
 ## 打包 / 运行时
 

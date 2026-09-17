@@ -68,11 +68,17 @@ BOOLEAN = {"BOOL"}
 def load_dim_ids() -> dict[str, np.ndarray]:
     """从现有 CSV 读维度表的真实 id（它们可能不是 1..N 连续）。
 
-    维度表本轮**不重新生成**：量级只有 2.4 万行（全库 8000 万里可忽略），
+    这里的维度表**不重新生成**：量级只有 2.4 万行（全库 8000 万里可忽略），
     现有 CSV 已经正确且被 eval 金标依赖。事实表引用它们的真实 id 即可。
+
+    **products / product_tags 例外，已移出这个清单**：它们由 tables.py 的
+    `_prep_products` / `_prep_product_tags` 生成，`ctx.dim_ids["products"]` 和
+    `["_product_names"]` 在 `prepare_globals()` 的第一步被回写。原先从这里读 200 行
+    v1 CSV，而 budget.py 声明它该有 4133 行（SUB 缩放），差 20 倍——D-02。
+    同一张表不能有两个来源，所以这里必须删干净，不能"两边都留着以防万一"。
     """
     want = {
-        "channels": "channel_id", "coupons": "coupon_id", "products": "product_id",
+        "channels": "channel_id", "coupons": "coupon_id",
         "campaigns": "campaign_id", "ab_tests": "test_id",
         "ad_campaigns": "ad_campaign_id", "ad_creatives": "creative_id",
         "user_segments": "segment_id", "event_definitions": "event_name",
@@ -93,10 +99,10 @@ def load_dim_ids() -> dict[str, np.ndarray]:
     # order_items 的反范式列要带**真实商品名**：真实订单明细表在下单时把商品名冗余下来，
     # agent 会很自然地直接用 oi.product_name 而不去 join products。填占位符会让
     # 「GMV Top10 商品」这类题的答案与 join products 的金标对不上（eval 踩过这一刀）。
-    with (CSV_DIR / "products.csv").open(encoding="utf-8") as f:
-        prods = list(csv.DictReader(f))
-    by_id = {int(r["product_id"]): r.get("product_name", "") for r in prods}
-    out["_product_names"] = np.array([by_id[int(i)] for i in out["products"]], dtype=object)
+    # 这两项现在由 _prep_products 回写，见上面的 docstring。这里放两个空占位是为了让
+    # 「键存在但为空」在 build_order_items 里直接 IndexError，而不是安静取到旧数据。
+    out["products"] = np.array([], dtype=np.int64)
+    out["_product_names"] = np.array([], dtype=object)
 
     # ab_test_assignments 需要「每个 test 有哪些 variant」，否则 variant 会跨 test 乱指
     vb: dict[int, list[int]] = {}
