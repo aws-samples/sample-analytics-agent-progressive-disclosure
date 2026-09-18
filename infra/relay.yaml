@@ -13,16 +13,20 @@ Parameters:
   # 以下参数账号相关,无默认值(取 foundation 栈输出 / 你自己的资源):
   VpcId:
     Type: AWS::EC2::VPC::Id
-  PrivateSubnetA:
+  # foundation 栈的 SubnetA / SubnetB。两个都有 IGW 默认路由 —— 任务靠公网 IP 出网,
+  # 栈里没有 NAT(理由见 foundation.yaml 顶部注释 ②)。ALB 自己仍是 internal(只有私网 IP)。
+  SubnetA:
     Type: AWS::EC2::Subnet::Id
-  PrivateSubnetB:
+  SubnetB:
     Type: AWS::EC2::Subnet::Id
-  # CloudFront origin-facing 托管前缀列表(区域级公共常量,us-west-2 为 pl-82a045eb;
-  # CFN 不能按名字查前缀列表,故作参数传入):
+  # CloudFront origin-facing 托管前缀列表。区域级**公共常量**(不是账号资源),
+  # CFN 不能按名字查前缀列表,故作参数传入。默认值是 us-west-2 的;换区域必须换,
+  # 但换错不会静默——前缀列表在本区域不存在的话建栈直接失败:
   #   aws ec2 describe-managed-prefix-lists \
   #     --filters Name=prefix-list-name,Values=com.amazonaws.global.cloudfront.origin-facing
   CloudFrontOriginFacingPrefixList:
     Type: String
+    Default: pl-82a045eb
   ImageUri:
     Type: String
     Description: ECR image URI of functions/ask-relay
@@ -74,7 +78,7 @@ Resources:
       Name: !Sub "${ProjectTag}-relay"
       Scheme: internal
       Type: application
-      Subnets: [!Ref PrivateSubnetA, !Ref PrivateSubnetB]
+      Subnets: [!Ref SubnetA, !Ref SubnetB]
       SecurityGroups: [!Ref AlbSG]
       LoadBalancerAttributes:
         # agent 单轮 25-70s;中继有 15s SSE 心跳,120s 空闲上限给足余量
@@ -157,6 +161,12 @@ Resources:
       NetworkMode: awsvpc
       Cpu: "256"
       Memory: "512"
+      # ARM64:比 X86_64 的 Fargate 便宜约两成,而且本机 docker 就是 aarch64 —— 构建是
+      # 原生的,不用 qemu 跨架构模拟(慢且偶发挂)。改这里必须同时重建镜像,
+      # 架构不匹配的表现是任务反复启动失败、`exec format error` 只出现在容器日志里。
+      RuntimePlatform:
+        CpuArchitecture: ARM64
+        OperatingSystemFamily: LINUX
       ExecutionRoleArn: !GetAtt ExecutionRole.Arn
       TaskRoleArn: !GetAtt TaskRole.Arn
       ContainerDefinitions:
@@ -188,8 +198,12 @@ Resources:
       HealthCheckGracePeriodSeconds: 30
       NetworkConfiguration:
         AwsvpcConfiguration:
-          AssignPublicIp: DISABLED
-          Subnets: [!Ref PrivateSubnetA, !Ref PrivateSubnetB]
+          # ENABLED 是**出网方式**,不是"对外暴露":任务需要拉 ECR 镜像、调
+          # InvokeAgentRuntime、写 Logs,而栈里没有 NAT 也没有接口端点。入站仍然只有
+          # ServiceSG 那一条(仅来自 ALB SG 的 8000),公网 IP 上没有任何入站规则。
+          # 改成 DISABLED 就必须先在 foundation.yaml 里补 NAT,否则任务拉不到镜像。
+          AssignPublicIp: ENABLED
+          Subnets: [!Ref SubnetA, !Ref SubnetB]
           SecurityGroups: [!Ref ServiceSG]
       LoadBalancers:
         - ContainerName: relay

@@ -28,14 +28,16 @@
 ## 字段枚举值
 
 ### status 商品状态
-| 值 | 说明 |
-|----|------|
-| draft | 草稿，编辑中 |
-| pending | 待审核 |
-| active | 已上架，正常销售 |
-| inactive | 已下架，暂停销售 |
-| out_of_stock | 售罄 |
-| deleted | 已删除（软删除） |
+| 值 | 说明 | 实测行数 |
+|----|------|------|
+| on_sale | 已上架，正常销售 | 149 |
+| pre_sale | 预售 | 20 |
+| off_sale | 已下架 | 18 |
+| sold_out | 售罄 | 13 |
+
+> 200 个 SKU 只有这 4 个值。**没有** `active` / `inactive` / `draft` / `pending` /
+> `out_of_stock` / `deleted`——旧文档写的是另一套枚举，照它写 `WHERE status='active'`
+> 会拿到空集。在售商品的条件是 `status = 'on_sale'`。
 
 ### is_featured 推荐标记
 | 值 | 说明 |
@@ -71,7 +73,7 @@ SELECT
     p.sold_count * p.price AS gmv
 FROM products p
 JOIN categories c ON p.category_id = c.category_id
-WHERE p.status = 'active'
+WHERE p.status = 'on_sale'
     AND c.level = 2  -- 二级分类
 ORDER BY p.sold_count DESC
 LIMIT 20;
@@ -90,9 +92,9 @@ SELECT
     AVG(favorite_count * 1.0 / NULLIF(view_count, 0)) AS avg_fav_rate,
     AVG(sold_count * 1.0 / NULLIF(view_count, 0)) AS avg_convert_rate
 FROM products
-WHERE status = 'active'
-GROUP BY view_tier
-ORDER BY view_tier;
+WHERE status = 'on_sale'
+GROUP BY 1   -- Trino 的 GROUP BY 不认 SELECT 里的别名，用序号
+ORDER BY 1;
 ```
 
 ### 库存预警商品（低库存+高销量）
@@ -106,7 +108,7 @@ SELECT
     ROUND(p.stock * 1.0 / NULLIF(p.sold_count / 30.0, 0), 1) AS days_of_stock
 FROM products p
 JOIN categories c ON p.category_id = c.category_id
-WHERE p.status = 'active'
+WHERE p.status = 'on_sale'
     AND p.stock < 50
     AND p.sold_count > 100
 ORDER BY days_of_stock ASC
