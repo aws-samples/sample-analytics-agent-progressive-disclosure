@@ -7,7 +7,7 @@
 | event_name | VARCHAR(50) | 主键，事件名称 |
 | event_category | VARCHAR(30) | 事件分类 |
 | description | TEXT | 事件描述 |
-| properties_schema | JSONB | 事件属性schema定义 |
+| properties_schema | `string` | 事件属性 schema 定义。**Iceberg 里是 JSON 文本（string），不是 Postgres 的 JSONB**：取值用 `json_extract_scalar(...)`，`->` / `->>` 是语法错 |
 | owner | VARCHAR(50) | 负责人 |
 | is_core_event | BOOLEAN | 是否核心事件 |
 | created_at | TIMESTAMP | 记录创建时间 |
@@ -16,38 +16,45 @@
 ## 字段枚举值
 
 ### event_category 事件分类
-| 值 | 说明 | 典型事件 |
-|----|------|----------|
-| acquisition | 获客类 | app_install, first_open, registration |
-| engagement | 互动类 | page_view, button_click, search |
-| conversion | 转化类 | add_to_cart, checkout, purchase |
-| retention | 留存类 | app_open, login, share |
-| revenue | 营收类 | purchase, subscription, refund |
+| 值 | 说明 | 典型事件 | 实测行数 |
+|----|------|----------|------|
+| commerce | 交易类 | add_favorite, add_to_cart, begin_checkout, purchase, remove_from_cart, use_coupon, view_category, view_product | 8 |
+| engagement | 互动类 | app_close, app_open, click_banner, click_push, edit_profile, search, view_home, view_profile | 8 |
+| social | 社交类 | comment_post, follow_user, like_post, share, view_post | 5 |
+| system | 系统类 | login, logout, receive_push, register | 4 |
+
+> 全表 25 行，只有这 4 类，「典型事件」列就是**全部**归属事件（实测拉取）。
+> 旧文档写的 `acquisition` / `conversion` / `retention` / `revenue` **都不存在**——
+> 交易类的值是 `commerce`，登录注册归在 `system`，`app_open`/`app_close` 归在
+> `engagement` 而不是留存类。注意 `share` 归 `social`、`add_favorite` 归 `commerce`，
+> 别按直觉猜。
 
 ### is_core_event 核心事件说明
-核心事件是业务关键指标的基础，通常包括：
+25 个事件里 **11 个是核心事件**（`is_core_event = TRUE`，实测全量）：
+
 | 事件名 | 说明 |
 |--------|------|
-| app_open | APP打开 |
-| page_view | 页面浏览 |
+| app_open | APP 打开 |
+| app_close | APP 关闭 |
+| login | 用户登录 |
+| register | 用户注册 |
 | search | 搜索 |
-| product_view | 商品详情页浏览 |
+| view_home | 浏览首页 |
+| view_product | 商品详情页浏览 |
+| view_post | 查看帖子 |
 | add_to_cart | 加入购物车 |
-| checkout | 发起结算 |
+| begin_checkout | 发起结算 |
 | purchase | 完成购买 |
 
-### properties_schema 示例
-```json
-{
-    "product_view": {
-        "product_id": {"type": "integer", "required": true},
-        "product_name": {"type": "string", "required": true},
-        "category": {"type": "string", "required": false},
-        "price": {"type": "number", "required": true},
-        "source": {"type": "string", "required": false}
-    }
-}
-```
+> 旧文档在这里列了 `page_view` / `product_view` / `checkout` —— 前者不是本表的事件
+> （页面浏览在 `page_views` 表），后两个名字写错了。真名见 `events.md` 的枚举表。
+
+### properties_schema 事件属性定义
+
+> ⚠️ **这一列在种子数据里 25 行全为 NULL**，没有属性契约可查。想知道某个事件带哪些
+> 属性，只能直接看 `events.properties`（JSON 字符串，用
+> `json_extract_scalar(properties, '$.keyword')` 这类写法取值）。
+> `description` 列 25 行都有值，是这张表唯一能用的说明来源。
 
 ## 索引
 
@@ -78,12 +85,12 @@ GROUP BY event_category
 ORDER BY event_count DESC;
 ```
 
-### 查看事件属性定义
+### 查看事件说明
 ```sql
+-- properties_schema 整列为 NULL，只有 description 有内容
 SELECT
     event_name,
-    description,
-    properties_schema
+    description
 FROM event_definitions
-WHERE event_name IN ('product_view', 'add_to_cart', 'purchase');
+WHERE event_name IN ('view_product', 'add_to_cart', 'purchase');
 ```

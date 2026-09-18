@@ -28,7 +28,7 @@ SELECT
     DATE(created_at) AS like_date,
     COUNT(*) AS like_count
 FROM post_likes
-WHERE created_at >= CURRENT_DATE - INTERVAL '7 days'
+WHERE created_at >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '7' day
 GROUP BY DATE(created_at)
 ORDER BY like_date;
 ```
@@ -61,7 +61,7 @@ SELECT
     COUNT(DISTINCT DATE(pl.created_at)) AS active_days
 FROM post_likes pl
 JOIN users u ON pl.user_id = u.user_id
-WHERE pl.created_at >= CURRENT_DATE - INTERVAL '30 days'
+WHERE pl.created_at >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '30' day
 GROUP BY pl.user_id, u.username
 HAVING COUNT(*) >= 50
 ORDER BY total_likes DESC

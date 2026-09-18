@@ -1,0 +1,218 @@
+{
+  "_readme": [
+    "「文档声明的规模 ⟷ 湖里实际的规模」的判据。scripts/lakehouse/verify_scale.py 读这个文件。",
+    "",
+    "为什么需要它：本仓库的对账层比表、比列、比枚举取值、比退化列，但**从不比规模**。",
+    "于是 2026-09-17 出现过这个状态：五处文档写着 19 万行，湖里装的是 8000 万行,",
+    "L0-L6 全绿。数量级差 427 倍而没有一盏灯——因为没有任何一条断言的对象是「有多少行」。",
+    "",
+    "这个文件登记**每一批数据的规模**，checker 干两件事：",
+    "  1. 离线：seed 的每表行数必须与 data/csv 现数出来的一致（仓库里躺着的就是真源）。",
+    "  2. 在线：湖里的实际行数必须命中**某一批**已登记的规模；命中不了就红，",
+    "     并印出它像哪一批、差在哪些表。装了第三批数据就必须先来这里登记。",
+    "",
+    "groups 是**跨批次不变**的结构性事实（生成器的性质，不是某批的数字）：",
+    "  scaled     —— 随 scale 等比放大的事实/用户表，count == round(seed * scale)",
+    "  sublinear  —— 放大但不等比：维度性质的表按自己的规则长（商品、投放日历、支付）",
+    "  fixed      —— 完全不随 scale 变的维度表，count == seed",
+    "这三组本身就是一条断言：#14 的 PR 里写的「转化侧放大 427 倍而广告/券/活动维度表没有」",
+    "在这里变成机器可查的，而不是一句留在描述里的话。"
+  ],
+
+  "batches": {
+    "seed": {
+      "desc": "本仓库 data/csv/ 里躺着的种子样本（scale 1），v1 生成器的产物",
+      "source": "data/csv",
+      "scale": 1,
+      "rows_total": 189672,
+      "lines_total": 189707,
+      "note": "lines_total 含 35 个表头，rows_total 不含；两个数都在文档里出现过，别混用",
+      "rows": {
+        "ab_test_assignments": 1850,
+        "ab_test_variants": 30,
+        "ab_tests": 12,
+        "ad_campaigns": 50,
+        "ad_creatives": 144,
+        "banners": 119,
+        "campaigns": 50,
+        "categories": 166,
+        "channel_daily_costs": 910,
+        "channels": 14,
+        "coupons": 150,
+        "event_definitions": 25,
+        "events": 20000,
+        "order_items": 4225,
+        "orders": 2000,
+        "page_views": 30196,
+        "payments": 1746,
+        "post_comments": 14000,
+        "post_likes": 35668,
+        "post_shares": 7000,
+        "posts": 1000,
+        "product_tags": 512,
+        "products": 200,
+        "push_notifications": 10000,
+        "sessions": 5000,
+        "subscriptions": 50,
+        "user_attributions": 350,
+        "user_coupons": 22735,
+        "user_devices": 744,
+        "user_follows": 19165,
+        "user_messages": 9253,
+        "user_profiles": 500,
+        "user_segment_members": 1298,
+        "user_segments": 10,
+        "users": 500
+      }
+    },
+
+    "full": {
+      "desc": "全量重灌批次（约 8000 万行）。本仓库开发账号 2026-09-17 实测装的是这一批",
+      "source": "genFULL_csv（scripts/gen/ 新生成器，seed 42）",
+      "scale": 427.07,
+      "measured_at": "2026-09-17",
+      "rows_total": 79943758,
+      "rows": {
+        "ab_test_assignments": 790080,
+        "ab_test_variants": 30,
+        "ab_tests": 12,
+        "ad_campaigns": 50,
+        "ad_creatives": 144,
+        "banners": 119,
+        "campaigns": 50,
+        "categories": 166,
+        "channel_daily_costs": 2799,
+        "channels": 14,
+        "coupons": 150,
+        "event_definitions": 25,
+        "events": 8541400,
+        "order_items": 1804371,
+        "orders": 854140,
+        "page_views": 12895806,
+        "payments": 689390,
+        "post_comments": 5978980,
+        "post_likes": 15232733,
+        "post_shares": 2989490,
+        "posts": 427070,
+        "product_tags": 10659,
+        "products": 4133,
+        "push_notifications": 4270700,
+        "sessions": 2135350,
+        "subscriptions": 21354,
+        "user_attributions": 149474,
+        "user_coupons": 9709436,
+        "user_devices": 317740,
+        "user_follows": 8184797,
+        "user_messages": 3951679,
+        "user_profiles": 213535,
+        "user_segment_members": 554337,
+        "user_segments": 10,
+        "users": 213535
+      }
+    }
+  },
+
+  "scale_ref_table": "users",
+
+  "groups": {
+    "scaled": [
+      "ab_test_assignments", "events", "order_items", "orders", "page_views",
+      "post_comments", "post_likes", "post_shares", "posts", "push_notifications",
+      "sessions", "subscriptions", "user_attributions", "user_coupons",
+      "user_devices", "user_follows", "user_messages", "user_profiles",
+      "user_segment_members", "users"
+    ],
+    "sublinear": [
+      "channel_daily_costs", "payments", "product_tags", "products"
+    ],
+    "fixed": [
+      "ab_test_variants", "ab_tests", "ad_campaigns", "ad_creatives", "banners",
+      "campaigns", "categories", "channels", "coupons", "event_definitions",
+      "user_segments"
+    ]
+  },
+
+  "group_notes": {
+    "scaled": "容差 ±0.2%：生成器按比例取整，subscriptions 实测 ×427.080 而基准 ×427.070",
+    "sublinear": [
+      "channel_daily_costs ×3.08（投放日历按渠道×天数长，天数固定所以几乎不涨）、",
+      "products ×20.7 / product_tags ×20.8（商品目录按 sqrt 量级长）、",
+      "payments ×394.8（只给已支付订单建行，支付率随批次略有差别）。",
+      "这一组只钉方向：seed < count < seed * scale，倍数没有闭式，别往这里写死数字。"
+    ],
+    "fixed": "渠道/广告计划/券/活动/实验/类目这些维度表 scale 多大都不变——这是缺口不是特性：CAC、ROI、券核销率会因此随 scale 漂移（#14 的 PR「Not included」讲的就是这件事）"
+  },
+
+  "_declarations_readme": [
+    "每条登记「哪个文件、写着什么、说的是哪一批、数值是多少、在文件里出现几次」。",
+    "occurrences 是**实测抄了几份**，不是「应该只有一份」的期望——本库里同一个数确实",
+    "在一个文件里出现两三次（正文一处、日志一处、对照表一处），要求去重反而是让判据",
+    "去改别人的散文。钉住次数的效果一样：改了其中一处、漏了另一处，次数就从 2 掉到 1，",
+    "这里红。删干净了也红——那说明这条声明已经不指向任何东西，该从本文件里摘掉。"
+  ],
+
+  "declarations": [
+    {
+      "file": "backend/agent.py",
+      "text": "行数取决于湖里装的是哪一批",
+      "describes": "any",
+      "occurrences": 1,
+      "why": "prompt 里不写死行数：同一份 prompt 会跑在种子库和全量湖上，写死就必然有一边是错的。这条不带 value——它要求的恰恰是「别声明一个数」"
+    },
+    {
+      "file": "database/00_schema_overview.md",
+      "text": "约 19 万行",
+      "describes": "seed",
+      "value": 189672,
+      "occurrences": 2,
+      "why": "开篇讲 v1 的 PostgreSQL DDL 一处，§行数不写在这里的对照一处"
+    },
+    {
+      "file": "backend/run.sh",
+      "text": "约 19 万行",
+      "describes": "seed",
+      "value": 189672,
+      "occurrences": 2,
+      "why": "这里说的是 DB_BACKEND=postgres 的本地 rig，它灌的确实是 data/csv；注释一处、启动日志一处"
+    },
+    {
+      "file": "backend/db.py",
+      "text": "约 19 万行",
+      "describes": "seed",
+      "value": 189672,
+      "occurrences": 1,
+      "why": "同上，docker-compose.cloud.yml 那套 legacy Postgres"
+    },
+    {
+      "file": "docker-compose.cloud.yml",
+      "text": "19 万行",
+      "describes": "seed",
+      "value": 189672,
+      "occurrences": 3,
+      "why": "文件头两处，加上 §两边数不一样 的对照一处（那处同时写了 22 万行的派生侧）"
+    },
+    {
+      "file": "docs/deployment.md",
+      "text": "35 张基表 189,672",
+      "describes": "seed",
+      "value": 189672,
+      "why": "灌数指令旁边那句「灌完是 48 张表约 22 万行」的基表部分。这条最值得钉：照它上面那句去跑 load.py，就是拿 2000 单覆盖 854140 单"
+    },
+    {
+      "file": "docs/data-walkthrough.md",
+      "text": "| 1_base | 35 | 189,672 |",
+      "describes": "seed",
+      "value": 189672,
+      "why": "分层表里的基表那一行；同表还有 220,087 的合计（含派生层），不在本文件的对账范围内"
+    },
+    {
+      "file": "PROJECT_STATUS.md",
+      "text": "189,707",
+      "describes": "seed",
+      "value": 189707,
+      "unit": "lines",
+      "occurrences": 2,
+      "why": "行数带表头，因为它讲的是 CSV 文件；交付说明一处、_resolve_csv_dir() 那条待办一处"
+    }
+  ]
+}

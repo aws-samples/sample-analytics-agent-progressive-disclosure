@@ -16,7 +16,7 @@ CREATE TABLE ab_tests (
     min_sample_size INT,
     start_date TIMESTAMP,
     end_date TIMESTAMP,
-    status VARCHAR(20) DEFAULT 'draft',  -- 'draft', 'running', 'paused', 'concluded'
+    status VARCHAR(20) DEFAULT 'draft',  -- 'draft', 'running', 'completed'（结束态叫 completed，不叫 concluded；业务上还有 paused，本批数据没有）
     conclusion TEXT,
     winner_variant_id INT,
     owner VARCHAR(50),

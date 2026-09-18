@@ -4,8 +4,13 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>App Analytics · AI 数据分析师</title>
-<link rel="stylesheet" href="/vendor/fonts/fonts.css">
-<!-- 部署期注入的运行配置(Cognito 池/客户端等);config.js 在 S3 站点根,随部署生成 -->
+<!-- 本地资源一律用**相对**路径:线上这个 shell 在站点根(解析成 /vendor/...),本地被
+     FastAPI 挂在 /app 下(解析成 /app/vendor/...)。写死绝对路径的话本地就是静默 404
+     ——页面照常出,只有图表框空白、字体退回系统默认,不报错也没红字。见 L6 的资源可达断言。 -->
+<link rel="stylesheet" href="vendor/fonts/fonts.css">
+<!-- 部署期注入的运行配置(Cognito 池/客户端等);config.js 在 S3 站点根,随部署生成。
+     这一条**保持绝对路径**:它的语义就是"站点根上那份部署产物",不跟着 shell 的挂载点走。
+     本地没有这份文件,server.py 回一个空脚本 → window.APP_CONFIG 缺席 → 回退 /api/config。 -->
 <script src="/config.js"></script>
 <!-- nosemgrep: insecure-document-method —— 渲染的是 app/模型生成内容,回显的用户文本已 HTML 转义 -->
 <script>
@@ -49,7 +54,7 @@
     if(!cfg.authEnabled)return;        // 未开认证:放行
     if(tokenValid())return;            // 已登录:fetch 包装会带 X-Id-Token
     localStorage.removeItem(TOKEN_KEY);
-    loadScript('/vendor/amazon-cognito-identity.min.js').then(function(){showLogin(cfg);})
+    loadScript('vendor/amazon-cognito-identity.min.js').then(function(){showLogin(cfg);})
       .catch(function(){alert((localStorage.getItem('aa_lang')||'en')==='zh'?'登录组件加载失败,请检查网络后刷新。':'Failed to load the sign-in component. Check your network and refresh.');});
   }
   document.addEventListener('DOMContentLoaded',function(){
@@ -136,7 +141,7 @@
   }
 })();
 </script>
-<script src="/vendor/echarts.min.js"></script>
+<script src="vendor/echarts.min.js"></script>
 <style>
 :root{
   --paper:#F2EFE7;
@@ -643,10 +648,13 @@ const I18N={
   gov_grant:'Agent role can read',
   gov_grant_tail:'tables',
   gov_deny:'Not granted at all',
-  gov_mask:'Masked columns',
-  gov_note:'The agent role only holds SELECT on the tables it needs; PII columns carry '
-    +'masking policies attached TO PUBLIC — even an admin reads masked values. '
-    +'Enforced at query time in the warehouse, not by prompting the model.',
+  gov_mask:'Columns withheld',
+  // 跟在行数后面，说明这个总数少了谁。见 rowsPhrase()。
+  rows_unc_gov:'{n} table(s) not counted — not granted',
+  rows_unc_err:'{n} table(s) could not be counted',
+  gov_note:'The agent role only holds SELECT on the tables it needs, and PII columns are '
+    +'excluded from that grant — they are absent from SELECT *, and naming one fails. '
+    +'Lake Formation enforces this at query time; it is not prompt instruction.',
   model_connecting:'Connecting…',
   rail_h2:'Conversation',
   rail_p:'Ask in plain language — the agent finds the tables, writes the SQL, and builds the charts',
@@ -680,6 +688,11 @@ const I18N={
   foot_live:'Engine: Claude Agent SDK + Bedrock · querying the live warehouse',
   model_offline:'Offline demo mode',
   foot_offline:'Backend not connected — running the offline demo (mock data). Start the backend: <code style="font-family:JetBrains Mono">backend/run.sh</code>',
+  // file:// 打开时「启动后端」是句无用的提示：后端可能正跑着，只是从这里到不了它。
+  foot_offline_file:'Opened as a local file (<code style="font-family:JetBrains Mono">file://</code>) — from here the browser cannot reach the backend even if it is running. Open <code style="font-family:JetBrains Mono">http://127.0.0.1:8000/</code> instead.',
+  // 每个烘焙答案自己带一句声明。只靠右上角那个徽标不够：徽标在页首，答案在页尾，
+  // 而烘焙答案是**按关键词粗路由**的（问退款可能给你 DAU 走势），读起来却完全像真结论。
+  baked_notice:'**⚠️ Offline demo — canned sample answer.** Not a query against your warehouse, and it may not match the question at all. ',
   wf_agent:'Agent workflow',wf_analyzing:'Analyzing…',
   recall_view:'↺ Revisit this chart',recall_showing:'● Now showing',
   badge_think:'reason',badge_doc:'read_doc',badge_schema:'schema',badge_run:'run_sql',badge_metric:'call_metric',
@@ -719,9 +732,13 @@ const I18N={
   gov_grant:'Agent 角色可读',
   gov_grant_tail:'张表',
   gov_deny:'连授权都没给',
-  gov_mask:'脱敏列',
-  gov_note:'Agent 角色只在需要的表上有 SELECT；PII 列挂了 TO PUBLIC 的脱敏策略，'
-    +'连管理员查出来也是掩码值。这两层都在数仓查询时生效，不靠提示词约束模型。',
+  gov_mask:'不授权的列',
+  // 跟在行数后面，说明这个总数少了谁。见 rowsPhrase()。
+  rows_unc_gov:'另有 {n} 张表不授权，未计入',
+  rows_unc_err:'另有 {n} 张表行数取不到',
+  gov_note:'Agent 角色只在需要的表上有 SELECT，PII 列从这份授权里排除掉了——'
+    +'`SELECT *` 里没有它们，点名查报列不存在。由 Lake Formation 在查询时强制，'
+    +'不是靠提示词叮嘱模型。',
   model_connecting:'连接中…',
   rail_h2:'对话',
   rail_p:'用大白话提问，Agent 自动找表、写 SQL、出图',
@@ -755,6 +772,8 @@ const I18N={
   foot_live:'大脑：Claude Agent SDK + Bedrock · 真实查询数据仓库',
   model_offline:'离线演示模式',
   foot_offline:'后端未连接，当前为离线演示（模拟数据）。启动后端：<code style="font-family:JetBrains Mono">backend/run.sh</code>',
+  foot_offline_file:'当前是用本地文件方式（<code style="font-family:JetBrains Mono">file://</code>）打开的——即使后端正在运行，浏览器也连不过去。请改用 <code style="font-family:JetBrains Mono">http://127.0.0.1:8000/</code> 打开。',
+  baked_notice:'**⚠️ 离线演示模式的预置示例答案。** 不是查你的数据仓库得到的，也可能跟你问的根本不是一回事。',
   wf_agent:'Agent 工作流',wf_analyzing:'分析中…',
   recall_view:'↺ 回看此图表',recall_showing:'● 正在显示',
   badge_think:'推理',badge_doc:'read_doc',badge_schema:'表结构',badge_run:'run_sql',badge_metric:'call_metric',
@@ -829,7 +848,10 @@ function renderStatus(){
     $('#foot').textContent=t('foot_live');
   } else {
     $('#modelLabel').textContent=t('model_offline');
-    $('#foot').innerHTML=t('foot_offline');
+    // 用 file:// 双击打开时探针**必然**连不上：跨源请求带 `Origin: null`，后端 CORS
+    // 白名单里没有它。这时候提示「启动后端」是错的——后端很可能正跑着。两种情形的
+    // 现象一字不差（右上角离线演示 + 烘焙答案），这个歧义真实地花掉过一轮排查。
+    $('#foot').innerHTML=(location.protocol==='file:')?t('foot_offline_file'):t('foot_offline');
   }
 }
 
@@ -883,9 +905,24 @@ function rowsShort(n){
   return fmt(n);
 }
 // 带前缀后缀的完整短语。中文「万行」要连写，所以整句返回，不让调用方拼量词。
-function rowsPhrase(n){
+//
+// `totals` 是可选的第二参：给了就把**没数进这个总数的表**跟在数字后面说明。
+// 不说的话这里会显示「约 18 万行」，而全库其实是 19 万——差的那 9,253 行是
+// user_messages，治理层不授权所以 count(*) 拿不到（见 backend/catalog.py 里
+// rows_uncounted_* 那段）。一个少 5% 又没人解释的数字比不显示数字更糟。
+// 老快照没有这两个键（`web/catalog.json` 是生成物，可能先于本次改动生成），
+// 所以一律兜成空数组：那时退回原来的纯数字，不至于报错。
+function rowsPhrase(n, totals){
   if(n==null) return '';
-  return LANG==='zh' ? '约 '+rowsShort(n)+'行' : '~'+rowsShort(n)+' rows';
+  const zh=LANG==='zh';
+  const base = zh ? '约 '+rowsShort(n)+'行' : '~'+rowsShort(n)+' rows';
+  const gov=(totals&&totals.rows_uncounted_governed)||[];
+  const err=(totals&&totals.rows_uncounted_failed)||[];
+  const notes=[];
+  if(gov.length) notes.push(t('rows_unc_gov').replace('{n}',gov.length));
+  if(err.length) notes.push(t('rows_unc_err').replace('{n}',err.length));
+  if(!notes.length) return base;
+  return base+(zh?'（':' (')+notes.join(zh?'；':'; ')+(zh?'）':')');
 }
 
 function renderCatalog(){
@@ -896,7 +933,7 @@ function renderCatalog(){
   if(span){
     span.removeAttribute('data-i18n');               // 交给我们渲染，别再被 applyI18n 覆盖
     span.innerHTML=[C.database, L_tablesCount(C.totals.tables),
-                    rowsPhrase(C.totals.rows),
+                    rowsPhrase(C.totals.rows, C.totals),
                     C.engine].filter(Boolean).join(' · ')
       +' <span class="mut">· '+t('lbl_meta_from')
       +(C.source==='glue'?'Glue Data Catalog':'information_schema')
@@ -925,8 +962,12 @@ function renderCatalog(){
   }
 
   // ③ 治理面板：客户最常问的是「AI 会不会读到 PII」。这里给的不是承诺而是现状——
-  //    授权面几张、哪几张连表都没给、哪些列挂了脱敏。数据来自库里现查的
-  //    svv_relation_privileges 与 svv_attached_masking_policy。
+  //    授权面几张、哪几张连表都没给、哪些列不在授权里。数据由 backend/catalog.py 现查
+  //    Lake Formation（lakeformation:ListPermissions，按 AGENT_ROLE_ARN 那个 principal 过滤）得到。
+  //    没接治理层（未设 AGENT_ROLE_ARN）时 available=false，面板显示 reason 而不是画一个
+  //    空的"已脱敏"，因为一个看起来齐全的治理面板比没有面板更危险。
+  //    注意 masked 这个键的语义：v3 是**列级排除**（列不在授权面里、SELECT * 里没有它），
+  //    不是 v2 那种值级掩码（列在、值被替换）。LF 没有值级掩码原语，文案已跟着改。
   const g=C.governance||{};
   let panel=document.getElementById('govPanel');
   if(g.available){
@@ -1611,9 +1652,13 @@ async function askLive(question, deep){
 /* ================== BAKED (offline demo fallback) —— LEGACY，不再维护 ==================
    这一整块是"没有后端也能演示"的兜底：写死的问答、图表、KPI、SQL。
 
-   **已冻结在 v1 形态，且不打算跟进 v2。** 里面的数字全是 Aurora 时代的：DAU 1418、
-   7 日 GMV 124 万、日期 05/29–06/04，对应约 19 万行的旧数据集；现在真实规模是
-   48 张表 / 7992 万行 / Redshift Serverless。SQL 方言也还是 Postgres 的。
+   **已冻结在 v1 形态，后面两次换库都没跟。** 里面的数字全是 Aurora 时代的：DAU 1418、
+   7 日 GMV 124 万、日期 05/29–06/04。现行后端是 **Athena + S3 Tables / Iceberg**
+   （v2 的 Redshift Serverless 也已退役），Glue 目录 48 张表、约 22 万行，业务日历
+   止于 2026-01-24。这块里的每条 SQL 都还是 **Postgres 方言**、还在用
+   `current_date - interval '7 days'` 当"今天"——两样在现行后端上都是错的
+   （Trino 要 `interval '7' day`，"今天"要取 `meta_snapshot.as_of_date`）。
+   它们不进数据库、只是给观众看的字符串，所以没有任何检查会因此变红。
 
    为什么留着不删：它是 MODE==='baked' 的唯一落点，删了得连着改 boot() 的失败路径和
    一堆渲染分支，而线上根本走不到这里——线上 config.js 配了 askUrl，boot() 第一行就
@@ -1724,7 +1769,7 @@ const DOC_CONTENT={
 'domains/_index.md':"# 业务域索引\n\n共 8 个原始业务域（35 张明细表）+ 治理层 mart（4 张预聚合表）。根据问题关键词加载对应域的索引文件。\n\n## 域路由表\n| 域 | 表数 | 索引文件 |\n|----|----|----|\n| 用户域 | 5 | `user/_index.md` |\n| 商品域 | 3 | `product/_index.md` |\n| 行为域 | 4 | `behavior/_index.md` |\n| 社交域 | 6 | `social/_index.md` |\n| 交易域 | 4 | `transaction/_index.md` |\n| 归因域 | 5 | `attribution/_index.md` |\n| 营销域 | 5 | `marketing/_index.md` |\n| 实验域 | 3 | `experiment/_index.md` |\n\n## 关键词路由\n- **交易**：订单、GMV、成交、客单、订阅、套餐 → `transaction/_index.md`\n- **行为**：会话、事件、埋点、漏斗、转化 → `behavior/_index.md`\n- **归因**：渠道、获客、CAC、ROI、投放 → `attribution/_index.md`\n- **营销**：活动、优惠券、核销、推送 → `marketing/_index.md`\n- **实验**：A/B、实验、变体、分桶、对照组 → `experiment/_index.md`",
 'domains/behavior/_index.md':"# 行为域 (Behavior Domain)\n\n## 表清单\n| 表名 | 说明 | 详情文件 |\n|----|----|----|\n| events | 用户事件埋点 | `events.md` |\n| sessions | 会话记录 | `sessions.md` |\n| page_views | 页面浏览 | `page_views.md` |\n\n## 关键词路由\n| 关键词 | 加载文件 |\n|----|----|\n| 事件、埋点、漏斗、DAU | `events.md` |\n| 会话、来源、跳出 | `sessions.md` |",
 'domains/behavior/events.md':"# events - 用户事件表\n\n## 表结构\n| 字段 | 类型 | 说明 |\n|----|----|----|\n| event_id | BIGINT | 主键 |\n| user_id | BIGINT | 用户ID |\n| session_id | BIGINT | 会话ID |\n| event_name | VARCHAR(50) | app_open / view_product / add_to_cart / begin_checkout / purchase |\n| event_time | TIMESTAMP | 事件时间 |\n| properties | SUPER | 事件属性 |\n\n## 常用查询\n```sql\nSELECT date(event_time), count(DISTINCT user_id)\nFROM events GROUP BY 1;\n```",
-'domains/behavior/sessions.md':"# sessions - 会话表\n\n## 表结构\n| 字段 | 类型 | 说明 |\n|----|----|----|\n| session_id | BIGINT | 主键 |\n| user_id | BIGINT | 用户ID |\n| start_time | TIMESTAMP | 开始时间 |\n| is_bounce | BOOLEAN | 是否跳出 |\n| traffic_source | VARCHAR(50) | direct / organic_search / paid_search / social |\n| utm_source | VARCHAR(50) | UTM来源 |",
+'domains/behavior/sessions.md':"# sessions - 会话表\n\n## 表结构\n| 字段 | 类型 | 说明 |\n|----|----|----|\n| session_id | BIGINT | 主键 |\n| user_id | BIGINT | 用户ID |\n| start_time | TIMESTAMP | 开始时间 |\n| is_bounce | BOOLEAN | 是否跳出 |\n| traffic_source | VARCHAR(50) | direct / organic / paid / social / referral / email |\n| utm_source | VARCHAR(50) | weixin / douyin / baidu / xiaohongshu / organic / direct |",
 'domains/transaction/_index.md':"# 交易域 (Transaction Domain)\n\n## 表清单\n| 表名 | 说明 | 详情文件 |\n|----|----|----|\n| orders | 订单主表 | `orders.md` |\n| order_items | 订单明细 | `order_items.md` |\n| payments | 支付记录 | `payments.md` |\n| subscriptions | 订阅/会员 | `subscriptions.md` |\n\n## 关键词路由\n| 关键词 | 加载文件 |\n|----|----|\n| 订单、GMV、成交、客单 | `orders.md` |\n| 订阅、套餐、会员、续费 | `subscriptions.md` |",
 'domains/transaction/orders.md':"# orders - 订单表\n\n## 表结构\n| 字段 | 类型 | 说明 |\n|----|----|----|\n| order_id | BIGINT | 主键 |\n| user_id | BIGINT | 用户ID |\n| status | VARCHAR(20) | paid / shipped / delivered / cancelled / refunded |\n| actual_amount | DECIMAL(12,2) | 实付金额 |\n| placed_at | TIMESTAMP | 下单时间 |\n\n## 口径\n有效订单：`status IN ('paid','shipped','delivered')`",
 'domains/user/_index.md':"# 用户域 (User Domain)\n\n## 表清单\n| 表名 | 说明 | 详情文件 |\n|----|----|----|\n| users | 用户主表 | `users.md` |\n| user_profiles | 用户画像 | `user_profiles.md` |\n| user_devices | 设备信息 | `user_devices.md` |",
@@ -1756,14 +1801,27 @@ async function askBaked(question){
   addStep(T,'chart',t('lbl_chart'),'');await wait(560);
   renderResult(p);
   finishTrace(T);
-  T.summary.style.display='';await typeIn(T.summary,stripTags(mdBold(p.insight)));T.summary.innerHTML=mdBold(p.insight);T.summary.classList.remove('typing');
+  // 烘焙答案一律带上声明。BAKED_ROUTE 是关键词粗路由，问"退了多少钱"会落到默认那条
+  // （DAU 走势）——不标出来的话，这一段读起来和真结论一模一样。
+  const insight=t('baked_notice')+p.insight;
+  T.summary.style.display='';await typeIn(T.summary,stripTags(mdBold(insight)));T.summary.innerHTML=mdBold(insight);T.summary.classList.remove('typing');
   setChips(T.chips,p.followups);
   attachResult(T,p);
   busy=false;$('#send').disabled=false;
 }
 
 /* ---------------- dispatch + boot ---------------- */
-function ask(question, deep){ return MODE==='live'?askLive(question,deep):askBaked(question); }
+// 探针还没跑完就提问：**等它**，不能就地按 MODE 分派。否则「页面刚打开就点一个预置问题」
+// 会拿到一份写死的烘焙答案，而那时后端其实是好的——错的答案比转圈几秒难查得多。
+async function ask(question, deep){
+  if(BOOT) await BOOT;
+  // 已经降级过的页面，在提问前再探一发：后端可能是这一页加载之后才起来的。
+  // 少了这一发，最坏的情形是用户拿到一个「看起来正常、其实和问题无关」的烘焙答案
+  // （问退款给 DAU 走势），而后端就在旁边好好跑着。连不上时这一发是即刻失败的，
+  // 不会让离线演示变慢。见下方 recheckOnce()。
+  if(MODE!=='live') await recheckOnce();
+  return MODE==='live'?askLive(question,deep):askBaked(question);
+}
 // 示例问题:显示按语言切换的 label,但发给后端的 q 始终是原中文(知识库为中文)。
 const PRESET_GROUPS=[
   {name:{zh:'原始数据 · 问数',en:'Raw data · Ask'}, mode:'text-to-ETL', cap:{zh:'AI 现场从 35 张明细表 join、定口径、写复杂 SQL',en:'The AI joins across 35 detail tables, defines the metrics, and writes complex SQL on the fly'}, items:[
@@ -1814,33 +1872,131 @@ function clearSession(){
 }
 $('#clearBtn').onclick=clearSession;
 
+// —— 存活探针 ——
+// 这里原来是「一发、2500ms、超时即永久降级」。那个 2500 是本地 Postgres 时代照
+// `SELECT 1` 的几十毫秒定的；换成 Athena 后**后端刚起来时第一次打开页面必然掉进 baked**：
+// 右上角标「离线演示模式」，答案换成写死的烘焙数据（问"这段时间退了多少钱"答的是 DAU
+// 走势），底部提示还写着"后端未连接，请启动后端"，而后端就在那儿好好跑着——归因被指到了
+// 完全相反的方向。探针失败的代价不是一句红字，是**一个看起来正常、其实和问题无关的答案**。
+//
+// 第一版修法是把预算改成 12000ms。**那也是错的**：同一台机器上冷启动 ping 实测过 5.0s，
+// 也实测过 13.5s（凭证 + 查询排队），L6 当场就量到 12.5s 把它顶爆了。任何写死的毫秒数
+// 都是在猜一个云上的分位数，猜大一点只是把下一次翻车往后推。
+//
+// 所以判据换了：后端现在告诉我们它**在不在**（/health 三态 ok / warming / error，
+// 见 backend/server.py），而"在不在"是个本地事实、答得快。
+//   · warming（后端在、第一发 ping 还没回来）⟹ **继续等**，等到 PROBE_WARM_ATTEMPTS 发为止
+//   · error（探完了不通）/ 连不上 ⟹ 才算失败，攒够 PROBE_FAIL_ATTEMPTS 发再降级
+// 单发超时因此只需要覆盖「后端答一句话」而不是「Athena 查完一次」，8s 极宽裕。
+// 这两条由 scripts/ui/boot_test.mjs 钉住（含"warming 不许当成不在"那一条），
+// L6 则量后端答第一句话有多快、以及预热到 ok 用了多久还在不在这里的等待窗口里。
+const PROBE_TIMEOUT_MS=8000,      // 单发：够后端答一句话（它不再等 Athena 查完才回）
+      PROBE_FAIL_ATTEMPTS=3,      // 连不上 / dataLayer=error：攒够这么多发才降级
+      PROBE_WARM_ATTEMPTS=30,     // 后端在、数据层还在预热：最多陪它等这么多发（≈45s）
+      PROBE_GAP_MS=1500;
+
+// 返回 {state:'live', h} / {state:'warming'} / {state:'error'} / {state:'down'}。
+// 三种失败必须分开：'warming' 是"再等等"，另两种才是"降级"的理由。
+async function probeHealth(){
+  const ctrl=new AbortController();const to=setTimeout(()=>ctrl.abort(),PROBE_TIMEOUT_MS);
+  try{
+    // 探针必须打 /health：它是 GET，返回 {ok, dataLayer, db, model}。这里曾被误改成
+    // '/ask'，而 /ask 是 POST——GET 过去必然 405，h.ok 是 undefined，于是每次都掉进
+    // catch，本地跑的 demo 一直在放烘焙数据。
+    const r=await fetch(API+'/health',{signal:ctrl.signal});
+    const h=await r.json();
+    if(h&&h.ok) return {state:'live',h};
+    // dataLayer 缺失（老后端）按 'error' 处理：宁可少等，不要把"探不通"读成"再等等"。
+    return {state:(h&&h.dataLayer==='warming')?'warming':'error'};
+  }catch(e){
+    return {state:'down'};           // 连不上：后端没起、端口不对、或真超时
+  }finally{
+    clearTimeout(to);
+  }
+}
+
+let BOOT=null;                       // boot() 的 promise。ask() 要等它，见 ask()
 async function boot(){
   // AgentCore 部署：配了 askUrl 即恒为在线(实时链路),无需网络探针(且未登录时无凭证探不了)。
   if(window.APP_CONFIG&&window.APP_CONFIG.askUrl){
     MODE='live';HEALTH={ok:true};BOOTED=true;$('#pulse').classList.remove('off');
     renderStatus();loadCatalog();return;
   }
-  try{
-    const ctrl=new AbortController();const to=setTimeout(()=>ctrl.abort(),2500);
-    // 探针必须打 /health：它是 GET，返回 {ok, db, model}。这里曾被误改成 '/ask'，
-    // 而 /ask 是 POST——GET 过去必然 405，h.ok 是 undefined，于是每次都掉进 catch，
-    // 本地跑的 demo 一直在放烘焙数据。界面确实标了"离线演示模式"，但它给的提示是
-    // "后端未连接，启动后端"——而后端明明起着，归因完全指错了方向。
-    const r=await fetch(API+'/health',{signal:ctrl.signal});clearTimeout(to);
-    const h=await r.json();
-    if(h.ok){
-      MODE='live';HEALTH=h;BOOTED=true;
+  // 探不到就重试：后端可能正在起（uvicorn 打印端口早于数据层预热完成）。
+  // 这期间界面停在初始的「连接中…」——不先渲染成「离线演示模式」再翻回来，
+  // 因为那个标签会被读成结论。
+  // 两个计数分开记：'warming' 是后端明说"我在，再等等"，它不该消耗"失败"的额度；
+  // 而它自己也有上限，否则后端要是卡在预热上，页面就永远转圈——那同样是不说实话。
+  let fails=0, warms=0;
+  for(;;){
+    const r=await probeHealth();
+    if(r.state==='live'){
+      MODE='live';HEALTH=r.h;BOOTED=true;
       $('#pulse').classList.remove('off');
       renderStatus();
       loadCatalog();                 // 异步拉真实元数据，不阻塞首屏
-    } else { throw new Error('db down'); }
-  }catch(e){
-    MODE='baked';BOOTED=true;
-    renderStatus();
+      return;
+    }
+    if(r.state==='warming'){ if(++warms>=PROBE_WARM_ATTEMPTS) break; }
+    else                   { if(++fails>=PROBE_FAIL_ATTEMPTS) break; }
+    await wait(PROBE_GAP_MS);
   }
+  MODE='baked';BOOTED=true;
+  renderStatus();
+  recheckLoop();                     // 降级不是终局，见下
   // 不自动发问：登录后先停在欢迎页，由用户主动点示例或输入
 }
-boot();
+
+// —————————————— 降级之后还要继续看后端：自愈 ——————————————
+// 上面那个 for(;;) 里 break 出去就完事了，于是这一页在它整个生命周期里**再也不看一眼
+// 后端**。而失败额度只有 PROBE_FAIL_ATTEMPTS 发 ≈ 3s，比 uvicorn 打开端口的时间还短：
+// 「重启后端 → 立刻刷新页面」这个最自然的动作，三发全落在 connection refused 上，页面
+// 就永久锁死在离线演示模式，后端随后热起来也没人再问。用户看到的是"重启也刷新了，
+// 还是跟之前一模一样"，而归因会指向"改的东西没生效"——它生效了，只是救不了这条路。
+//
+// 三条自愈路径，用户不需要知道发生了什么：
+//   · 后台退避重探：覆盖"先开页面、再起后端"。**有上限**——探通的 /health 会真查一次
+//     Athena（要钱），无限轮询会把一个没人看的空闲页面变成持续开销。
+//   · 标签页重新可见时探一发：切回来这个动作本身就是"我要用了"，而且不花后台轮询的钱。
+//   · 提问前探一发（最要紧的一条）：绝不在后端明明活着的时候给出烘焙答案。
+// 这三条由 scripts/ui/boot_test.mjs 场景⑧⑨钉住。
+const RECHECK_GAP_MS=3000,           // 降级后第一次重探隔多久
+      RECHECK_MAX_GAP_MS=15000,      // 退避上限
+      RECHECK_WINDOW_MS=120000;      // 后台重探总共试这么久；此后只留"可见"和"提问"两条
+let RECHECKING=false;
+
+// 从 baked 翻到 live。方向只有这一个：live 不会退回 baked——半途换掉一个已经给过答案的
+// 页面的身份标签，比继续用当前模式更容易被误读。
+function goLive(h){
+  if(MODE==='live') return;
+  MODE='live';HEALTH=h;
+  $('#pulse').classList.remove('off');
+  renderStatus();                    // 徽标/底部文案从「离线演示」翻成真实模型与库
+  loadCatalog();                     // baked 那条路没拉过真元数据，这里补上
+}
+/** 探一发；活了就切实时。返回"现在是不是实时"。 */
+async function recheckOnce(){
+  if(MODE==='live') return true;
+  const r=await probeHealth();
+  if(r.state==='live'){ goLive(r.h); return true; }
+  return false;
+}
+async function recheckLoop(){
+  if(RECHECKING||MODE==='live') return;
+  RECHECKING=true;
+  let gap=RECHECK_GAP_MS,spent=0;
+  while(MODE!=='live'&&spent<RECHECK_WINDOW_MS){
+    await wait(gap);spent+=gap;
+    if(await recheckOnce()) break;
+    gap=Math.min(Math.round(gap*1.5),RECHECK_MAX_GAP_MS);
+  }
+  RECHECKING=false;
+}
+document.addEventListener('visibilitychange',()=>{
+  if(!document.hidden&&MODE!=='live') recheckOnce();
+});
+
+BOOT=boot();
 </script>
 </body>
 </html>

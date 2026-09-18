@@ -1,15 +1,19 @@
 {
  "source": "glue",
  "warning": null,
- "catalog_id": "analytics_agent_rs",
- "engine": "Redshift Serverless",
+ "catalog_id": "s3tablescatalog/analytics-agent-tables",
+ "engine": "Athena + S3 Tables (Iceberg)",
  "database": "app_analytics",
- "transport": "Data API",
- "region": "ap-northeast-1",
+ "transport": "Athena API",
+ "region": "us-west-2",
  "totals": {
   "tables": 48,
-  "rows": 79924448,
-  "rows_all_layers": 96491202,
+  "rows": 180419,
+  "rows_all_layers": 210834,
+  "rows_uncounted_governed": [
+   "user_messages"
+  ],
+  "rows_uncounted_failed": [],
   "domains": 10,
   "columns": 476,
   "by_layer": {
@@ -23,12 +27,11 @@
   }
  },
  "governance": {
-  "role": "analytics_agent_ro",
+  "role": "arn:aws:iam::<账号>:role/analytics-agent-ro",
   "available": true,
-  "granted_tables": 45,
+  "reason": null,
+  "granted_tables": 47,
   "ungranted_tables": [
-   "orders_backup_20251201",
-   "tmp_campaign_roi_analysis",
    "user_messages"
   ],
   "masked": [
@@ -36,26 +39,23 @@
     "table": "user_profiles",
     "columns": [
      "birth_date"
-    ],
-    "policy": "mask_birthdate"
+    ]
    },
    {
     "table": "users",
     "columns": [
-     "email"
-    ],
-    "policy": "mask_email"
-   },
-   {
-    "table": "users",
-    "columns": [
+     "email",
      "phone"
-    ],
-    "policy": "mask_phone"
+    ]
    }
   ],
   "error": null
  },
+ "timings": {
+  "metadata_ms": 6281.0,
+  "row_counts_ms": 13160.2
+ },
+ "row_counts_exact": true,
  "domains": [
   {
    "key": "user",
@@ -71,7 +71,7 @@
       "paid_amount"
      ],
      "column_count": 6,
-     "rows": 6863106,
+     "rows": 5285,
      "layer": "dws",
      "status": "active",
      "summary": "用户日汇总：每用户每天的事件数、会话数、下单数、消费额",
@@ -95,7 +95,7 @@
       "created_at"
      ],
      "column_count": 12,
-     "rows": 317717,
+     "rows": 744,
      "layer": "base",
      "status": "active",
      "summary": "",
@@ -119,7 +119,7 @@
       "updated_at"
      ],
      "column_count": 12,
-     "rows": 213520,
+     "rows": 500,
      "layer": "base",
      "status": "active",
      "summary": "",
@@ -137,7 +137,7 @@
       "exited_at"
      ],
      "column_count": 4,
-     "rows": 554297,
+     "rows": 1298,
      "layer": "base",
      "status": "active",
      "summary": "",
@@ -182,7 +182,7 @@
       "updated_at"
      ],
      "column_count": 12,
-     "rows": 213520,
+     "rows": 500,
      "layer": "base",
      "status": "active",
      "summary": "",
@@ -209,7 +209,7 @@
       "page_name"
      ],
      "column_count": 6,
-     "rows": 8540780,
+     "rows": 20000,
      "layer": "dwd",
      "status": "active",
      "summary": "事件清洗层：只含可归到具体用户的事件，匿名/爬虫流量已剔除",
@@ -252,7 +252,7 @@
       "created_at"
      ],
      "column_count": 11,
-     "rows": 8540780,
+     "rows": 20000,
      "layer": "base",
      "status": "active",
      "summary": "",
@@ -274,7 +274,7 @@
       "created_at"
      ],
      "column_count": 10,
-     "rows": 12894870,
+     "rows": 30196,
      "layer": "base",
      "status": "active",
      "summary": "",
@@ -302,7 +302,7 @@
       "created_at"
      ],
      "column_count": 16,
-     "rows": 2135195,
+     "rows": 5000,
      "layer": "base",
      "status": "active",
      "summary": "",
@@ -332,7 +332,7 @@
       "paid_at"
      ],
      "column_count": 12,
-     "rows": 640800,
+     "rows": 1601,
      "layer": "dwd",
      "status": "active",
      "summary": "订单清洗层：只含有效订单，剔除 pending/cancelled/refunded",
@@ -348,7 +348,7 @@
       "net_revenue"
      ],
      "column_count": 4,
-     "rows": 91,
+     "rows": 96,
      "layer": "ads",
      "status": "active",
      "summary": "财务日收入：确认收入口径 —— 按 paid_at 记账、扣退款、不含运费",
@@ -388,7 +388,7 @@
       "created_at"
      ],
      "column_count": 11,
-     "rows": 1804240,
+     "rows": 4225,
      "layer": "base",
      "status": "active",
      "summary": "",
@@ -422,7 +422,7 @@
       "updated_at"
      ],
      "column_count": 22,
-     "rows": 854078,
+     "rows": 2000,
      "layer": "base",
      "status": "active",
      "summary": "",
@@ -441,11 +441,11 @@
       "placed_at"
      ],
      "column_count": 7,
-     "rows": 303612,
+     "rows": 765,
      "layer": "noise",
      "status": "deprecated",
      "summary": "某次订单表结构变更前的手工备份快照，数据止于 2025-12-01",
-     "granted": false,
+     "granted": true,
      "masked_columns": []
     },
     {
@@ -467,7 +467,7 @@
       "created_at"
      ],
      "column_count": 14,
-     "rows": 691800,
+     "rows": 1746,
      "layer": "base",
      "status": "active",
      "summary": "",
@@ -492,7 +492,7 @@
       "updated_at"
      ],
      "column_count": 13,
-     "rows": 21352,
+     "rows": 50,
      "layer": "base",
      "status": "active",
      "summary": "",
@@ -594,7 +594,7 @@
       "created_at"
      ],
      "column_count": 8,
-     "rows": 5978546,
+     "rows": 14000,
      "layer": "base",
      "status": "active",
      "summary": "",
@@ -609,7 +609,7 @@
       "created_at"
      ],
      "column_count": 3,
-     "rows": 15231627,
+     "rows": 35668,
      "layer": "base",
      "status": "active",
      "summary": "",
@@ -626,7 +626,7 @@
       "created_at"
      ],
      "column_count": 5,
-     "rows": 2989273,
+     "rows": 7000,
      "layer": "base",
      "status": "active",
      "summary": "",
@@ -656,7 +656,7 @@
       "updated_at"
      ],
      "column_count": 18,
-     "rows": 427039,
+     "rows": 1000,
      "layer": "base",
      "status": "active",
      "summary": "",
@@ -671,7 +671,7 @@
       "created_at"
      ],
      "column_count": 3,
-     "rows": 8184202,
+     "rows": 19165,
      "layer": "base",
      "status": "active",
      "summary": "",
@@ -693,7 +693,7 @@
       "read_at"
      ],
      "column_count": 10,
-     "rows": 3951392,
+     "rows": null,
      "layer": "base",
      "status": "active",
      "summary": "",
@@ -804,7 +804,7 @@
       "created_at"
      ],
      "column_count": 15,
-     "rows": 4270390,
+     "rows": 10000,
      "layer": "base",
      "status": "active",
      "summary": "",
@@ -825,7 +825,7 @@
      "layer": "noise",
      "status": "deprecated",
      "summary": "某分析师做活动复盘时留下的一次性 ROI 中间表，未再维护",
-     "granted": false,
+     "granted": true,
      "masked_columns": []
     },
     {
@@ -843,7 +843,7 @@
       "source"
      ],
      "column_count": 10,
-     "rows": 9708732,
+     "rows": 22735,
      "layer": "base",
      "status": "active",
      "summary": "",
@@ -981,7 +981,7 @@
       "tracking_params"
      ],
      "column_count": 11,
-     "rows": 149464,
+     "rows": 350,
      "layer": "base",
      "status": "active",
      "summary": "",
@@ -1005,7 +1005,7 @@
       "first_exposure_at"
      ],
      "column_count": 6,
-     "rows": 790022,
+     "rows": 1850,
      "layer": "base",
      "status": "active",
      "summary": "",
@@ -1084,7 +1084,7 @@
       "gmv_attributed"
      ],
      "column_count": 10,
-     "rows": 1788,
+     "rows": 1196,
      "layer": "mart",
      "status": "active",
      "summary": "口径已冻结的预聚合表",
@@ -1124,7 +1124,7 @@
       "gmv"
      ],
      "column_count": 8,
-     "rows": 2730,
+     "rows": 645,
      "layer": "mart",
      "status": "active",
      "summary": "口径已冻结的预聚合表",
@@ -1144,7 +1144,7 @@
       "last_active_date"
      ],
      "column_count": 8,
-     "rows": 213520,
+     "rows": 500,
      "layer": "mart",
      "status": "active",
      "summary": "口径已冻结的预聚合表",
@@ -1175,7 +1175,7 @@
    "table_count": 1
   }
  ],
- "generated_at": "2026-08-04 09:44:36",
+ "generated_at": "2026-08-20 18:49:36",
  "snapshot": true,
- "generated_at_utc": "2026-08-04 01:44:36 UTC"
+ "generated_at_utc": "2026-08-20 10:49:36 UTC"
 }

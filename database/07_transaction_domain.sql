@@ -52,7 +52,9 @@ CREATE TABLE payments (
     amount DECIMAL(12,2) NOT NULL,
     payment_method VARCHAR(50),  -- 'wechat', 'alipay', 'credit_card', 'balance'
     payment_channel VARCHAR(50),  -- 'app', 'h5', 'mini_program'
-    status VARCHAR(20) NOT NULL,  -- 'pending', 'success', 'failed', 'refunded'
+    -- 一单一支付、支付即终态，所以业务上合法的 pending / failed 在本批数据里没有，
+    -- 支付成功率算不出来（卡片里有同一条说明）
+    status VARCHAR(20) NOT NULL,  -- 'success', 'refunded'
     transaction_id VARCHAR(100),  -- 第三方支付流水号
     paid_at TIMESTAMP,
     failure_reason VARCHAR(200),
@@ -65,12 +67,12 @@ CREATE TABLE payments (
 CREATE TABLE subscriptions (
     subscription_id BIGSERIAL PRIMARY KEY,
     user_id BIGINT REFERENCES users(user_id),
-    plan_name VARCHAR(100) NOT NULL,  -- 'monthly', 'quarterly', 'yearly'
+    plan_name VARCHAR(100) NOT NULL,  -- 中文取值：'月度会员', '季度会员', '年度会员'（不是 monthly/quarterly/yearly）
     plan_price DECIMAL(10,2),
     start_date DATE NOT NULL,
     end_date DATE NOT NULL,
     auto_renew BOOLEAN DEFAULT TRUE,
-    status VARCHAR(20) DEFAULT 'active',  -- 'active', 'expired', 'cancelled'
+    status VARCHAR(20) DEFAULT 'active',  -- 'active', 'expired'（业务上还有 cancelled，本批数据没有，所以 cancelled_at / cancel_reason 整列为空）
     payment_id BIGINT REFERENCES payments(payment_id),
     cancelled_at TIMESTAMP,
     cancel_reason VARCHAR(200),

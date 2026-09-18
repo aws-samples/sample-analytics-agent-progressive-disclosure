@@ -23,36 +23,44 @@
 
 ### payment_method 支付方式
 
-| 值 | 说明 |
-|----|------|
-| alipay | 支付宝 |
-| wechat | 微信支付 |
-| card | 银行卡/信用卡 |
-| balance | 账户余额 |
+| 值 | 说明 | 实测行数 | 占比 |
+|----|------|------|------|
+| wechat | 微信支付 | 311,037 | 45.12% |
+| alipay | 支付宝 | 275,288 | 39.93% |
+| credit_card | 银行卡/信用卡 | 68,720 | 9.97% |
+| balance | 账户余额 | 34,345 | 4.98% |
+
+> 银行卡的值是 `credit_card`，**不是** `card`。分布不均匀：两家钱包合计 85%，
+> 余额支付只占 5%，所以按支付方式切片时小样本桶要留意置信度。
 
 ### payment_channel 支付渠道
 
-| 值 | 说明 |
-|----|------|
-| alipay_app | 支付宝APP |
-| alipay_wap | 支付宝H5 |
-| alipay_mini | 支付宝小程序 |
-| wechat_app | 微信APP |
-| wechat_jsapi | 微信公众号 |
-| wechat_mini | 微信小程序 |
-| wechat_h5 | 微信H5 |
-| unionpay | 银联 |
-| visa | VISA卡 |
-| mastercard | MasterCard |
+| 值 | 说明 | 实测行数 | 占比 |
+|----|------|------|------|
+| app | APP 内支付 | 399,339 | 57.93% |
+| h5 | H5 页面支付 | 151,925 | 22.04% |
+| mini_program | 小程序支付 | 138,126 | 20.04% |
+
+> 只有这 3 个值，无 NULL。这一列跟 `payment_method` 是**两个正交的维度**
+> （渠道 = 在哪个端付，方式 = 用什么付），可以交叉分组。
+>
+> 这一栏 2026-09-01 改过：在此之前这一列整列为 NULL，卡片写着「按它切片只会得到一个
+> NULL 桶，要分渠道就用 `payment_method`」。旧结论现在是错的，这一列可以直接用。
+
+### failure_reason 失败原因
+
+> ⚠️ **这一列仍然整列为 NULL**（689,390 行全空），这跟下面 `status` 只有两个值是同一件事：
+> 没有失败记录，自然没有失败原因。不是漏灌，重灌也不会变。
 
 ### status 支付状态
 
-| 值 | 说明 |
-|----|------|
-| pending | 待支付 |
-| success | 支付成功 |
-| failed | 支付失败 |
-| refunded | 已退款 |
+| 值 | 说明 | 实测行数 | 占比 |
+|----|------|------|------|
+| success | 支付成功 | 647,395 | 93.91% |
+| refunded | 已退款 | 41,995 | 6.09% |
+
+> 一单一支付的设计下**没有** `pending` / `failed` 记录，所以**算不了支付成功率**。
+> success 数 = 有效订单数（647,395，可以跟 `orders` 对表），refunded 数 = 退款订单数。
 
 ## 索引
 
@@ -72,7 +80,7 @@ SELECT
     ROUND(COUNT(CASE WHEN status = 'success' THEN 1 END) * 100.0 / COUNT(*), 2) AS success_rate,
     SUM(CASE WHEN status = 'success' THEN amount ELSE 0 END) AS total_amount
 FROM payments
-WHERE paid_at >= CURRENT_DATE - INTERVAL '30 days'
+WHERE paid_at >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '30' day
    OR status = 'failed'
 GROUP BY payment_method
 ORDER BY total_amount DESC;
@@ -87,7 +95,7 @@ SELECT
     SUM(CASE WHEN status = 'success' THEN amount ELSE 0 END) AS total_amount,
     ROUND(COUNT(CASE WHEN status = 'success' THEN 1 END) * 100.0 / COUNT(*), 2) AS success_rate
 FROM payments
-WHERE paid_at >= CURRENT_DATE - INTERVAL '30 days'
+WHERE paid_at >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '30' day
 GROUP BY payment_method, payment_channel
 ORDER BY total_amount DESC;
 ```

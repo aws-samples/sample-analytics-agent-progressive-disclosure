@@ -27,10 +27,33 @@
 | web | 网页浏览器 |
 | mini_program | 小程序 |
 
-### 常见 device_brand
-```
-Apple, Samsung, Huawei, Xiaomi, OPPO, vivo, OnePlus, Realme
-```
+### device_brand 设备品牌
+| 值 | 说明 | 实测行数 |
+|----|------|------|
+| Apple | 苹果，**唯一**的 ios 品牌 | 245 |
+| Browser | 浏览器，**唯一**的 web 品牌（不是厂商名） | 83 |
+| 华为 | | 53 |
+| OPPO | | 50 |
+| 荣耀 | | 49 |
+| 小米 | | 47 |
+| realme | 注意**小写** | 47 |
+| 一加 | | 46 |
+| WeChat | 微信，**唯一**的 mini_program 品牌（不是厂商名） | 44 |
+| 三星 | | 42 |
+| vivo | | 38 |
+
+> **牌名以中文入库**（`华为` / `小米` / `三星` / `一加` / `荣耀`），只有 `Apple`、`OPPO`、
+> `vivo`、`realme` 是拉丁字母，且 `realme` 小写。写 `WHERE device_brand = 'Huawei'`
+> 会**返回 0 行且不报错**——这一列以前在卡片里被译成了英文（`Samsung, Huawei, Xiaomi,
+> OnePlus, Realme`），11 个取值里只有 3 个对得上，2026-08-28 按库里实测改回来。
+>
+> `Browser` / `WeChat` 是**设备类型的占位品牌**，不是手机厂商：web 端只有浏览器、
+> 小程序跑在宿主 APP 里，本来就没有机型。要按厂商分析必须
+> `WHERE device_type = 'android'`，否则 Apple(245) + Browser(83) + WeChat(44) = 372 行
+> （占全表 50%）会混进"品牌分布"里。
+>
+> 品牌与 `device_type` / `device_model` **同源**，不会出现
+> `device_brand = 'Apple'` 配 `device_model = 'Redmi K70'` 这种组合。
 
 ## 索引
 

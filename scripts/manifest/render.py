@@ -2,13 +2,24 @@
 
 用法（仓库根）：
     python3 scripts/manifest/render.py            # 生成全部产物
-    python3 scripts/manifest/render.py --check    # 只校验 manifest（CI 用）
+    python3 scripts/manifest/render.py --check    # 校验 manifest + 断言产物未被手改（CI 用）
 
 产物（全部带"generated"头，不要手改）：
-    database/10_derived.sql                        # CTAS DDL，按 layer 分节
-    knowledge/domains/<domain>/<table>.md          # 每表一张数据字典卡片
+    database/10_derived.sql                        # CTAS DDL（Postgres，v1 本地库用）
+    knowledge/domains/<domain>/<table>.md          # 每表一张数据字典卡片（SQL 转成 Trino）
     knowledge/domains/<domain>/_index.derived.md   # 该域派生表的索引片段
     knowledge/domains/_derived_overview.md         # 派生层总览（L1 路由的补充读物）
+
+## `--check` 校验的是两件事，不是一件
+
+原来 `--check` 只跑 `check(tables)`（manifest 的必填字段/枚举/domain 是否成立），
+**从不比对产物**——于是手改一张生成的卡片，它照样打印 `manifest OK` 并 exit 0。
+`scripts/test_all.sh` 那一行当时标的是「派生层知识卡片是最新渲染」,名字比它实际
+管的多。一个名字比覆盖面大的检查器比没有检查器更坏:它让人以为这块有人看着。
+（这是写 L8 负测时抓出来的,见 `scripts/negative_tests.py` 的 `manifest-artifact-handedit`。）
+
+现在 `--check` 两件都做：manifest 自身合法 **且** 上面四类产物与「现在渲染出来的」
+逐字相同。改了 manifest 就重新跑一次无参数的 `render.py`，别手改产物。
 
 设计约定：
   - 手写资产（35 基表卡片、mart、域 _index.md）一概不碰；派生表的索引片段
@@ -16,12 +27,26 @@
     需要人工确认的一次性提示）。
   - deprecated 表的卡片带"⛔ 已废弃"横幅 + replaced_by 指引，索引里同样标注。
     这是噪音表考点的落点：能查到，但读了文档就知道别用。
+
+## 卡片里的 SQL 为什么要转方言
+
+manifest 的 `sql` 写的是 Postgres（`database/10_derived.sql` 和 v1 本地库要它），
+但**卡片是给 agent 读的，agent 查的是 Athena（Trino）**。照抄 Postgres 会让 agent
+写出跑不了的 SQL——而且没有任何东西会报错，因为文档不会被执行。
+
+所以卡片的「构建口径」节走一遍 `scripts/gen/pg_to_trino.py`。真源仍然只有一份，
+只是落地成两种方言。转换结果由 `scripts/lakehouse/verify_doc_sql.py` 拿 Athena 的
+EXPLAIN 兜底：卡片里的 SQL 真跑不动，那个脚本会红。
 """
 from __future__ import annotations
 
 import argparse
+import difflib
 import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "gen"))
+from pg_to_trino import convert as to_trino  # noqa: E402
 
 try:
     import yaml
@@ -112,8 +137,12 @@ def render_card(t: dict) -> str:
     if t.get("caveats"):
         lines += ["", "## 注意（口径与坑）", ""]
         lines += [f"- {c}" for c in t["caveats"]]
+    # 卡片里的 SQL 转成 Trino：agent 照着卡片写 SQL，而 SQL 要交给 Athena 跑
+    trino_sql, _ = to_trino(t["sql"].strip().rstrip(";"))
     lines += ["", "## 构建口径（本表如何从基表算出）", "",
-              "```sql", t["sql"].strip().rstrip(";"), "```", ""]
+              "> 方言为 Trino（Athena）。真源是 `schema_manifest.yaml` 里的 Postgres 写法，",
+              "> 由 `scripts/gen/pg_to_trino.py` 转换而来。", "",
+              "```sql", trino_sql, "```", ""]
     return "\n".join(lines)
 
 
@@ -147,9 +176,23 @@ def render_overview(tables: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def artifacts(tables: list[dict]) -> dict[Path, str]:
+    """全部产物 → 内容。渲染与落盘分开，`--check` 才有东西可比。"""
+    out: dict[Path, str] = {DDL_OUT: render_ddl(tables)}
+    by_domain: dict[str, list[dict]] = {}
+    for t in tables:
+        by_domain.setdefault(t["domain"], []).append(t)
+        out[KNOW / t["domain"] / f"{t['name']}.md"] = render_card(t)
+    for domain, group in by_domain.items():
+        out[KNOW / domain / "_index.derived.md"] = render_domain_fragment(domain, group)
+    out[KNOW / "_derived_overview.md"] = render_overview(tables)
+    return out
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--check", action="store_true", help="只校验不写文件")
+    ap.add_argument("--check", action="store_true",
+                    help="只校验：manifest 合法 + 产物与现在渲染的逐字相同")
     args = ap.parse_args()
 
     tables = load()
@@ -160,30 +203,39 @@ def main() -> int:
             print("  -", e)
         return 1
     print(f"manifest OK：{len(tables)} 张派生表")
+
+    want = artifacts(tables)
+
     if args.check:
+        drift: list[tuple[Path, str]] = []
+        for path, text in sorted(want.items()):
+            if not path.exists():
+                drift.append((path, "文件不存在"))
+            elif path.read_text(encoding="utf-8") != text:
+                have = path.read_text(encoding="utf-8").splitlines()
+                d = [x for x in difflib.unified_diff(have, text.splitlines(),
+                                                     lineterm="", n=0)
+                     if x[:1] in "+-" and x[:3] not in ("---", "+++")]
+                drift.append((path, f"{len(d)} 行与真源不同：" +
+                              "; ".join(x.strip()[:60] for x in d[:3])))
+        if drift:
+            print(f"\n产物漂移 {len(drift)} 个文件 ❌（它们是生成物，不该手改）\n")
+            for path, why in drift:
+                print(f"  - {path.relative_to(ROOT)}：{why}")
+            print("\n改法：把改动写回 schema_manifest.yaml，再跑一次 "
+                  "`python3 scripts/manifest/render.py`。")
+            return 1
+        print(f"生成物一致 ✅  {len(want)} 个文件与 manifest 渲染结果逐字相同")
         return 0
 
-    DDL_OUT.write_text(render_ddl(tables))
-    print(f"→ {DDL_OUT.relative_to(ROOT)}")
-
-    by_domain: dict[str, list[dict]] = {}
-    for t in tables:
-        by_domain.setdefault(t["domain"], []).append(t)
-        card = KNOW / t["domain"] / f"{t['name']}.md"
-        card.write_text(render_card(t))
-        print(f"→ {card.relative_to(ROOT)}")
-    for domain, group in by_domain.items():
-        frag = KNOW / domain / "_index.derived.md"
-        frag.write_text(render_domain_fragment(domain, group))
-        print(f"→ {frag.relative_to(ROOT)}")
-    over = KNOW / "_derived_overview.md"
-    over.write_text(render_overview(tables))
-    print(f"→ {over.relative_to(ROOT)}")
+    for path, text in sorted(want.items()):
+        path.write_text(text)
+        print(f"→ {path.relative_to(ROOT)}")
 
     # 手写索引需要的一次性接线提示（不自动改手写文件）
     print("\n接线检查（手写文件里应有以下链接，缺了要补）：")
     print("  knowledge/domains/_index.md → _derived_overview.md")
-    for domain in by_domain:
+    for domain in sorted({t["domain"] for t in tables}):
         print(f"  knowledge/domains/{domain}/_index.md → _index.derived.md")
     return 0
 
