@@ -20,21 +20,29 @@
 ## 字段枚举值
 
 ### campaign_type 活动类型
-| 值 | 说明 |
-|----|------|
-| promotion | 促销活动（如满减、折扣） |
-| coupon | 优惠券发放活动 |
-| event | 事件活动（如新品发布、节日活动） |
-| content | 内容营销（如文章推送、视频营销） |
+| 值 | 说明 | 实测行数 |
+|----|------|------|
+| promotion | 促销活动（如满减、折扣） | 16 |
+| recall | 流失召回 | 15 |
+| festival | 节日大促 | 11 |
+| new_user | 新客专享 | 8 |
+
+> 全表 50 行。旧文档写的 `coupon` / `event` / `content` 都不存在——节日活动的值是
+> `festival`。注意这跟 `ad_campaigns.campaign_type`（广告投放表：awareness /
+> retargeting / acquisition）是**两套不同的枚举**，别混用。
 
 ### status 活动状态
-| 值 | 说明 |
-|----|------|
-| draft | 草稿，未发布 |
-| scheduled | 已排期，等待开始 |
-| active | 进行中 |
-| paused | 已暂停 |
-| completed | 已结束 |
+| 值 | 说明 | 实测行数 |
+|----|------|------|
+| completed | 已结束 | 28 |
+| active | 进行中 | 11 |
+| scheduled | 已排期，等待开始 | 4 |
+| cancelled | 已取消 | 3 |
+| draft | 草稿，未发布 | 2 |
+| paused | 已暂停 | 2 |
+
+> 旧文档漏了 `cancelled`。「进行中」只有 11 行，而快照日期是固定的
+> （见 `meta_snapshot.as_of_date`），所以别用 `CURRENT_DATE` 判活动是否在跑。
 
 ## 索引
 
@@ -51,7 +59,7 @@ SELECT
     COUNT(*) AS campaign_count,
     SUM(budget) AS total_budget
 FROM campaigns
-WHERE start_date >= '2024-01-01'
+WHERE start_date >= date '2024-01-01'
 GROUP BY status, campaign_type
 ORDER BY status, campaign_count DESC;
 ```
@@ -68,7 +76,8 @@ SELECT
     status
 FROM campaigns
 WHERE status IN ('active', 'completed')
-  AND start_date >= DATE_TRUNC('month', CURRENT_DATE)
+  -- 「本月」= 锚点所在的月（2026-01），不是真实当月
+  AND start_date >= DATE_TRUNC('month', (SELECT max(as_of_date) FROM meta_snapshot))
 ORDER BY budget DESC;
 ```
 
@@ -80,7 +89,7 @@ SELECT
     COUNT(CASE WHEN status = 'active' THEN 1 END) AS active_count,
     SUM(budget) AS total_budget_managed
 FROM campaigns
-WHERE start_date >= CURRENT_DATE - INTERVAL '90 days'
+WHERE start_date >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '90' day
 GROUP BY owner
 ORDER BY total_campaigns DESC;
 ```

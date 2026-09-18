@@ -10,19 +10,19 @@
 | variant_key | VARCHAR(50) | 变体标识符（如 control, treatment_a） |
 | description | TEXT | 变体描述 |
 | traffic_percentage | DECIMAL(5,2) | 该变体分配的流量百分比 |
-| config_json | JSONB | 变体配置参数 |
+| config_json | `string` | 变体配置参数（JSON 文本；**不是 Postgres 的 JSONB**，取值用 `json_extract_scalar`）。**种子数据里整列为 NULL** |
 | is_control | BOOLEAN | 是否为对照组 |
 | created_at | TIMESTAMP | 记录创建时间 |
 
 ## 字段枚举值
 
-### variant_key 常见变体标识
-| 值 | 说明 |
-|----|------|
-| control | 对照组，保持原有体验 |
-| treatment_a | 实验组A |
-| treatment_b | 实验组B |
-| treatment_c | 实验组C |
+### variant_key 变体标识
+
+> 这一列**不是枚举**，是「实验名 + 组名」拼出来的键：30 行 30 个不同取值，形如
+> `<test_key>_control` / `<test_key>_treatment_a` / `<test_key>_treatment_b`
+> （例如 `homepage_banner_v2_control`）。**不要**照着 `control` / `treatment_a` 筛，
+> 那样是空集；要认组别就用 `is_control`，或者 `variant_key LIKE '%_control'`。
+> 实测没有 `treatment_c`（旧文档写过）——每个实验最多 3 组。
 
 ### is_control 对照组标识
 | 值 | 说明 |
@@ -81,14 +81,20 @@ ORDER BY t.test_name;
 ```
 
 ### 查看特定配置项的变体
+> ⚠️ **这段查询在当前种子数据上返回 0 行**：`config_json` 整列为 NULL（登记在
+> `scripts/lakehouse/verify_constants.py` 的清单里）。留着是给"以后填上了怎么查"当模板，
+> **别拿它去回答实际问题**——真实分流效果看 `ab_test_assignments`。
+> 另外 Postgres 的 `json ? 'k'`（判断键存在）在 Trino 里**是语法错**，
+> 要写成 `json_extract_scalar(...) IS NOT NULL`。
+
 ```sql
 SELECT
     t.test_name,
     v.variant_name,
-    v.config_json->>'button_color' AS button_color,
-    v.config_json->>'discount_percentage' AS discount
+    json_extract_scalar(v.config_json, '$.button_color') AS button_color,
+    json_extract_scalar(v.config_json, '$.discount_percentage') AS discount
 FROM ab_test_variants v
 JOIN ab_tests t ON v.test_id = t.test_id
-WHERE v.config_json ? 'button_color'
+WHERE json_extract_scalar(v.config_json, '$.button_color') IS NOT NULL
 ORDER BY t.test_id, v.variant_id;
 ```

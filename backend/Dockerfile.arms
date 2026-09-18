@@ -1,0 +1,98 @@
+# 三 arm 网页后端 —— 云上镜像（在 backend/Dockerfile 之上补 DuckDB / Redshift 两条 arm）
+#
+# ## 为什么要这个镜像
+#
+# DuckDB 是**进程内**引擎，它的耗时就是跑它那台机器的耗时。在笔记本上跑 DuckDB、
+# 同时从笔记本调云上的 Athena 和 Redshift，浏览器端量到的三个延迟不是同一样东西：
+# 一个是本机算力加跨广域网拉数据，两个是跨广域网发 SQL、云上贴着数据算。
+# 把整套后端搬到同区 Fargate 之后，三条 arm 的引擎访问全在区内，笔记本到后端
+# 只剩同一条 HTTP 跳，剩下的差异才只剩引擎。
+#
+# 耗时基准（`scripts/bench/fargate.py`）早就是这么做的——它把三条 arm 的客户端
+# 放进同一个任务跑固定 8 条查询。这个镜像补的是**问答**这一段：同样的位置，
+# 但跑的是完整后端加网页 UI，问什么由人决定。
+#
+# ## 为什么是 overlay 而不是直接改 backend/Dockerfile
+#
+# 那份是既有的云上镜像定义，`docker-compose.cloud.yml` 还在用。加两条 arm 是这次
+# 架构对比的需要，不该让它承担。所以这里 `FROM` 它构出来的镜像，只叠增量。
+#
+# 构建两步（第一步就是现有那份，参数一个都不改）：
+#   docker build -f backend/Dockerfile      -t analytics-agent-backend:base .
+#   docker build -f backend/Dockerfile.arms -t analytics-agent-backend:arms .
+ARG BASE=analytics-agent-backend:base
+# nosemgrep: dockerfile-source-not-pinned —— 与 scripts/bench/Dockerfile 同口径，按 tag 取
+# 默认取本机上一次构建出来的同名 tag。推到 ECR 之后按自己的账号覆盖：
+#   docker build --build-arg \
+#     EXT_SOURCE=<account-id>.dkr.ecr.<region>.amazonaws.com/analytics-agent-bench:latest ...
+ARG EXT_SOURCE=analytics-agent-bench:latest
+FROM ${EXT_SOURCE} AS ext
+
+# nosemgrep: dockerfile-source-not-pinned —— 本地上一步刚构出来的基础镜像
+FROM ${BASE}
+
+USER root
+
+# duckdb 版本**钉死**而不是 >=：extension 是按版本编译的，pip 装的版本与下面
+# COPY 进来的 extension 不一致时，最后那步 LOAD 会在构建时报错。浮动版本的话
+# 这个不一致要等到浏览器里问第一个问题才现形，而那时报的是 extension 装不上，
+# 看起来像凭证或网络问题。
+RUN pip install --no-cache-dir duckdb==1.5.5 'pyarrow>=17'
+
+# 两条 arm 的客户端。`db.py::_arm_module()` 的回退路径是
+# `Path(db.py)/../scripts/<subdir>`，在这个镜像里就是 /app/scripts/duckdb 与
+# /app/scripts/redshift —— 放到这两个位置，db.py 一行都不用改。
+COPY scripts/duckdb/   /app/scripts/duckdb/
+COPY scripts/redshift/ /app/scripts/redshift/
+RUN find /app/scripts -name __pycache__ -type d -prune -exec rm -rf {} + || true
+
+# 算力口径与 scripts/bench/Dockerfile 逐字相同，也与 scripts/duckdb/conn.py 的默认值
+# 相同。三处必须一致：内存额度决定什么时候溢写，而溢写与否是耗时的主要来源，
+# 两边额度不同等于在比两种执行计划而不是两个引擎。
+ENV DUCKDB_THREADS=4 \
+    DUCKDB_MEMORY_LIMIT=4GB \
+    DUCKDB_TEMP_DIR=/tmp/duckdb-spill
+
+# extension 在**构建时**就位，不留到运行时拉。运行时拉有两个问题：构建环境到
+# extensions.duckdb.org 不通（http/https 都是 Connection timed out），以及每次冷启动
+# 多几秒、这几秒会混进第一条查询的墙钟里。
+#
+# 两个目录都要拷：conn.py 把 home_directory 指到 DUCKDB_TEMP_DIR，httpfs/aws/iceberg
+# 在那儿；iceberg 运行时还会自己拉 avro，那份落在 $HOME/.duckdb 下。少拷一个就变成
+# 运行时出网，报的是 extension 装不上——那个错完全不指向真正的原因。
+#
+# 源镜像里的用户叫 bench（HOME=/home/bench），这个镜像里叫 appuser
+# （HOME=/home/appuser），两边 uid 都是 10001，但路径不同，所以是改名拷贝。
+RUN mkdir -p /tmp/duckdb-spill && chown -R appuser:appuser /tmp/duckdb-spill
+COPY --from=ext --chown=appuser:appuser /tmp/duckdb-spill/.duckdb /tmp/duckdb-spill/.duckdb
+COPY --from=ext --chown=appuser:appuser /home/bench/.duckdb       /home/appuser/.duckdb
+
+USER appuser
+
+# 只 LOAD 不 INSTALL：这一步是**版本校验**，不是准备工作。pip 那份 duckdb 与拷进来的
+# extension 版本不一致时在这里就炸，而不是等到跑起来才发现。
+RUN python -c "import duckdb; c=duckdb.connect(); \
+c.execute(\"SET home_directory='/tmp/duckdb-spill'\"); \
+[c.execute(f'LOAD {e};') for e in ('httpfs','aws','iceberg')]; \
+print('预装 extension:', duckdb.__version__, [r[0] for r in c.execute('SELECT extension_name FROM duckdb_extensions() WHERE loaded').fetchall()])"
+
+WORKDIR /app/backend
+EXPOSE 8000 8001 8002
+
+# 三条 arm 同时起在 8000 / 8001 / 8002，端口分配与本地测试时一致，隧道那头不用改口径。
+#
+# `DB_BACKEND` 是 db.py 在 import 时读一次的模块级常量，所以必须靠**进程**隔离，
+# 三个 uvicorn 各带自己的值。不用 run.sh：那个脚本会 source .env.local（镜像里没有）
+# 并且写死 --host 127.0.0.1，容器里那样监听等于谁都连不上。
+#
+# 三条 arm 在**同一个任务**里，机器、算力、网络位置、区域完全是同一个——这正是
+# 把它搬上云的全部意义。分成三个任务跑就又引入了任务间差异。
+#
+# 用 `wait` 而不是 `wait -n`：一条 arm 起不来时另两条还能测，容器不整体退出。
+# 起没起来看 /health 的 `db.engine`，不要看日志横幅（run.sh 那个横幅对三条 arm
+# 一律打印 backend=athena，不能用来辨认 arm）。
+CMD ["sh","-c","\
+DB_BACKEND=athena   python -m uvicorn server:app --host 0.0.0.0 --port 8000 & \
+DB_BACKEND=duckdb   python -m uvicorn server:app --host 0.0.0.0 --port 8001 & \
+DB_BACKEND=redshift python -m uvicorn server:app --host 0.0.0.0 --port 8002 & \
+wait"]

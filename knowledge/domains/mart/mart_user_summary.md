@@ -46,7 +46,7 @@ GROUP BY 1 ORDER BY buyers DESC;
 
 ### 注册月 cohort 的付费转化
 ```sql
-SELECT to_char(register_date,'YYYY-MM') AS cohort,
+SELECT date_format(register_date, '%Y-%m') AS cohort,
        count(*) AS users,
        count(*) FILTER (WHERE first_paid_date IS NOT NULL) AS buyers,
        round(100.0*count(*) FILTER (WHERE first_paid_date IS NOT NULL)/count(*),1) AS paid_conv_pct

@@ -1,0 +1,1199 @@
+{
+  "pinned_at": "2026-09-07T03:03:02.857172+00:00",
+  "region": "us-west-2",
+  "note": "golden 验证通过时三个存储各自的代次。三边都记，所以至多只有一个能悄悄前进而不被发现。重新钉之前先确认 query_correctness.py --values 是绿的。",
+  "tables": {
+    "ab_test_assignments": {
+      "parquet": {
+        "uri": "s3://analytics-agent-raw/parquet/ab_test_assignments/",
+        "files": 1,
+        "bytes": 19315529,
+        "etag": "6f073be3fc7677eb",
+        "last_modified": "2026-09-02T05:21:46+00:00"
+      },
+      "iceberg": {
+        "snapshot_id": 8646291777976254641,
+        "snapshots": 1,
+        "committed_at": "2026-09-01T07:43:41.405000+00:00",
+        "rows": 790080,
+        "files": 1,
+        "bytes": 12960191,
+        "table_modified_at": "2026-09-01T07:43:41.791000+00:00"
+      },
+      "redshift": {
+        "loaded_at": "2026-09-02T05:33:18.385159",
+        "rows": 790080,
+        "stored_bytes": 36596268,
+        "source_bytes": 19315529,
+        "source_files": 1,
+        "source": "s3://analytics-agent-raw/parquet/ab_test_assignments/",
+        "status": "completed"
+      }
+    },
+    "ab_test_variants": {
+      "parquet": {
+        "uri": "s3://analytics-agent-raw/parquet/ab_test_variants/",
+        "files": 1,
+        "bytes": 4099,
+        "etag": "a8259bb50aa90990",
+        "last_modified": "2026-09-02T05:21:46+00:00"
+      },
+      "iceberg": {
+        "snapshot_id": 94923396528710617,
+        "snapshots": 1,
+        "committed_at": "2026-09-01T07:43:22.730000+00:00",
+        "rows": 30,
+        "files": 1,
+        "bytes": 2663,
+        "table_modified_at": "2026-09-01T07:43:23.149076+00:00"
+      },
+      "redshift": {
+        "loaded_at": "2026-09-02T05:28:49.915028",
+        "rows": 30,
+        "stored_bytes": 2958,
+        "source_bytes": 4099,
+        "source_files": 1,
+        "source": "s3://analytics-agent-raw/parquet/ab_test_variants/",
+        "status": "completed"
+      }
+    },
+    "ab_tests": {
+      "parquet": {
+        "uri": "s3://analytics-agent-raw/parquet/ab_tests/",
+        "files": 1,
+        "bytes": 8019,
+        "etag": "af20e33bca65f2f9",
+        "last_modified": "2026-09-02T05:21:46+00:00"
+      },
+      "iceberg": {
+        "snapshot_id": 7167613294480958202,
+        "snapshots": 1,
+        "committed_at": "2026-09-01T07:43:11.616000+00:00",
+        "rows": 12,
+        "files": 1,
+        "bytes": 5075,
+        "table_modified_at": "2026-09-01T07:43:12.018783+00:00"
+      },
+      "redshift": {
+        "loaded_at": "2026-09-02T05:28:43.135002",
+        "rows": 12,
+        "stored_bytes": 3202,
+        "source_bytes": 8019,
+        "source_files": 1,
+        "source": "s3://analytics-agent-raw/parquet/ab_tests/",
+        "status": "completed"
+      }
+    },
+    "ad_campaigns": {
+      "parquet": {
+        "uri": "s3://analytics-agent-raw/parquet/ad_campaigns/",
+        "files": 1,
+        "bytes": 6292,
+        "etag": "e835a08d18e63b2c",
+        "last_modified": "2026-09-02T05:21:46+00:00"
+      },
+      "iceberg": {
+        "snapshot_id": 1402122043160884500,
+        "snapshots": 1,
+        "committed_at": "2026-09-01T07:34:44.122000+00:00",
+        "rows": 50,
+        "files": 1,
+        "bytes": 3800,
+        "table_modified_at": "2026-09-01T07:34:44.611268+00:00"
+      },
+      "redshift": {
+        "loaded_at": "2026-09-02T05:28:56.295209",
+        "rows": 50,
+        "stored_bytes": 6741,
+        "source_bytes": 6292,
+        "source_files": 1,
+        "source": "s3://analytics-agent-raw/parquet/ad_campaigns/",
+        "status": "completed"
+      }
+    },
+    "ad_creatives": {
+      "parquet": {
+        "uri": "s3://analytics-agent-raw/parquet/ad_creatives/",
+        "files": 1,
+        "bytes": 5011,
+        "etag": "d2653e9a4c17ff39",
+        "last_modified": "2026-09-02T05:21:46+00:00"
+      },
+      "iceberg": {
+        "snapshot_id": 4483012193704374064,
+        "snapshots": 1,
+        "committed_at": "2026-09-01T07:34:54.830000+00:00",
+        "rows": 144,
+        "files": 1,
+        "bytes": 2556,
+        "table_modified_at": "2026-09-01T07:34:55.240904+00:00"
+      },
+      "redshift": {
+        "loaded_at": "2026-09-02T05:29:02.524642",
+        "rows": 144,
+        "stored_bytes": 9825,
+        "source_bytes": 5011,
+        "source_files": 1,
+        "source": "s3://analytics-agent-raw/parquet/ad_creatives/",
+        "status": "completed"
+      }
+    },
+    "banners": {
+      "parquet": {
+        "uri": "s3://analytics-agent-raw/parquet/banners/",
+        "files": 1,
+        "bytes": 13655,
+        "etag": "c69664106ad0d3d2",
+        "last_modified": "2026-09-02T05:21:46+00:00"
+      },
+      "iceberg": {
+        "snapshot_id": 8284780147436188137,
+        "snapshots": 1,
+        "committed_at": "2026-09-01T07:42:59.510000+00:00",
+        "rows": 119,
+        "files": 1,
+        "bytes": 8882,
+        "table_modified_at": "2026-09-01T07:42:59.953504+00:00"
+      },
+      "redshift": {
+        "loaded_at": "2026-09-02T05:28:36.524504",
+        "rows": 119,
+        "stored_bytes": 21951,
+        "source_bytes": 13655,
+        "source_files": 1,
+        "source": "s3://analytics-agent-raw/parquet/banners/",
+        "status": "completed"
+      }
+    },
+    "campaigns": {
+      "parquet": {
+        "uri": "s3://analytics-agent-raw/parquet/campaigns/",
+        "files": 1,
+        "bytes": 8344,
+        "etag": "da319c98af69d6e4",
+        "last_modified": "2026-09-02T05:21:46+00:00"
+      },
+      "iceberg": {
+        "snapshot_id": 7099226946428849902,
+        "snapshots": 1,
+        "committed_at": "2026-09-01T07:40:32.059000+00:00",
+        "rows": 50,
+        "files": 1,
+        "bytes": 5769,
+        "table_modified_at": "2026-09-01T07:40:32.540759+00:00"
+      },
+      "redshift": {
+        "loaded_at": "2026-09-02T05:28:23.104867",
+        "rows": 50,
+        "stored_bytes": 8418,
+        "source_bytes": 8344,
+        "source_files": 1,
+        "source": "s3://analytics-agent-raw/parquet/campaigns/",
+        "status": "completed"
+      }
+    },
+    "categories": {
+      "parquet": {
+        "uri": "s3://analytics-agent-raw/parquet/categories/",
+        "files": 1,
+        "bytes": 7488,
+        "etag": "539d49eb0243d42f",
+        "last_modified": "2026-09-02T05:21:47+00:00"
+      },
+      "iceberg": {
+        "snapshot_id": 1220139874653421352,
+        "snapshots": 1,
+        "committed_at": "2026-09-01T07:45:58.497000+00:00",
+        "rows": 166,
+        "files": 1,
+        "bytes": 3768,
+        "table_modified_at": "2026-09-01T07:45:58.908072+00:00"
+      },
+      "redshift": {
+        "loaded_at": "2026-09-02T05:27:42.036003",
+        "rows": 166,
+        "stored_bytes": 16974,
+        "source_bytes": 7488,
+        "source_files": 1,
+        "source": "s3://analytics-agent-raw/parquet/categories/",
+        "status": "completed"
+      }
+    },
+    "channel_daily_costs": {
+      "parquet": {
+        "uri": "s3://analytics-agent-raw/parquet/channel_daily_costs/",
+        "files": 1,
+        "bytes": 74096,
+        "etag": "9cb5e02e49262ae4",
+        "last_modified": "2026-09-02T05:21:47+00:00"
+      },
+      "iceberg": {
+        "snapshot_id": 874637162271275329,
+        "snapshots": 1,
+        "committed_at": "2026-09-01T07:35:22.478000+00:00",
+        "rows": 2799,
+        "files": 1,
+        "bytes": 37092,
+        "table_modified_at": "2026-09-01T07:35:22.979159+00:00"
+      },
+      "redshift": {
+        "loaded_at": "2026-09-02T05:29:08.93446",
+        "rows": 2799,
+        "stored_bytes": 203837,
+        "source_bytes": 74096,
+        "source_files": 1,
+        "source": "s3://analytics-agent-raw/parquet/channel_daily_costs/",
+        "status": "completed"
+      }
+    },
+    "channels": {
+      "parquet": {
+        "uri": "s3://analytics-agent-raw/parquet/channels/",
+        "files": 1,
+        "bytes": 2423,
+        "etag": "de41d566e83fe241",
+        "last_modified": "2026-09-02T05:21:47+00:00"
+      },
+      "iceberg": {
+        "snapshot_id": 5176976212193468849,
+        "snapshots": 1,
+        "committed_at": "2026-09-01T07:34:30.970000+00:00",
+        "rows": 14,
+        "files": 1,
+        "bytes": 1534,
+        "table_modified_at": "2026-09-01T07:34:31.547560+00:00"
+      },
+      "redshift": {
+        "loaded_at": "2026-09-02T05:28:02.684678",
+        "rows": 14,
+        "stored_bytes": 750,
+        "source_bytes": 2423,
+        "source_files": 1,
+        "source": "s3://analytics-agent-raw/parquet/channels/",
+        "status": "completed"
+      }
+    },
+    "coupons": {
+      "parquet": {
+        "uri": "s3://analytics-agent-raw/parquet/coupons/",
+        "files": 1,
+        "bytes": 10344,
+        "etag": "6390c7c015901325",
+        "last_modified": "2026-09-02T05:21:47+00:00"
+      },
+      "iceberg": {
+        "snapshot_id": 5405864920944423304,
+        "snapshots": 1,
+        "committed_at": "2026-09-01T07:41:47.508000+00:00",
+        "rows": 150,
+        "files": 1,
+        "bytes": 6982,
+        "table_modified_at": "2026-09-01T07:41:47.986479+00:00"
+      },
+      "redshift": {
+        "loaded_at": "2026-09-02T05:28:29.85521",
+        "rows": 150,
+        "stored_bytes": 16130,
+        "source_bytes": 10344,
+        "source_files": 1,
+        "source": "s3://analytics-agent-raw/parquet/coupons/",
+        "status": "completed"
+      }
+    },
+    "dwd_events_app": {
+      "parquet": {
+        "uri": "s3://analytics-agent-raw/parquet/dwd_events_app/",
+        "files": 0,
+        "bytes": 0,
+        "etag": null,
+        "last_modified": null
+      },
+      "iceberg": {
+        "snapshot_id": 6229474840556879760,
+        "snapshots": 1,
+        "committed_at": "2026-09-01T08:02:25.417000+00:00",
+        "rows": 8541400,
+        "files": 2,
+        "bytes": 71449980,
+        "table_modified_at": "2026-09-01T08:02:25.919284+00:00"
+      },
+      "redshift": null
+    },
+    "dwd_orders_valid": {
+      "parquet": {
+        "uri": "s3://analytics-agent-raw/parquet/dwd_orders_valid/",
+        "files": 0,
+        "bytes": 0,
+        "etag": null,
+        "last_modified": null
+      },
+      "iceberg": {
+        "snapshot_id": 6619946749575218393,
+        "snapshots": 1,
+        "committed_at": "2026-09-01T08:02:13.852000+00:00",
+        "rows": 647395,
+        "files": 1,
+        "bytes": 16609166,
+        "table_modified_at": "2026-09-01T08:02:14.345405+00:00"
+      },
+      "redshift": null
+    },
+    "dws_channel_weekly": {
+      "parquet": {
+        "uri": "s3://analytics-agent-raw/parquet/dws_channel_weekly/",
+        "files": 0,
+        "bytes": 0,
+        "etag": null,
+        "last_modified": null
+      },
+      "iceberg": {
+        "snapshot_id": 4767891089260970495,
+        "snapshots": 1,
+        "committed_at": "2026-09-01T08:02:43.341000+00:00",
+        "rows": 414,
+        "files": 1,
+        "bytes": 5394,
+        "table_modified_at": "2026-09-01T08:02:43.728876+00:00"
+      },
+      "redshift": null
+    },
+    "dws_user_daily": {
+      "parquet": {
+        "uri": "s3://analytics-agent-raw/parquet/dws_user_daily/",
+        "files": 0,
+        "bytes": 0,
+        "etag": null,
+        "last_modified": null
+      },
+      "iceberg": {
+        "snapshot_id": 1081199241784092847,
+        "snapshots": 1,
+        "committed_at": "2026-09-01T08:02:35.917000+00:00",
+        "rows": 1661885,
+        "files": 2,
+        "bytes": 8489787,
+        "table_modified_at": "2026-09-01T08:02:36.469730+00:00"
+      },
+      "redshift": null
+    },
+    "event_definitions": {
+      "parquet": {
+        "uri": "s3://analytics-agent-raw/parquet/event_definitions/",
+        "files": 1,
+        "bytes": 3020,
+        "etag": "e39d7c509ca1d0ec",
+        "last_modified": "2026-09-02T05:21:47+00:00"
+      },
+      "iceberg": {
+        "snapshot_id": 1648354456015445827,
+        "snapshots": 1,
+        "committed_at": "2026-09-01T07:28:06.875000+00:00",
+        "rows": 25,
+        "files": 1,
+        "bytes": 1851,
+        "table_modified_at": "2026-09-01T07:28:07.316589+00:00"
+      },
+      "redshift": {
+        "loaded_at": "2026-09-02T05:28:09.334626",
+        "rows": 25,
+        "stored_bytes": 1800,
+        "source_bytes": 3020,
+        "source_files": 1,
+        "source": "s3://analytics-agent-raw/parquet/event_definitions/",
+        "status": "completed"
+      }
+    },
+    "events": {
+      "parquet": {
+        "uri": "s3://analytics-agent-raw/parquet/events/",
+        "files": 2,
+        "bytes": 302381668,
+        "etag": "a9f2bebaaeaf3d9b",
+        "last_modified": "2026-09-02T05:21:56+00:00"
+      },
+      "iceberg": {
+        "snapshot_id": 3995312204199189196,
+        "snapshots": 4,
+        "committed_at": "2026-09-01T07:54:58.485000+00:00",
+        "rows": 8541400,
+        "files": 91,
+        "bytes": 210346518,
+        "table_modified_at": "2026-09-01T07:54:58.860818+00:00"
+      },
+      "redshift": {
+        "loaded_at": "2026-09-02T05:30:10.138131",
+        "rows": 8541400,
+        "stored_bytes": 1346468859,
+        "source_bytes": 302381668,
+        "source_files": 2,
+        "source": "s3://analytics-agent-raw/parquet/events/",
+        "status": "completed"
+      }
+    },
+    "fin_daily_revenue": {
+      "parquet": {
+        "uri": "s3://analytics-agent-raw/parquet/fin_daily_revenue/",
+        "files": 0,
+        "bytes": 0,
+        "etag": null,
+        "last_modified": null
+      },
+      "iceberg": {
+        "snapshot_id": 4969484427806400412,
+        "snapshots": 1,
+        "committed_at": "2026-09-01T08:02:49.559000+00:00",
+        "rows": 91,
+        "files": 1,
+        "bytes": 2005,
+        "table_modified_at": "2026-09-01T08:02:49.936059+00:00"
+      },
+      "redshift": null
+    },
+    "growth_daily_gmv": {
+      "parquet": {
+        "uri": "s3://analytics-agent-raw/parquet/growth_daily_gmv/",
+        "files": 0,
+        "bytes": 0,
+        "etag": null,
+        "last_modified": null
+      },
+      "iceberg": {
+        "snapshot_id": 8967951905718916054,
+        "snapshots": 1,
+        "committed_at": "2026-09-01T08:02:57.298000+00:00",
+        "rows": 91,
+        "files": 1,
+        "bytes": 2066,
+        "table_modified_at": "2026-09-01T08:02:57.702314+00:00"
+      },
+      "redshift": null
+    },
+    "mart_channel_daily": {
+      "parquet": {
+        "uri": "s3://analytics-agent-raw/parquet/mart_channel_daily/",
+        "files": 0,
+        "bytes": 0,
+        "etag": null,
+        "last_modified": null
+      },
+      "iceberg": {
+        "snapshot_id": 379798993128027028,
+        "snapshots": 1,
+        "committed_at": "2026-09-01T08:01:49.031000+00:00",
+        "rows": 3254,
+        "files": 1,
+        "bytes": 38332,
+        "table_modified_at": "2026-09-01T08:01:49.622136+00:00"
+      },
+      "redshift": null
+    },
+    "mart_daily_kpi": {
+      "parquet": {
+        "uri": "s3://analytics-agent-raw/parquet/mart_daily_kpi/",
+        "files": 0,
+        "bytes": 0,
+        "etag": null,
+        "last_modified": null
+      },
+      "iceberg": {
+        "snapshot_id": 3412956481302762515,
+        "snapshots": 1,
+        "committed_at": "2026-09-01T08:01:26.208000+00:00",
+        "rows": 91,
+        "files": 3,
+        "bytes": 6944,
+        "table_modified_at": "2026-09-01T08:01:26.681054+00:00"
+      },
+      "redshift": null
+    },
+    "mart_daily_revenue": {
+      "parquet": {
+        "uri": "s3://analytics-agent-raw/parquet/mart_daily_revenue/",
+        "files": 0,
+        "bytes": 0,
+        "etag": null,
+        "last_modified": null
+      },
+      "iceberg": {
+        "snapshot_id": 8187202720936966039,
+        "snapshots": 1,
+        "committed_at": "2026-09-01T08:01:38.830000+00:00",
+        "rows": 2730,
+        "files": 1,
+        "bytes": 24303,
+        "table_modified_at": "2026-09-01T08:01:39.502463+00:00"
+      },
+      "redshift": null
+    },
+    "mart_user_summary": {
+      "parquet": {
+        "uri": "s3://analytics-agent-raw/parquet/mart_user_summary/",
+        "files": 0,
+        "bytes": 0,
+        "etag": null,
+        "last_modified": null
+      },
+      "iceberg": {
+        "snapshot_id": 844040322051992384,
+        "snapshots": 1,
+        "committed_at": "2026-09-01T08:02:02.117000+00:00",
+        "rows": 213535,
+        "files": 2,
+        "bytes": 1570818,
+        "table_modified_at": "2026-09-01T08:02:02.542885+00:00"
+      },
+      "redshift": null
+    },
+    "meta_snapshot": {
+      "parquet": {
+        "uri": "s3://analytics-agent-raw/parquet/meta_snapshot/",
+        "files": 0,
+        "bytes": 0,
+        "etag": null,
+        "last_modified": null
+      },
+      "iceberg": {
+        "snapshot_id": 7153838056397119218,
+        "snapshots": 1,
+        "committed_at": "2026-09-01T08:03:16.126000+00:00",
+        "rows": 1,
+        "files": 1,
+        "bytes": 374,
+        "table_modified_at": "2026-09-01T08:03:16.625097+00:00"
+      },
+      "redshift": null
+    },
+    "order_items": {
+      "parquet": {
+        "uri": "s3://analytics-agent-raw/parquet/order_items/",
+        "files": 1,
+        "bytes": 44996164,
+        "etag": "505db2b95b278118",
+        "last_modified": "2026-09-02T05:22:02+00:00"
+      },
+      "iceberg": {
+        "snapshot_id": 948845076166799152,
+        "snapshots": 1,
+        "committed_at": "2026-09-01T07:45:07+00:00",
+        "rows": 1804371,
+        "files": 2,
+        "bytes": 32476910,
+        "table_modified_at": "2026-09-01T07:45:07.419354+00:00"
+      },
+      "redshift": {
+        "loaded_at": "2026-09-02T05:32:06.922132",
+        "rows": 1804371,
+        "stored_bytes": 257508940,
+        "source_bytes": 44996164,
+        "source_files": 1,
+        "source": "s3://analytics-agent-raw/parquet/order_items/",
+        "status": "completed"
+      }
+    },
+    "orders": {
+      "parquet": {
+        "uri": "s3://analytics-agent-raw/parquet/orders/",
+        "files": 1,
+        "bytes": 50925179,
+        "etag": "730d1638bf45146b",
+        "last_modified": "2026-09-02T05:22:05+00:00"
+      },
+      "iceberg": {
+        "snapshot_id": 7422625998969199467,
+        "snapshots": 5,
+        "committed_at": "2026-09-02T09:18:25.172000+00:00",
+        "rows": 854140,
+        "files": 91,
+        "bytes": 35169965,
+        "table_modified_at": "2026-09-06T23:47:15.675628+00:00"
+      },
+      "redshift": {
+        "loaded_at": "2026-09-02T05:31:49.988327",
+        "rows": 854140,
+        "stored_bytes": 199633028,
+        "source_bytes": 50925179,
+        "source_files": 1,
+        "source": "s3://analytics-agent-raw/parquet/orders/",
+        "status": "completed"
+      }
+    },
+    "orders_backup_20251201": {
+      "parquet": {
+        "uri": "s3://analytics-agent-raw/parquet/orders_backup_20251201/",
+        "files": 0,
+        "bytes": 0,
+        "etag": null,
+        "last_modified": null
+      },
+      "iceberg": {
+        "snapshot_id": 3268957004746677202,
+        "snapshots": 1,
+        "committed_at": "2026-09-01T08:03:04.045000+00:00",
+        "rows": 303628,
+        "files": 1,
+        "bytes": 5646598,
+        "table_modified_at": "2026-09-01T08:03:04.441750+00:00"
+      },
+      "redshift": null
+    },
+    "page_views": {
+      "parquet": {
+        "uri": "s3://analytics-agent-raw/parquet/page_views/",
+        "files": 3,
+        "bytes": 265387488,
+        "etag": "499460285d9606b9",
+        "last_modified": "2026-09-02T05:22:15+00:00"
+      },
+      "iceberg": {
+        "snapshot_id": 3511135403359294840,
+        "snapshots": 4,
+        "committed_at": "2026-09-01T07:59:05.214000+00:00",
+        "rows": 12895806,
+        "files": 91,
+        "bytes": 153408131,
+        "table_modified_at": "2026-09-01T07:59:05.663961+00:00"
+      },
+      "redshift": {
+        "loaded_at": "2026-09-02T05:30:27.946718",
+        "rows": 12895806,
+        "stored_bytes": 1589649658,
+        "source_bytes": 265387488,
+        "source_files": 3,
+        "source": "s3://analytics-agent-raw/parquet/page_views/",
+        "status": "completed"
+      }
+    },
+    "payments": {
+      "parquet": {
+        "uri": "s3://analytics-agent-raw/parquet/payments/",
+        "files": 1,
+        "bytes": 28929747,
+        "etag": "166ed27002e1a49e",
+        "last_modified": "2026-09-02T05:22:18+00:00"
+      },
+      "iceberg": {
+        "snapshot_id": 8385369011956751648,
+        "snapshots": 1,
+        "committed_at": "2026-09-01T07:45:33.853000+00:00",
+        "rows": 689390,
+        "files": 1,
+        "bytes": 14891686,
+        "table_modified_at": "2026-09-01T07:45:34.357948+00:00"
+      },
+      "redshift": {
+        "loaded_at": "2026-09-02T05:32:19.145364",
+        "rows": 689390,
+        "stored_bytes": 94393349,
+        "source_bytes": 28929747,
+        "source_files": 1,
+        "source": "s3://analytics-agent-raw/parquet/payments/",
+        "status": "completed"
+      }
+    },
+    "post_comments": {
+      "parquet": {
+        "uri": "s3://analytics-agent-raw/parquet/post_comments/",
+        "files": 2,
+        "bytes": 147475147,
+        "etag": "f66f2bf2b528d0bc",
+        "last_modified": "2026-09-02T05:22:37+00:00"
+      },
+      "iceberg": {
+        "snapshot_id": 993314993701648963,
+        "snapshots": 4,
+        "committed_at": "2026-09-01T14:50:48.536000+00:00",
+        "rows": 5978980,
+        "files": 91,
+        "bytes": 100941189,
+        "table_modified_at": "2026-09-01T14:50:48.944604+00:00"
+      },
+      "redshift": {
+        "loaded_at": "2026-09-02T05:31:04.117181",
+        "rows": 5978980,
+        "stored_bytes": 532280202,
+        "source_bytes": 147475147,
+        "source_files": 2,
+        "source": "s3://analytics-agent-raw/parquet/post_comments/",
+        "status": "completed"
+      }
+    },
+    "post_likes": {
+      "parquet": {
+        "uri": "s3://analytics-agent-raw/parquet/post_likes/",
+        "files": 4,
+        "bytes": 243309996,
+        "etag": "0eb657246f53f469",
+        "last_modified": "2026-09-02T05:22:48+00:00"
+      },
+      "iceberg": {
+        "snapshot_id": 1243111519201979895,
+        "snapshots": 4,
+        "committed_at": "2026-09-01T07:38:27.980000+00:00",
+        "rows": 15232733,
+        "files": 91,
+        "bytes": 146321406,
+        "table_modified_at": "2026-09-01T07:38:28.384409+00:00"
+      },
+      "redshift": {
+        "loaded_at": "2026-09-02T05:30:52.781632",
+        "rows": 15232733,
+        "stored_bytes": 426516524,
+        "source_bytes": 243309996,
+        "source_files": 4,
+        "source": "s3://analytics-agent-raw/parquet/post_likes/",
+        "status": "completed"
+      }
+    },
+    "post_shares": {
+      "parquet": {
+        "uri": "s3://analytics-agent-raw/parquet/post_shares/",
+        "files": 1,
+        "bytes": 63851806,
+        "etag": "8736f0a17af28165",
+        "last_modified": "2026-09-02T05:22:48+00:00"
+      },
+      "iceberg": {
+        "snapshot_id": 6038431468626257577,
+        "snapshots": 1,
+        "committed_at": "2026-09-01T07:39:43.430000+00:00",
+        "rows": 2989490,
+        "files": 1,
+        "bytes": 40300354,
+        "table_modified_at": "2026-09-01T07:39:43.833973+00:00"
+      },
+      "redshift": {
+        "loaded_at": "2026-09-02T05:31:16.427116",
+        "rows": 2989490,
+        "stored_bytes": 149828940,
+        "source_bytes": 63851806,
+        "source_files": 1,
+        "source": "s3://analytics-agent-raw/parquet/post_shares/",
+        "status": "completed"
+      }
+    },
+    "posts": {
+      "parquet": {
+        "uri": "s3://analytics-agent-raw/parquet/posts/",
+        "files": 1,
+        "bytes": 44793790,
+        "etag": "49eff9d59d1af6c7",
+        "last_modified": "2026-09-02T05:22:51+00:00"
+      },
+      "iceberg": {
+        "snapshot_id": 3452675514234763490,
+        "snapshots": 1,
+        "committed_at": "2026-09-01T07:36:43.157000+00:00",
+        "rows": 427070,
+        "files": 1,
+        "bytes": 24739198,
+        "table_modified_at": "2026-09-01T07:36:43.743994+00:00"
+      },
+      "redshift": {
+        "loaded_at": "2026-09-02T05:30:39.395753",
+        "rows": 427070,
+        "stored_bytes": 204858112,
+        "source_bytes": 44793790,
+        "source_files": 1,
+        "source": "s3://analytics-agent-raw/parquet/posts/",
+        "status": "completed"
+      }
+    },
+    "product_tags": {
+      "parquet": {
+        "uri": "s3://analytics-agent-raw/parquet/product_tags/",
+        "files": 1,
+        "bytes": 154268,
+        "etag": "d48edda6be0b8936",
+        "last_modified": "2026-09-02T05:22:54+00:00"
+      },
+      "iceberg": {
+        "snapshot_id": 7413434487249712445,
+        "snapshots": 1,
+        "committed_at": "2026-09-01T07:46:29.118000+00:00",
+        "rows": 10659,
+        "files": 1,
+        "bytes": 99095,
+        "table_modified_at": "2026-09-01T07:46:29.531151+00:00"
+      },
+      "redshift": {
+        "loaded_at": "2026-09-02T05:27:56.115134",
+        "rows": 10659,
+        "stored_bytes": 511823,
+        "source_bytes": 154268,
+        "source_files": 1,
+        "source": "s3://analytics-agent-raw/parquet/product_tags/",
+        "status": "completed"
+      }
+    },
+    "products": {
+      "parquet": {
+        "uri": "s3://analytics-agent-raw/parquet/products/",
+        "files": 1,
+        "bytes": 518194,
+        "etag": "660bf8a85436e1df",
+        "last_modified": "2026-09-02T05:22:55+00:00"
+      },
+      "iceberg": {
+        "snapshot_id": 1684567372126664109,
+        "snapshots": 1,
+        "committed_at": "2026-09-01T07:46:17.526000+00:00",
+        "rows": 4133,
+        "files": 1,
+        "bytes": 271053,
+        "table_modified_at": "2026-09-01T07:46:18.013637+00:00"
+      },
+      "redshift": {
+        "loaded_at": "2026-09-02T05:27:49.385407",
+        "rows": 4133,
+        "stored_bytes": 2294768,
+        "source_bytes": 518194,
+        "source_files": 1,
+        "source": "s3://analytics-agent-raw/parquet/products/",
+        "status": "completed"
+      }
+    },
+    "push_notifications": {
+      "parquet": {
+        "uri": "s3://analytics-agent-raw/parquet/push_notifications/",
+        "files": 1,
+        "bytes": 185655490,
+        "etag": "546b67980783e9b9",
+        "last_modified": "2026-09-02T05:22:55+00:00"
+      },
+      "iceberg": {
+        "snapshot_id": 1836120180595570503,
+        "snapshots": 2,
+        "committed_at": "2026-09-02T09:18:48.655000+00:00",
+        "rows": 4270700,
+        "files": 1,
+        "bytes": 130807715,
+        "table_modified_at": "2026-09-07T02:10:58.472150+00:00"
+      },
+      "redshift": {
+        "loaded_at": "2026-09-02T05:33:06.9102",
+        "rows": 4270700,
+        "stored_bytes": 713330213,
+        "source_bytes": 185655490,
+        "source_files": 1,
+        "source": "s3://analytics-agent-raw/parquet/push_notifications/",
+        "status": "completed"
+      }
+    },
+    "sessions": {
+      "parquet": {
+        "uri": "s3://analytics-agent-raw/parquet/sessions/",
+        "files": 1,
+        "bytes": 73395599,
+        "etag": "541ae4fec5cac96e",
+        "last_modified": "2026-09-02T05:23:08+00:00"
+      },
+      "iceberg": {
+        "snapshot_id": 1146001425275760186,
+        "snapshots": 1,
+        "committed_at": "2026-09-01T07:31:05.490000+00:00",
+        "rows": 2135350,
+        "files": 2,
+        "bytes": 49921770,
+        "table_modified_at": "2026-09-01T07:31:05.865005+00:00"
+      },
+      "redshift": {
+        "loaded_at": "2026-09-02T05:29:55.238002",
+        "rows": 2135350,
+        "stored_bytes": 334880148,
+        "source_bytes": 73395599,
+        "source_files": 1,
+        "source": "s3://analytics-agent-raw/parquet/sessions/",
+        "status": "completed"
+      }
+    },
+    "subscriptions": {
+      "parquet": {
+        "uri": "s3://analytics-agent-raw/parquet/subscriptions/",
+        "files": 1,
+        "bytes": 479181,
+        "etag": "59c26002101f91da",
+        "last_modified": "2026-09-02T05:23:14+00:00"
+      },
+      "iceberg": {
+        "snapshot_id": 3961346864613202718,
+        "snapshots": 1,
+        "committed_at": "2026-09-01T07:45:47.395000+00:00",
+        "rows": 21354,
+        "files": 1,
+        "bytes": 244488,
+        "table_modified_at": "2026-09-01T07:45:47.823844+00:00"
+      },
+      "redshift": {
+        "loaded_at": "2026-09-02T05:32:32.10516",
+        "rows": 21354,
+        "stored_bytes": 2265226,
+        "source_bytes": 479181,
+        "source_files": 1,
+        "source": "s3://analytics-agent-raw/parquet/subscriptions/",
+        "status": "completed"
+      }
+    },
+    "tmp_campaign_roi_analysis": {
+      "parquet": {
+        "uri": "s3://analytics-agent-raw/parquet/tmp_campaign_roi_analysis/",
+        "files": 0,
+        "bytes": 0,
+        "etag": null,
+        "last_modified": null
+      },
+      "iceberg": {
+        "snapshot_id": 873746592751082981,
+        "snapshots": 1,
+        "committed_at": "2026-09-01T08:03:09.714000+00:00",
+        "rows": 9,
+        "files": 1,
+        "bytes": 956,
+        "table_modified_at": "2026-09-01T08:03:10.171594+00:00"
+      },
+      "redshift": null
+    },
+    "user_attributions": {
+      "parquet": {
+        "uri": "s3://analytics-agent-raw/parquet/user_attributions/",
+        "files": 1,
+        "bytes": 6246625,
+        "etag": "08e56d02713e4bad",
+        "last_modified": "2026-09-02T05:23:15+00:00"
+      },
+      "iceberg": {
+        "snapshot_id": 5482749275795540182,
+        "snapshots": 3,
+        "committed_at": "2026-09-02T09:19:04.923000+00:00",
+        "rows": 149474,
+        "files": 1,
+        "bytes": 3270904,
+        "table_modified_at": "2026-09-02T09:19:05.356483+00:00"
+      },
+      "redshift": {
+        "loaded_at": "2026-09-02T05:32:42.461882",
+        "rows": 149474,
+        "stored_bytes": 17003940,
+        "source_bytes": 6246625,
+        "source_files": 1,
+        "source": "s3://analytics-agent-raw/parquet/user_attributions/",
+        "status": "completed"
+      }
+    },
+    "user_coupons": {
+      "parquet": {
+        "uri": "s3://analytics-agent-raw/parquet/user_coupons/",
+        "files": 2,
+        "bytes": 258589547,
+        "etag": "cf05bd5eca7a9909",
+        "last_modified": "2026-09-02T05:23:27+00:00"
+      },
+      "iceberg": {
+        "snapshot_id": 6450747910927256152,
+        "snapshots": 4,
+        "committed_at": "2026-09-01T14:54:12.892000+00:00",
+        "rows": 9709436,
+        "files": 92,
+        "bytes": 148363067,
+        "table_modified_at": "2026-09-01T14:54:13.289619+00:00"
+      },
+      "redshift": {
+        "loaded_at": "2026-09-02T05:32:55.855569",
+        "rows": 9709436,
+        "stored_bytes": 737517111,
+        "source_bytes": 258589547,
+        "source_files": 2,
+        "source": "s3://analytics-agent-raw/parquet/user_coupons/",
+        "status": "completed"
+      }
+    },
+    "user_devices": {
+      "parquet": {
+        "uri": "s3://analytics-agent-raw/parquet/user_devices/",
+        "files": 1,
+        "bytes": 31633279,
+        "etag": "ba34b3012e8b38da",
+        "last_modified": "2026-09-02T05:23:46+00:00"
+      },
+      "iceberg": {
+        "snapshot_id": 3685871135829345323,
+        "snapshots": 1,
+        "committed_at": "2026-09-01T07:27:31.133000+00:00",
+        "rows": 317740,
+        "files": 1,
+        "bytes": 19117053,
+        "table_modified_at": "2026-09-01T07:27:31.614752+00:00"
+      },
+      "redshift": {
+        "loaded_at": "2026-09-02T05:29:35.555474",
+        "rows": 317740,
+        "stored_bytes": 54223717,
+        "source_bytes": 31633279,
+        "source_files": 1,
+        "source": "s3://analytics-agent-raw/parquet/user_devices/",
+        "status": "completed"
+      }
+    },
+    "user_follows": {
+      "parquet": {
+        "uri": "s3://analytics-agent-raw/parquet/user_follows/",
+        "files": 2,
+        "bytes": 133430520,
+        "etag": "ebaaa8c42417bea9",
+        "last_modified": "2026-09-02T05:24:05+00:00"
+      },
+      "iceberg": {
+        "snapshot_id": 3673474830214562596,
+        "snapshots": 4,
+        "committed_at": "2026-09-01T14:48:15.246000+00:00",
+        "rows": 8184797,
+        "files": 91,
+        "bytes": 89107041,
+        "table_modified_at": "2026-09-01T14:48:15.639036+00:00"
+      },
+      "redshift": {
+        "loaded_at": "2026-09-02T05:31:26.627978",
+        "rows": 8184797,
+        "stored_bytes": 229174316,
+        "source_bytes": 133430520,
+        "source_files": 2,
+        "source": "s3://analytics-agent-raw/parquet/user_follows/",
+        "status": "completed"
+      }
+    },
+    "user_messages": {
+      "parquet": {
+        "uri": "s3://analytics-agent-raw/parquet/user_messages/",
+        "files": 1,
+        "bytes": 117022108,
+        "etag": "bb27b43178917afe",
+        "last_modified": "2026-09-02T05:24:14+00:00"
+      },
+      "iceberg": {
+        "snapshot_id": 6210707582461958858,
+        "snapshots": 1,
+        "committed_at": "2026-09-01T07:40:19.545000+00:00",
+        "rows": 3951679,
+        "files": 3,
+        "bytes": 77444398,
+        "table_modified_at": "2026-09-01T07:40:19.942733+00:00"
+      },
+      "redshift": {
+        "loaded_at": "2026-09-02T05:31:38.101896",
+        "rows": 3951679,
+        "stored_bytes": 370515437,
+        "source_bytes": 117022108,
+        "source_files": 1,
+        "source": "s3://analytics-agent-raw/parquet/user_messages/",
+        "status": "completed"
+      }
+    },
+    "user_profiles": {
+      "parquet": {
+        "uri": "s3://analytics-agent-raw/parquet/user_profiles/",
+        "files": 1,
+        "bytes": 6352520,
+        "etag": "bc2930f6865481df",
+        "last_modified": "2026-09-02T05:24:31+00:00"
+      },
+      "iceberg": {
+        "snapshot_id": 3501287339023462433,
+        "snapshots": 1,
+        "committed_at": "2026-09-01T07:27:11.674000+00:00",
+        "rows": 213535,
+        "files": 1,
+        "bytes": 3711941,
+        "table_modified_at": "2026-09-01T07:27:12.127434+00:00"
+      },
+      "redshift": {
+        "loaded_at": "2026-09-02T05:29:24.995159",
+        "rows": 213535,
+        "stored_bytes": 31986886,
+        "source_bytes": 6352520,
+        "source_files": 1,
+        "source": "s3://analytics-agent-raw/parquet/user_profiles/",
+        "status": "completed"
+      }
+    },
+    "user_segment_members": {
+      "parquet": {
+        "uri": "s3://analytics-agent-raw/parquet/user_segment_members/",
+        "files": 1,
+        "bytes": 7824529,
+        "etag": "98541e6638e7497a",
+        "last_modified": "2026-09-02T05:24:32+00:00"
+      },
+      "iceberg": {
+        "snapshot_id": 2293367709051479625,
+        "snapshots": 1,
+        "committed_at": "2026-09-01T07:27:55.538000+00:00",
+        "rows": 554337,
+        "files": 1,
+        "bytes": 5737444,
+        "table_modified_at": "2026-09-01T07:27:55.911214+00:00"
+      },
+      "redshift": {
+        "loaded_at": "2026-09-02T05:29:45.350589",
+        "rows": 554337,
+        "stored_bytes": 14231184,
+        "source_bytes": 7824529,
+        "source_files": 1,
+        "source": "s3://analytics-agent-raw/parquet/user_segment_members/",
+        "status": "completed"
+      }
+    },
+    "user_segments": {
+      "parquet": {
+        "uri": "s3://analytics-agent-raw/parquet/user_segments/",
+        "files": 1,
+        "bytes": 3958,
+        "etag": "030421ab92773b59",
+        "last_modified": "2026-09-02T05:24:34+00:00"
+      },
+      "iceberg": {
+        "snapshot_id": 1315405989875719643,
+        "snapshots": 1,
+        "committed_at": "2026-09-01T07:27:41.835000+00:00",
+        "rows": 10,
+        "files": 1,
+        "bytes": 2577,
+        "table_modified_at": "2026-09-01T07:27:42.262393+00:00"
+      },
+      "redshift": {
+        "loaded_at": "2026-09-02T05:28:15.944931",
+        "rows": 10,
+        "stored_bytes": 1939,
+        "source_bytes": 3958,
+        "source_files": 1,
+        "source": "s3://analytics-agent-raw/parquet/user_segments/",
+        "status": "completed"
+      }
+    },
+    "users": {
+      "parquet": {
+        "uri": "s3://analytics-agent-raw/parquet/users/",
+        "files": 1,
+        "bytes": 16252673,
+        "etag": "447327f515ee8e2c",
+        "last_modified": "2026-09-02T05:24:34+00:00"
+      },
+      "iceberg": {
+        "snapshot_id": 2107846095609005228,
+        "snapshots": 1,
+        "committed_at": "2026-09-01T07:26:53.846000+00:00",
+        "rows": 213535,
+        "files": 1,
+        "bytes": 9876317,
+        "table_modified_at": "2026-09-01T07:26:54.360795+00:00"
+      },
+      "redshift": {
+        "loaded_at": "2026-09-02T05:29:15.434786",
+        "rows": 213535,
+        "stored_bytes": 32011297,
+        "source_bytes": 16252673,
+        "source_files": 1,
+        "source": "s3://analytics-agent-raw/parquet/users/",
+        "status": "completed"
+      }
+    }
+  }
+}
