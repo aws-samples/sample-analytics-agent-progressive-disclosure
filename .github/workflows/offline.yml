@@ -1,0 +1,107 @@
+# 离线那一档的 CI。**它只跑不连云的部分**，名字里的 offline 是字面意思。
+#
+# 为什么只有这一档：L1 起每一层都要 AWS 凭证（S3 Tables / Glue / Athena / Lake
+# Formation / Bedrock），而这个仓库是公开示例，仓库里没有、也不该有能连那个账号的
+# 凭证。装一个"看起来覆盖全套"的 CI 需要往 GitHub 里放长期 key，那是用一个更大的
+# 问题换一块绿牌子。所以这里的边界写在明处：
+#
+#   跑了：L0 那几十条离线断言（生成器自测、判据自测、只读 SQL 边界、工具白名单、
+#         文档 SQL 表名、生成物 --check、云上副本 --check、判分器与漏斗口径、
+#         boot() 行为契约、shell 资源引用）
+#         + 缺陷注入负测的离线那 27 个（证明上面那些断言在缺陷面前真会红）
+#         + CDK 执行角色策略的 9 条断言（Template.fromStack，不 deploy、不要凭证）
+#   没跑：L1–L7 全部（云资源、元数据对账、装载完整性、治理层、查询路径、
+#         服务契约、端到端 agent）。这份 CI 绿了**不代表云上那条路是通的**，
+#         覆盖面缺口逐条写在 docs/test-plan.md。
+#
+# 负测那一步会临时改仓库内文件（含 data/csv/）再还原并 sha256 核对。在 CI 里跑它是
+# 安全的：runner 是一次性 checkout，而且它自己会在退出时还原。
+name: offline
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+# 同一分支上新的 push 取消旧的跑：这套东西的价值在"改完立刻知道红没红"，
+# 排队等一个已经过时的结果没有意义。
+concurrency:
+  group: offline-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  l0:
+    name: L0 离线自测 + 离线负测
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      # 3.11 是硬要求，不是偏好：仓库里几处用了 3.10+ 的语法/标准库行为，
+      # 而本机 python3 是 3.9 —— AGENTS.md 里那条"必须用 backend/.venv"就是这个原因。
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      # node 用来跑 L0 里的 boot() 行为契约（scripts/ui/boot_test.mjs）。
+      # 不装的话 test_all.sh 会把它记成 note 跳过——**绿灯照样绿**，
+      # 而那条契约管的正是"页面静默降级还照常给答案"那个缺陷。
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: 装依赖
+        run: |
+          python -m pip install --upgrade pip
+          # backend/：claude-agent-sdk（agent.py 的工具边界自测要 import 它）、boto3、fastapi
+          # scripts/：numpy + pyyaml（生成器自测与 semantics/profiles 配置自测）
+          pip install -r backend/requirements.txt -r scripts/requirements.txt
+
+      # test_all.sh 找不到 backend/.venv 会退回 python3，而 setup-python 已经把
+      # python3 指到 3.11 了，所以这里不用建 venv。
+      - name: L0（bash scripts/test_all.sh --l0）
+        run: bash scripts/test_all.sh --l0
+
+      # 单独一步，不并进上面：L0 全绿只说明"现在没问题"，不说明那些检查器还有效。
+      # 这一步往深拷贝里注入缺陷，要求对应的断言变红且红在指定消息上。
+      - name: 离线负测（缺陷注入 → 断言变红 → 还原）
+        run: python scripts/negative_tests.py --offline
+
+      # 注入失败/中断留下的脏文件必须暴露出来，不能让下一步悄悄带着改过的
+      # data/csv/ 继续跑。negative_tests.py 自己会还原 + sha256 核对，这一步是它的复核。
+      - name: 复核工作区干净（负测应当已经还原一切）
+        run: |
+          if [[ -n "$(git status --porcelain)" ]]; then
+            echo "负测跑完后工作区不干净——有文件没还原：" >&2
+            git status --porcelain >&2
+            exit 1
+          fi
+          echo "工作区干净 ✅"
+
+  cdk:
+    name: CDK 执行角色策略断言
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: analyticsagent/agentcore/cdk/package-lock.json
+
+      - name: npm ci
+        working-directory: analyticsagent/agentcore/cdk
+        run: npm ci
+
+      # Template.fromStack 是纯合成，不 deploy、不调 AWS，所以能站在无凭证的 CI 里。
+      # 断言的是执行角色那份策略：只读 runtime-config secret、只列 knowledge/ 前缀、
+      # 只能 assume 治理角色、且**显式拒绝数据面**——B1 那个洞就在这几条上。
+      - name: jest（cdk synth 后比对策略语句）
+        working-directory: analyticsagent/agentcore/cdk
+        run: npm test

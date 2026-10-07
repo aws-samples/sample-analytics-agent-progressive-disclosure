@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""把 14 张维度表的现有 CSV 转成 Parquet，走与事实表同一条 Redshift COPY 路径。
+"""把 11 张维度表的现有 CSV 转成 Parquet，走与事实表同一条 Redshift COPY 路径。
 
 ## 为什么需要转换
 
@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -33,9 +34,16 @@ import ddl  # noqa: E402
 ROOT = HERE.parent.parent
 CSV_DIR = ROOT / "data" / "csv"
 
-DIMS = ["categories", "products", "product_tags", "channels", "event_definitions",
+# products / product_tags **不在这里**：它们已由 scripts/gen 生成（tables.py 的
+# _prep_products / _prep_product_tags，见 D-02）。留在这个清单里会让 data/csv 的 200 行
+# v1 商品覆盖生成器产出的 4133 行——同一张表两个来源，谁最后写谁赢，还取决于跑的顺序。
+# channel_daily_costs **也已移出**：它由 tables.py 的 _prep_channel_costs /
+# build_channel_daily_costs 生成（P0-5）。留在这里的话，v1 那 910 行会覆盖生成器产的
+# 2799 行网格——v1 的 installs 是 244,774 而全库只有 500 个用户（490 倍），
+# CAC ¥2,900/人，凡是碰 CAC / ROI 的题全错。
+DIMS = ["categories", "channels", "event_definitions",
         "user_segments", "campaigns", "coupons", "banners", "ab_tests",
-        "ab_test_variants", "ad_campaigns", "ad_creatives", "channel_daily_costs"]
+        "ab_test_variants", "ad_campaigns", "ad_creatives"]
 
 
 def parse_pg_array(s: str):
@@ -74,6 +82,30 @@ def _date(s: str):
         return None
 
 
+def _ts(v: str):
+    """时间戳文本 → `np.datetime64[us]`，**保留亚秒**。
+
+    2026-09-01 之前这里是 `np.datetime64(v[:19], "us")`。`[:19]` 只留到秒，
+    把小数部分整段切掉了：`data/csv` 里这 11 张维表的时间戳带 5–6 位微秒
+    （`2025-11-14 05:46:22.474586`），Iceberg arm 从 CSV 装载保留它，Redshift arm
+    从这里产出的 Parquet 装载则拿到 `…05:46:22`。**两个 arm 的同一列值不同，
+    而且都不报错**——`WHERE created_at = '…22.474586'` 在 Athena 上命中、在 Redshift 上 0 行；
+    `ab_tests.start_date` / `end_date` 这种要做 `BETWEEN` 的窗口边界会整体偏移最多 1 秒。
+    架构对比测试要求三个 arm 吃同一份数据，这种偏移必须消掉。判据是
+    `verify_portability.py --compare` 的 `csv_pq_equal`。
+
+    截断改成**只截超过 6 位的小数**（Redshift 与 Iceberg 都只到微秒，7 位以上无处安放），
+    并顺手剥掉时区后缀——`np.datetime64` 遇到 `+08:00` 会抛，而这批 CSV 里没有时区，
+    真出现了也说明上游变了形态，宁可在这里显式处理掉。
+    """
+    s = str(v).strip().replace("T", " ")
+    s = re.sub(r"(?:Z|[+-]\d{2}:?\d{2})$", "", s)
+    m = re.match(r"^(.*\.\d{6})\d+$", s)
+    if m:
+        s = m.group(1)
+    return np.datetime64(s, "us")
+
+
 def convert(table: str, cols: list[tuple[str, str, str]], out_dir: Path) -> int:
     import pyarrow as pa
     import pyarrow.parquet as pq
@@ -98,7 +130,7 @@ def convert(table: str, cols: list[tuple[str, str, str]], out_dir: Path) -> int:
                                      else str(v).lower() in ("t", "true", "1", "yes")
                                      for v in raw], type=pa.bool_())
         elif ctype == "TIMESTAMP":
-            fields[name] = pa.array([None if v in ("", None) else np.datetime64(v[:19], "us")
+            fields[name] = pa.array([None if v in ("", None) else _ts(v)
                                      for v in raw], type=pa.timestamp("us"))
         elif ctype == "DATE":
             # pa.date32() 不接受 np.datetime64[D]，要给 Python datetime.date

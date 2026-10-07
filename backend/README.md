@@ -20,14 +20,14 @@ Claude Agent SDK  ←——  Amazon Bedrock (global.anthropic.claude-opus-4-8)
    └─ present_result   交付 KPI / 图表 spec / 洞察 / 追问
    │
    ▼
-DB_BACKEND=redshift(默认):Redshift Serverless · Data API(HTTPS + IAM,无 host/port)
+DB_BACKEND=athena(默认):S3 Tables(Iceberg)· Athena API(HTTPS + IAM,无 host/port)
 DB_BACKEND=postgres(v1 legacy):本地 backend/.pgdata:5433 或云上 db 容器 · psycopg
 ```
 
 - `agent.py` —— 系统提示(强制"先读文档再写 SQL"的工作流 + chart 约定 + 时间/业务口径)、`ClaudeAgentOptions`、把 SDK 事件流解析成给前端的 UI 事件(`stage`/`sql`/`rows`/`doc_detail`/`result`/`done`)。
 - `tools.py` —— 五个进程内 MCP 工具。
-- `db.py` —— SQL 安全校验(仅 SELECT/WITH、单条语句、15s 超时、≤1000 行)+ 双后端分派:`redshift`(默认,Data API,复用 `scripts/redshift/rsql.py`)/ `postgres`(v1 legacy,psycopg 只读连接)。只读闸门两个后端共用。
-- `catalog.py` —— `/api/catalog` 的装配逻辑:Glue Data Catalog + Redshift `svv_*` + `knowledge/domains/` + `schema_manifest.yaml` 聚成 UI 直接渲染的元数据(表清单/行数/分层/治理现状),Glue 读不到降级到 `information_schema` 并在 `source` 字段里说明。
+- `db.py` —— SQL 安全校验(仅 SELECT/WITH、单条语句、15s 超时、≤1000 行)+ 双后端分派:`athena`(默认,Athena API,复用 `scripts/lakehouse/athena.py`)/ `postgres`(v1 legacy,psycopg 只读连接)。只读闸门两个后端共用。
+- `catalog.py` —— `/api/catalog` 的装配逻辑:Glue Data Catalog + `information_schema` + `knowledge/domains/` + `schema_manifest.yaml` 聚成 UI 直接渲染的元数据(表清单/行数/分层/治理现状),Glue 读不到就只用 `information_schema` 并在 `source` 字段里说明。
 - `server.py` —— FastAPI + SSE,托管 `../web` 静态页,处理 app 层 Cognito 鉴权。
 - 数据字典 md 文档树在顶层 `../knowledge/`(与 `backend/` 同级,是 agent 的单一知识库),`read_doc` 就读这棵树;打镜像时 `COPY knowledge/` 进 `/app/knowledge`。见 [../knowledge/README.md](../knowledge/README.md)。
 
@@ -46,14 +46,14 @@ read_doc("domains/_index.md")          # L1:按关键词判断落在哪个业务
 
 `read_doc` 做了路径逃逸防护(只能读 `knowledge/` 内的 `.md`),文档不存在时回一份同目录可读清单帮 Agent 自我纠偏。前端把每次 `read_doc` 渲染成"⟳ 正在读取 <path>"步骤 + 文件查看器,这就是看得见的渐进式披露。
 
-> 历史:早期工具版本用 `get_table_schema` 查 `information_schema` 拿结构(`db.py` 里还留着 `get_schema` 这个未用函数)。现已重构为上面的文档路由版——读 Skill 文档树而非系统表,过程才可演示。
+> 历史:早期工具版本用 `get_table_schema` 查 `information_schema` 拿结构。现已重构为上面的文档路由版——读 Skill 文档树而非系统表,过程才可演示。那个旧实现(`get_schema` / `_get_schema_athena` / `_describe_comments`)在 `db.py` 里当了很久的**未用函数**,2026-08-28 删掉了:留着会让人以为 Glue 列注释进得了 agent 上下文,而 agent 看到的表结构只有 `knowledge/` 卡片一个来源。删之前把那段代码里两件实测出来的 Athena 怪癖留在了 `db.py` 的模块 docstring 里。
 
 ## 本地启动
 
 前置:
 - venv:`backend/.venv`,依赖见 `requirements.txt`(`claude-agent-sdk`、`fastapi`、`uvicorn`、`boto3`、`PyJWT[crypto]`;`psycopg` 仅 v1 legacy 路径用到)。
-- AWS 凭证:走标准链(`~/.aws` / 环境变量 / 实例角色)。默认后端连 Redshift Data API 靠 IAM,`run.sh` 启动时会 `aws sts get-caller-identity` 自检。
-- 一个灌好数据的 Redshift Serverless workgroup(建法见 [../docs/deployment.md](../docs/deployment.md))。
+- AWS 凭证:走标准链(`~/.aws` / 环境变量 / 实例角色)。默认后端调 Athena / Glue 靠 IAM,`run.sh` 启动时会 `aws sts get-caller-identity` 自检。
+- 一个灌好数据、已联邦进 Glue 的 S3 表桶 + 一个 Athena workgroup(建法见 `../scripts/lakehouse/setup.py` 与 [../docs/deployment.md](../docs/deployment.md))。
 - Bedrock:确保当前 AWS 账号已在目标区域开通所用模型的访问权限(本项目默认 `global.anthropic.claude-opus-4-8`,跨区推理 profile)。
 - *(仅 v1 legacy 路径)* 本机 Postgres@16(brew);`DB_BACKEND=postgres` 时 `run.sh` 会在 `backend/.pgdata` 建集群(端口 5433)并灌入 35 表 / 全部 CSV。
 
@@ -67,13 +67,17 @@ cd backend
 
 | 变量 | 默认 | 说明 |
 |------|------|------|
-| `DB_BACKEND` | `redshift` | `redshift`(现行)/ `postgres`(v1 legacy) |
+| `DB_BACKEND` | `athena` | `athena`(现行)/ `postgres`(v1 legacy) |
 | `CLAUDE_CODE_USE_BEDROCK` | `1` | 走 Bedrock |
-| `AWS_REGION` | `ap-northeast-1`(redshift)/ `us-east-1`(postgres) | redshift 后端与数仓同区 |
+| `AWS_REGION` | `us-west-2`(athena)/ `us-east-1`(postgres) | athena 后端与表桶 / Glue / workgroup 同区 |
 | `ANTHROPIC_MODEL` | `global.anthropic.claude-opus-4-8` | 全局跨区推理 profile(禁裸 ID / `us.` / `eu.` 前缀) |
-| `REDSHIFT_WORKGROUP` | `analytics-agent-wg` | Redshift Serverless workgroup |
-| `REDSHIFT_DATABASE` | `app_analytics` | 数据库名 |
-| `GLUE_CATALOG_ID` | `<账号>:analytics_agent_rs` | UI 元数据来源;账号启动时从 sts 现算。不配则 `/api/catalog` 降级到 `information_schema` |
+| `ATHENA_WORKGROUP` | `analytics-agent-wg` | 管理侧 Athena workgroup(带查询结果位置)。**没设 `AGENT_ROLE_ARN` 时**走这个 |
+| `ATHENA_AGENT_WORKGROUP` | `analytics-agent-ro-wg` | 治理角色专用 workgroup,结果落在 `athena-staging/agent/` 子前缀下。**设了 `AGENT_ROLE_ARN` 时**自动走这个:查询结果 CSV 是明文行数据,共用一个 workgroup 等于让 agent 从管理侧的结果文件里读回 LF 已排除的 `users.email`。两个值**不要**设成同一个 |
+| `S3_TABLE_BUCKET` | `analytics-agent-tables` | S3 表桶名 |
+| `ICEBERG_NAMESPACE` | `app_analytics` | 表桶 namespace = Athena 里的 database 名 |
+| `ATHENA_CATALOG` | `s3tablescatalog/<表桶>` | Athena 侧目录名(**不带**账号前缀) |
+| `GLUE_CATALOG_ID` | `<账号>:s3tablescatalog/<表桶>` | UI 元数据来源,Glue API 用的 ID(**带**账号前缀);账号启动时从 sts 现算。不配则 `/api/catalog` 只用 `information_schema` |
+| `AGENT_ROLE_ARN` | 不设 | 设了就 AssumeRole 用这个最小权限角色查数(L4 治理层):`user_messages` 整表读不到,`users.email` / `phone`、`user_profiles.birth_date` 不在授权面里。**不设＝用进程自己的凭证**(本地常是 admin,那时没有列级边界)。角色用 `scripts/lakehouse/governance.py --apply` 建 |
 | `PGPORT` | `5433` | (仅 postgres 后端)本地库端口 |
 | `PORT` | `8000` | 服务端口 |
 | `AUTH_ENABLED` | 不设=关 | 设 `1` 开 app 层 Cognito 校验(本地默认关) |
@@ -91,7 +95,7 @@ cd backend
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| GET | `/health` | DB 与配置自检(公开);`db` 字段按后端给出身份信息(engine/workgroup 或 host/port) |
+| GET | `/health` | DB 与配置自检(公开);`db` 字段按后端给出身份信息(engine/workgroup 或 host/port),其中 `identity` 是**实际查数用的身份**——设了 `AGENT_ROLE_ARN` 时是那个受限角色的 ARN,空＝用的是进程自己的凭证。这是从外面看治理接上没有的唯一处 |
 | GET | `/api/catalog` | UI 的元数据来源:表清单/字段/行数/分层/治理现状(缓存 5 分钟,`?refresh=1` 跳过) |
 | GET | `/api/config` | 前端初始化 Cognito 登录用(公开,只含公开值) |
 | POST | `/ask` | body `{question, session_id?}`,返回 `text/event-stream`;开认证时需 Bearer ID token |
@@ -103,12 +107,29 @@ cd backend
 ## 自测
 
 ```bash
+# 只读 SQL 边界自测(不连网、不看后端;10 类拒绝 + 9 条放行 + 1 项已知过度拒绝)
+python3 backend/db.py
+
+# 治理层(L4):策略自测(离线)→ 以 agent 角色实测 → 后端确实在用它查
+python3 scripts/lakehouse/governance.py --selftest
+python3 scripts/lakehouse/governance.py --verify
+python3 scripts/lakehouse/governance.py --verify-backend
+
 # 大脑最小全链路(不开服务)
 cd backend && .venv/bin/python test_agent.py "各商品品类的销量排行"
 
 # 健康检查
 curl -s http://127.0.0.1:8000/health
 ```
+
+第一条挂进了 `scripts/test_all.sh` 的 L0,它守的是 `validate()`,也就是**「不许写」**这道闸;
+后三条是 L4,守的是**「不许看」**。两条边界互不覆盖——授权面里那些表 agent 是有 SELECT 的,
+所以只读闸不能省;反过来只读闸也拦不住 `SELECT email`。
+
+在这两个自测之前,整套测试里没有一条断言碰过 `validate()`——把 `_FORBIDDEN` 改松不会让
+任何东西变红。反向验证(该报时真会报)在 `scripts/negative_tests.py`:
+`readonly-guard-hole` 盯只读闸,三个 `gov-*` 盯治理层(策略被改松 / 探针其实没在探 /
+角色建好了但后端仍用 admin 凭证)。见 [../docs/test-plan.md](../docs/test-plan.md)。
 
 ## 上云部署
 
@@ -118,5 +139,6 @@ curl -s http://127.0.0.1:8000/health
 
 - 前端在后端不可达时**自动回退**离线演示(模拟数据,冻结在 v1),`web/index.html` 单独双击也能看 UI。
 - 多轮上下文:当前每次提问是独立会话(已捕获 `session_id`,如需续接可在 `/ask` 传回)。
-- SQL 安全边界全在 `db.py`:仅 `SELECT`/`WITH`、单条语句、15s 超时、最多 1000 行;与后端无关,切 `DB_BACKEND` 不削弱。
+- SQL 安全边界全在 `db.py`:仅 `SELECT`/`WITH`、单条语句、15s 超时、最多 1000 行;与后端无关,切 `DB_BACKEND` 不削弱。**能读到什么**不在这里,在 `AGENT_ROLE_ARN` 那个角色的 Lake Formation 授权面上。
+- `AGENT_ROLE_ARN` 配了却 assume 不到时,`_athena()` **直接抛错**而不是退回自己的凭证——静默降级成 admin 身份查数比启动失败危险得多。这个错在启动/`/health` 时就炸,不会等 agent 答到一半。
 - 本地这个 FastAPI 不只是 demo,还是测试与构建设施(`scripts/test_all.sh` L6、eval、`build_catalog_json.py` 都依赖它),别当 legacy 砍——边界见 [../docs/legacy.md](../docs/legacy.md)。

@@ -35,6 +35,9 @@ node_modules/
 
 # generate_data.py 的临时产物(非种子;repo 跟踪 data/csv/ 下的 35 个 CSV 种子)
 data/*.json
+# 例外:装载快照是 `knowledge/connection.md` 那几个数的比对基准,
+# `verify_load.py --selftest`(L0,CI 也跑)缺了它就 4 项失败。它不是产物,是记录。
+!data/loaded_row_counts.json
 data/csv_fixed/
 data/events.csv
 .secrets/
@@ -46,3 +49,26 @@ infra/deploy.local.sh
 
 # 本地环境覆盖(真实账号守卫等,见 .env.local.example)
 .env.local
+
+# eval 的非主报告:--dry-run 的产物(只证明金标 SQL 能跑,不含任何判定结果)和
+# --cases cases_traps.json 那份补充集的报告。eval/report.md + eval/report.json
+# 是**跟踪**的(它们是"上一次全量跑到底是什么结果"的原件);要归档一轮结果请写进
+# eval/baseline/,别让这几个中间产物混进 diff。
+eval/report.dryrun*.json
+eval/report.traps.json
+eval/report.traps.md
+
+# 本机 pip 离线轮子缓存(127 MB,给没网的环境装 backend/requirements.txt 用)。
+# 它不是交付物,进了 git 就是把整份依赖二进制塞进仓库历史。
+backend/wheelhouse/
+# 别家 CLI 的本地配置,与本项目的运行无关。
+.codex/
+
+# 测量原始 trace。报告是 trace 的函数,所以文档引用到的那几份要进仓库(见下面的例外),
+# 其余是同一口径下的重复跑,留在本地。
+data/bench/*
+!data/bench/prices-us-west-2.json
+!data/bench/freshness_baseline.json
+!data/bench/correctness-20260903T093133Z.jsonl
+!data/bench/timing-20260903T092605Z.jsonl
+!data/bench/cost-cold-20260907T053407Z.jsonl

@@ -9,8 +9,8 @@ CREATE TABLE users (
     email VARCHAR(100),
     phone VARCHAR(20),
     registered_at TIMESTAMP NOT NULL,
-    registration_source VARCHAR(50),  -- 'app', 'web', 'mini_program'
-    status VARCHAR(20) DEFAULT 'active',  -- 'active', 'inactive', 'banned'
+    registration_source VARCHAR(50),  -- 'referral', 'organic', 'huawei_store', 'web', 'ad_campaign', 'wechat_mini', 'app_store', 'google_play'（小程序渠道叫 wechat_mini）
+    status VARCHAR(20) DEFAULT 'active',  -- 'active', 'inactive', 'deleted', 'suspended'（封禁态叫 suspended）
     user_level INT DEFAULT 1,  -- 1-5 用户等级
     is_vip BOOLEAN DEFAULT FALSE,
     last_active_at TIMESTAMP,
@@ -22,14 +22,14 @@ CREATE TABLE users (
 CREATE TABLE user_profiles (
     user_id BIGINT PRIMARY KEY REFERENCES users(user_id),
     age INT,
-    gender VARCHAR(10),  -- 'male', 'female', 'unknown'
+    gender VARCHAR(10),  -- 'female', 'male'（业务上还有 unknown，本批数据没有）
     birth_date DATE,
     city VARCHAR(50),
     province VARCHAR(50),
     country VARCHAR(50) DEFAULT 'China',
     interests TEXT[],  -- array of interest tags
     occupation VARCHAR(50),
-    income_level VARCHAR(20),  -- 'low', 'medium', 'high'
+    income_level VARCHAR(20),  -- 'medium', 'low', 'high', 'very_high'
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -38,7 +38,7 @@ CREATE TABLE user_profiles (
 CREATE TABLE user_devices (
     device_id VARCHAR(100) PRIMARY KEY,
     user_id BIGINT REFERENCES users(user_id),
-    device_type VARCHAR(20),  -- 'ios', 'android', 'web'
+    device_type VARCHAR(20),  -- 'ios', 'android', 'web', 'mini_program'
     os_version VARCHAR(20),
     device_model VARCHAR(50),
     device_brand VARCHAR(50),
@@ -54,7 +54,8 @@ CREATE TABLE user_devices (
 CREATE TABLE user_segments (
     segment_id SERIAL PRIMARY KEY,
     segment_name VARCHAR(100) NOT NULL,
-    segment_type VARCHAR(50),  -- 'static', 'dynamic'
+    -- 装的是分群维度，不是刷新方式（旧注释写的 static/dynamic 是后者）
+    segment_type VARCHAR(50),  -- 'lifecycle', 'membership', 'behavior', 'demographic', 'value', 'device', 'geographic', 'engagement', 'acquisition'
     description TEXT,
     rules_json JSONB,  -- 分群规则定义
     owner VARCHAR(50),

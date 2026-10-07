@@ -36,6 +36,27 @@ APP Analytics 数据库包含 **8 个原始业务域（共 35 张明细表）**�
 - **实验相关**: A/B测试、实验、变体、分桶、对照组 → `experiment/_index.md`
 - **诊断/综合判断相关**: 最近怎么样、整体、复盘、周报、为什么涨跌、环比、复购率、CAC/ROI → `mart/_index.md`（治理层，口径已冻结，写简单 SELECT 即可）
 
+## 全局锚点表 meta_snapshot（不属于任何域，写时间条件必用）
+
+这张表**不在上面的路由表里**，因为它不属于任何业务域：每一个带时间条件的查询都要用它。
+所以它在这里、在总索引上直接写清，不需要先猜是哪个域再去找。
+
+| 列 | 类型 | 含义 |
+|---|---|---|
+| `as_of_date` | date | 数据里的「今天」= `max(mart_daily_kpi.dt)`。所有相对日期从这里起算 |
+| `data_start` | date | 数据起始日 = `min(mart_daily_kpi.dt)` |
+
+一行，两列。**「最近 / 上周 / 本月」一律写 `(SELECT max(as_of_date) FROM meta_snapshot)`**：
+
+```sql
+WHERE dt >  (SELECT max(as_of_date) FROM meta_snapshot) - interval '30' day
+  AND dt <= (SELECT max(as_of_date) FROM meta_snapshot)
+```
+
+- **禁用 `current_date` / `now()`**：语法合法、不报错，但落在数据区间之外，安静地返回 0 行。
+- **也禁用该表自己的 `max(时间列)`**：这条更隐蔽，它不返回空集而是返回一个错的数——**全库 91 个时间列里有 12 类轴末超出业务日历**（2026-09-17 实测）：`subscriptions.end_date` 到 2027-01-24、`ad_campaigns.end_date` 到 2026-10-01、`channel_daily_costs` / `mart_channel_daily` 到 2026-09-01、`coupons.end_date`、`user_coupons.expire_at`、`campaigns.end_date`、`banners.end_date` 依次递减。拿各自的 max 当今天，两张表的「最近 7 天」指向完全不同的两段日期。
+- **开窗必须同时写上下界**，只写下界会把日历外的行捞进来（实测 CAC 从 2880 变成 15137，不报错）。全表轴末对照见 `../metrics/governed_metrics.md` §时间锚点。
+
 ## 跨域分析
 
 当分析涉及多个域时，参考 `../relationships.md` 了解表间关联关系。

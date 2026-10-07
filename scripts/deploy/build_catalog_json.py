@@ -8,7 +8,7 @@
 `/health` 与 `/ask`,`/api/catalog` 打过去落到 S3,拿到 404。
 
 要让线上有实时接口,得在 relay 里用 JS 重写一遍 catalog.py(还要把 knowledge/domains/
-与 schema_manifest.yaml 打进镜像)、给 task role 加 Glue + Redshift Data API 权限、
+与 schema_manifest.yaml 打进镜像)、给 task role 加 Glue + Athena + Lake Formation 权限、
 再走 CodeBuild → ECR → ECS 换版本。代价不只是工作量:组装逻辑会变成 Python 和 JS
 两份,而**没有任何测试盯着这两份别跑偏**——元数据静默失真正是我们一直在修的毛病。
 
@@ -31,6 +31,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -49,15 +50,15 @@ if _envf.exists():
 
 # 这些必须在 import catalog / db 之前设好:两个模块在导入期就读环境变量。
 DEFAULTS = {
-    "DB_BACKEND": "redshift",
-    "AWS_REGION": "ap-northeast-1",
-    "REDSHIFT_WORKGROUP": "analytics-agent-wg",
-    "REDSHIFT_DATABASE": "app_analytics",
+    "DB_BACKEND": "athena",
+    "AWS_REGION": "us-west-2",
+    "ATHENA_WORKGROUP": "analytics-agent-wg",
+    "ICEBERG_NAMESPACE": "app_analytics",
 }
 for k, v in DEFAULTS.items():
     os.environ.setdefault(k, v)
 
-# Glue catalog ID = <账号>:<catalog 名>。账号不硬编码,从当前凭证现算——
+# Glue catalog ID = <账号>:s3tablescatalog/<表桶名>。账号不硬编码,从当前凭证现算——
 # 仓库里不放真实账号 ID,而克隆的人跑出来的本来就该是他们自己的账号。
 # EXPECT_ACCOUNT 是可选守卫(通常在 .env.local):设了就核对,防多账号串号。
 _expect = os.environ.get("EXPECT_ACCOUNT")
@@ -66,14 +67,23 @@ if _expect or not os.environ.get("GLUE_CATALOG_ID"):
     _acct = boto3.client("sts").get_caller_identity()["Account"]
     if _expect and _acct != _expect:
         raise SystemExit(f"✗ 当前凭证账号 {_acct},期望 {_expect}(.env.local 里钉的)")
-    os.environ.setdefault("GLUE_CATALOG_ID", f"{_acct}:analytics_agent_rs")
+    _bucket = os.environ.get("S3_TABLE_BUCKET", "analytics-agent-tables")
+    os.environ.setdefault("GLUE_CATALOG_ID",
+                          f"{_acct}:s3tablescatalog/{_bucket}")
 
 sys.path.insert(0, str(ROOT / "backend"))
 
-# 最低期望值:低于这些就说明查漏了,不该发布。48 张表 / 7992 万行是 v2 的实际规模,
-# 这里留一点余量,防止以后加表就要改脚本;但要能挡住"只查到几张"这种明显残缺。
+# 最低期望值:低于这些就说明查漏了,不该发布。
 MIN_TABLES = 40
-MIN_ROWS = 50_000_000
+
+# 行数那道闸原来写的是 `MIN_ROWS = 50_000_000`——绑死在 v2 那批数据上。重新生成一次
+# 数据(这批是 19 万行明细)它就红,而代码没问题。这跟 test_all.sh 把 GMV 写成
+# 149685621.44 是同一个毛病:把**数据的规模**当成了**代码的正确性**。
+#
+# 它真正要挡的是"行数查漏了"。换到 Athena 之后这个风险还变大了:行数是 48 条独立
+# 查询,`catalog._row_counts` 对单张失败是容忍的(少一个数字比整块消失好),所以
+# 完全可能只回来 40 张的行数而接口照样 200。绑数量级看不出这种残缺,覆盖率能。
+MIN_ROW_COVERAGE = 0.95
 
 
 def main() -> int:
@@ -104,19 +114,34 @@ def main() -> int:
     tot = data.get("totals") or {}
     tables, rows = tot.get("tables") or 0, tot.get("rows") or 0
     src = data.get("source")
+    # 有几张表拿到了行数。UI 上"没有行数"和"0 行"长得几乎一样,所以这个数要打出来。
+    with_rows = sum(1 for dm in data.get("domains") or []
+                    for x in dm.get("tables") or [] if x.get("rows") is not None)
+    tm = data.get("timings") or {}
     print(f"  来源={src} 引擎={data.get('engine')} "
           f"表={tables} 行={rows:,} 域={tot.get('domains')} "
-          f"耗时 {time.time() - t0:.1f}s")
+          f"行数覆盖={with_rows}/{tables} "
+          f"耗时 {time.time() - t0:.1f}s"
+          + (f"(其中行数 {tm['row_counts_ms'] / 1000:.1f}s)"
+             if tm.get("row_counts_ms") else ""))
     if data.get("warning"):
         print(f"  降级原因: {data['warning']}")
 
     problems = []
     if src != "glue":
         problems.append(f"元数据来源是 {src},不是 glue(Glue 查询失败后的降级路径)")
+    # catalog.py 会把"表清单和行数来自两个不同的库"这种混搭写进 warning。
+    # 快照会被固化给所有访客看,所以这里当硬错误处理而不只是打一行。
+    if data.get("warning") and "两个不同的库" in data["warning"]:
+        problems.append(f"元数据混搭: {data['warning']}")
     if tables < MIN_TABLES:
         problems.append(f"只查到 {tables} 张表,低于最低期望 {MIN_TABLES}")
-    if rows < MIN_ROWS:
-        problems.append(f"base 层合计 {rows:,} 行,低于最低期望 {MIN_ROWS:,}")
+    if tables and with_rows / tables < MIN_ROW_COVERAGE:
+        problems.append(
+            f"只有 {with_rows}/{tables} 张表拿到行数"
+            f"(低于 {MIN_ROW_COVERAGE:.0%}),部分 count(*) 查询失败了")
+    if rows <= 0:
+        problems.append("base 层合计 0 行:行数整块查不到,不是空库就是查询全挂了")
 
     if problems:
         print("\n✗ 快照不合格,拒绝写出:")
@@ -137,6 +162,29 @@ def main() -> int:
     # 前端不读这个字段(只用 totals/domains/governance),留 catalog 名纯粹是溯源。
     if data.get("catalog_id") and ":" in data["catalog_id"]:
         data["catalog_id"] = data["catalog_id"].split(":", 1)[1]
+
+    # 账号号码同理,但 catalog_id 那一行只掐掉了一处。治理层接上之后
+    # `governance.role` 是个完整的 IAM ARN,里面就带着账号——手工掐一个字段的写法
+    # 挡不住下一个带 ARN 的字段(比如 governance.error 里的报错原文)。所以在写盘
+    # 前统一扫一遍:凡是 ARN 里的 12 位账号一律换成占位符。
+    n_red = 0
+
+    def redact(x):
+        nonlocal n_red
+        if isinstance(x, str):
+            y = re.sub(r"(?<=arn:aws:)([a-z0-9-]*:[a-z0-9-]*:)\d{12}(?=:)",
+                       r"\1<账号>", x)
+            n_red += y != x
+            return y
+        if isinstance(x, dict):
+            return {k: redact(v) for k, v in x.items()}
+        if isinstance(x, list):
+            return [redact(v) for v in x]
+        return x
+
+    data = redact(data)
+    if n_red:
+        print(f"  已把 {n_red} 处 ARN 里的账号号码换成占位符(这个文件是公开静态资源)")
 
     if args.print:
         print("\n（--print:未写文件）")

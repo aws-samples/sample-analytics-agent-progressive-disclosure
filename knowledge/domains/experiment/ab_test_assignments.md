@@ -51,7 +51,7 @@ SELECT
     COUNT(*) AS new_assignments
 FROM ab_test_assignments a
 JOIN ab_tests t ON a.test_id = t.test_id
-WHERE a.assigned_at >= CURRENT_DATE - INTERVAL '7 days'
+WHERE a.assigned_at >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '7' day
 GROUP BY t.test_id, t.test_name, DATE(a.assigned_at)
 ORDER BY t.test_name, assign_date DESC;
 ```
@@ -60,8 +60,8 @@ ORDER BY t.test_name, assign_date DESC;
 ```sql
 SELECT
     t.test_name,
-    AVG(EXTRACT(EPOCH FROM (a.first_exposure_at - a.assigned_at))) AS avg_seconds_to_exposure,
-    PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (a.first_exposure_at - a.assigned_at))) AS median_seconds,
+    AVG(date_diff('second', a.assigned_at, a.first_exposure_at)) AS avg_seconds_to_exposure,
+    approx_percentile(date_diff('second', a.assigned_at, a.first_exposure_at), 0.5) AS median_seconds,
     COUNT(*) FILTER (WHERE a.first_exposure_at IS NULL) AS no_exposure_count
 FROM ab_test_assignments a
 JOIN ab_tests t ON a.test_id = t.test_id

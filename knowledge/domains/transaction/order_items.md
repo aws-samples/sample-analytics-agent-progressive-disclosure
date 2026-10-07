@@ -49,7 +49,7 @@ SELECT
 FROM order_items oi
 JOIN orders o ON oi.order_id = o.order_id
 WHERE o.status IN ('paid', 'shipped', 'delivered')
-  AND o.placed_at >= CURRENT_DATE - INTERVAL '30 days'
+  AND o.placed_at >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '30' day
 GROUP BY oi.product_id, oi.product_name
 ORDER BY total_revenue DESC
 LIMIT 20;
@@ -67,7 +67,7 @@ SELECT
 FROM order_items oi
 JOIN orders o ON oi.order_id = o.order_id
 WHERE o.status IN ('paid', 'shipped', 'delivered')
-  AND o.placed_at >= CURRENT_DATE - INTERVAL '30 days'
+  AND o.placed_at >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '30' day
 GROUP BY oi.product_id, oi.product_name, oi.sku_id, oi.sku_name
 ORDER BY total_revenue DESC
 LIMIT 50;
@@ -86,7 +86,7 @@ SELECT
     ROUND(AVG(actual_amount), 2) AS avg_order_value
 FROM orders
 WHERE status IN ('paid', 'shipped', 'delivered')
-  AND placed_at >= CURRENT_DATE - INTERVAL '30 days'
+  AND placed_at >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '30' day
 GROUP BY 1
 ORDER BY 1;
 ```

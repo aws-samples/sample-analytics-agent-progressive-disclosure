@@ -1,0 +1,30 @@
+# 构建上下文排除表。
+#
+# 只排**派生产物**，不排任何 Dockerfile 会 COPY 的路径。特别是 `data/` 必须留着：
+# scripts/bench/Dockerfile 从里面取 loaded_row_counts.json 和 prices-us-west-2.json，
+# 把它排掉的表现是 bench 镜像构建失败，而错误只说找不到文件、不说是这里排掉的。
+#
+# 加这份文件之前上下文是 941MB，其中 618MB 是 backend/.venv、293MB 是 cdk 的
+# node_modules —— 前者 backend/Dockerfile 本来就 `rm -rf` 掉，后者谁都不 COPY。
+# 白送这些字节的代价在 arm64 机器上交叉构建 amd64 时尤其明显。
+
+# Python 虚拟环境与字节码
+**/.venv
+**/__pycache__
+**/*.pyc
+
+# 本地 Postgres 数据目录（v1 legacy 路径的产物）
+backend/.pgdata
+
+# CDK 的依赖与合成产物
+analyticsagent/agentcore/cdk/node_modules
+analyticsagent/agentcore/cdk/cdk.out
+
+# 版本库自身
+.git
+.gitignore
+
+# 本机配置：绝不进镜像。web/config.js 同理——线上 Cognito 配置由
+# scripts/deploy/deploy_web.sh 每次从栈输出现算，不该被烤进任何镜像。
+.env.local
+web/config.js

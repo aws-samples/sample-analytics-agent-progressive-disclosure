@@ -16,6 +16,21 @@ Data API 是 HTTPS + IAM 的 AWS API，不是数据库连接。带来三件事�
 
 - `--secret`（或 REDSHIFT_SECRET_ARN）：用管理员密钥。建表/COPY/GRANT 这类运维操作用它。
 - 不给 secret：走 IAM 临时凭证，库用户由调用者的 IAM 身份派生。agent 运行时用它。
+
+## 每次调用默认是**独立会话**，`SET` 不会留下来
+
+这一条是实测出来的，而且踩过：`SET enable_result_cache_for_session TO off` 单独发一次，
+紧接着 `SHOW enable_result_cache_for_session` 回来还是 `on`。ExecuteStatement 之间不
+共享会话，所以任何会话级设置发完就没了。这比设不上更坏——基准脚本会记录
+「结果缓存已关」，而缓存其实开着，于是重复查询的耗时凭空好看一截，且日志说它是干净的。
+
+要让 `SET` 留住必须显式要一个会话：第一次调用带 `SessionKeepAliveSeconds`，
+从 DescribeStatement 拿回 `SessionId`，后续调用**只带 `SessionId`**
+（带了它就不能再带 WorkgroupName / Database / SecretArn，互斥）。`Client(keepalive=N)`
+就是这件事，`scripts/bench/arms.py` 计时前依赖它。
+
+会话是有代价的：它在 Redshift 侧占一个连接，`keepalive` 秒内不释放。所以默认不开，
+只有需要跨语句保持状态的场景（计时、临时表）才开。
 """
 from __future__ import annotations
 
@@ -28,13 +43,21 @@ import time
 
 import boto3
 
-REGION = os.environ.get("AWS_REGION", "ap-northeast-1")
+# us-west-2 而不是 v2 时期的 ap-northeast-1：这一条不是跟随项目搬家，是硬约束。
+# Parquet 的 COPY 走 Spectrum，而 Spectrum 不接受 REGION 参数（见 load_from_s3.py
+# 的坑 2），桶必须与 Redshift 同区。数据在 s3://analytics-agent-raw（us-west-2），
+# 所以这一条 arm 只能在 us-west-2。
+REGION = os.environ.get("AWS_REGION", "us-west-2")
 WORKGROUP = os.environ.get("REDSHIFT_WORKGROUP", "analytics-agent-wg")
 DATABASE = os.environ.get("REDSHIFT_DATABASE", "app_analytics")
 SECRET_ARN = os.environ.get("REDSHIFT_SECRET_ARN", "")
 
-POLL_INITIAL = 0.4
-POLL_MAX = 3.0
+# 轮询节奏。日常用宽一点（少打 Data API），**计时基准要调窄**：这个间隔整体
+# 加到客户端墙上时钟上。实测：一条引擎自报 109ms 的查询，默认 0.4s 起步下
+# 墙上时钟量到 1293ms——那个数里七成是这里的 sleep，不是 Redshift。
+# 见 scripts/bench/timing.py。
+POLL_INITIAL = float(os.environ.get("REDSHIFT_POLL_INITIAL", "0.4"))
+POLL_MAX = float(os.environ.get("REDSHIFT_POLL_MAX", "3.0"))
 
 
 class RedshiftError(RuntimeError):
@@ -43,14 +66,26 @@ class RedshiftError(RuntimeError):
 
 class Client:
     def __init__(self, workgroup: str = WORKGROUP, database: str = DATABASE,
-                 secret_arn: str = SECRET_ARN, region: str = REGION):
+                 secret_arn: str = SECRET_ARN, region: str = REGION,
+                 keepalive: int = 0):
+        """`keepalive > 0` 时所有语句跑在同一个会话里，会话级 `SET` 因此能留住。
+
+        见模块 docstring：不开会话的话 `SET` 发完就没了，而且不报错。
+        """
         self.workgroup, self.database, self.secret_arn = workgroup, database, secret_arn
+        self.keepalive = keepalive
+        self.session_id = ""
         self._c = boto3.client("redshift-data", region_name=region)
 
     def _kw(self) -> dict:
+        """本次调用的定位参数。会话建起来之后**只能**带 SessionId，其余互斥。"""
+        if self.session_id:
+            return {"SessionId": self.session_id}
         kw = {"WorkgroupName": self.workgroup, "Database": self.database}
         if self.secret_arn:
             kw["SecretArn"] = self.secret_arn
+        if self.keepalive:
+            kw["SessionKeepAliveSeconds"] = int(self.keepalive)
         return kw
 
     def execute(self, sql: str, timeout: float = 1800.0, fetch: bool = True) -> dict:
@@ -63,6 +98,16 @@ class Client:
         sid = self._c.batch_execute_statement(Sqls=sqls, **self._kw())["Id"]
         self._wait(sid, sqls[0] if sqls else "", timeout, fetch=False)
 
+    def session_setting(self, name: str) -> str:
+        """回读一个会话级设置的**实际生效值**。
+
+        存在的理由是别把「我发了 SET」当成「设置生效了」。不开会话时这两件事不等价，
+        而不等价的那一侧不报错。
+        """
+        r = self.execute(f"SHOW {name}")
+        rows = r.get("rows") or []
+        return str(rows[0][0]) if rows and rows[0] else ""
+
     def _wait(self, sid: str, sql: str, timeout: float, fetch: bool) -> dict:
         t0, delay = time.time(), POLL_INITIAL
         while True:
@@ -74,10 +119,15 @@ class Client:
                 raise RedshiftError(f"超时 {timeout}s：{sql[:120]}")
             time.sleep(delay)
             delay = min(delay * 1.6, POLL_MAX)
+        # 会话 id 只在第一次调用的响应里出现，之后要靠它继续。放在状态检查之前记，
+        # 因为一条语句失败不代表会话没建起来。
+        if self.keepalive and not self.session_id and d.get("SessionId"):
+            self.session_id = d["SessionId"]
         if st != "FINISHED":
             raise RedshiftError(f"{st}: {d.get('Error', '(无错误信息)')}\nSQL: {sql[:400]}")
         out = {"elapsed_ms": d.get("Duration", 0) // 1_000_000,
-               "rows_affected": d.get("ResultRows", -1)}
+               "rows_affected": d.get("ResultRows", -1),
+               "session_id": self.session_id}
         if fetch and d.get("HasResultSet"):
             out.update(self._results(sid))
         return out

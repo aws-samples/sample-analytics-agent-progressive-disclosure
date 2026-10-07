@@ -1,0 +1,95 @@
+# 四 arm 网页后端 —— 云上镜像（在 backend/Dockerfile 之上补 DuckDB / Redshift / Aurora 三条 arm）
+#
+# ## 为什么要这个镜像
+#
+# DuckDB 是**进程内**引擎，它的耗时就是跑它那台机器的耗时。在笔记本上跑 DuckDB、
+# 同时从笔记本调云上的 Athena 和 Redshift，浏览器端量到的三个延迟不是同一样东西：
+# 一个是本机算力加跨广域网拉数据，两个是跨广域网发 SQL、云上贴着数据算。
+# 把整套后端搬到同区 Fargate 之后，三条 arm 的引擎访问全在区内，笔记本到后端
+# 只剩同一条 HTTP 跳，剩下的差异才只剩引擎。
+#
+# 耗时基准（`scripts/bench/fargate.py`）早就是这么做的——它把三条 arm 的客户端
+# 放进同一个任务跑固定 8 条查询。这个镜像补的是**问答**这一段：同样的位置，
+# 但跑的是完整后端加网页 UI，问什么由人决定。
+#
+# ## 为什么是 overlay 而不是直接改 backend/Dockerfile
+#
+# 那份是既有的云上镜像定义，`docker-compose.cloud.yml` 还在用。加两条 arm 是这次
+# 架构对比的需要，不该让它承担。所以这里 `FROM` 它构出来的镜像，只叠增量。
+#
+# 构建两步（第一步就是现有那份，参数一个都不改）：
+#   docker build -f backend/Dockerfile      -t analytics-agent-backend:base .
+#   docker build -f backend/Dockerfile.arms -t analytics-agent-backend:arms .
+ARG BASE=analytics-agent-backend:base
+# nosemgrep: dockerfile-source-not-pinned —— 本地上一步刚构出来的基础镜像
+FROM ${BASE}
+
+USER root
+
+# duckdb 版本**钉死**而不是 >=：运行时装 extension 时会装与这份 pip duckdb 匹配的版本，
+# 钉死可避免换基础镜像时引擎悄悄漂移。
+# 1.4.3（不是更早的 1.5.5）是为了和 arm4（Aurora/pg_duckdb）的内嵌引擎严格同版本：
+# pg_duckdb v1.1.1 把 DuckDB 1.4.3 编进扩展、不能独立换版本（见 scripts/aurora/README.md
+# 「引擎版本」一节）。两条 DuckDB arm 钉到同一版本后，残差只落在「入口」上，引擎不再是变量。
+RUN pip install --no-cache-dir duckdb==1.4.3 'pyarrow>=17'
+
+# 两条 arm 的客户端。`db.py::_arm_module()` 的回退路径是
+# `Path(db.py)/../scripts/<subdir>`，在这个镜像里就是 /app/scripts/duckdb 与
+# /app/scripts/redshift —— 放到这两个位置，db.py 一行都不用改。
+COPY scripts/duckdb/   /app/scripts/duckdb/
+COPY scripts/redshift/ /app/scripts/redshift/
+RUN find /app/scripts -name __pycache__ -type d -prune -exec rm -rf {} + || true
+
+# db.py 单文件叠加。基底镜像（analytics-agent-backend:base）里的 backend/ 可能早于
+# 本次改动——它的 db.py 的 BACKENDS 还没有 `aurora`，arm4 一 import 就在模块级
+# `raise RuntimeError("DB_BACKEND='aurora' 不认识…")`。这里把当前仓库的 db.py 覆上去，
+# 让 arm4 拿到带 aurora 分支（连接层 / DIALECTS["aurora"] / _aurora_* / backend_info）的那份。
+# 只覆 db.py 而不是整个 backend/：后者会把 backend/wheelhouse（127M，.dockerignore 没排）
+# 一起烤进镜像层，推 ECR 时白胖 127M——正是 backend/Dockerfile 用 bind-mount 规避的那笔。
+# aurora 的接线全在 db.py 内，其余三条 arm 在既有镜像里已验证可跑，故单文件足够。
+COPY backend/db.py /app/backend/db.py
+
+# 算力口径与 scripts/bench/Dockerfile 逐字相同，也与 scripts/duckdb/conn.py 的默认值
+# 相同。三处必须一致：内存额度决定什么时候溢写，而溢写与否是耗时的主要来源，
+# 两边额度不同等于在比两种执行计划而不是两个引擎。
+ENV DUCKDB_THREADS=4 \
+    DUCKDB_MEMORY_LIMIT=4GB \
+    DUCKDB_TEMP_DIR=/tmp/duckdb-spill
+
+# extension 不在构建时烘进镜像，改为**运行时**第一次连接时装（conn.py 的 _configure 跑
+# INSTALL+LOAD httpfs/aws/iceberg）。构建环境到 extensions.duckdb.org 不通，但这个镜像跑在
+# Fargate、有公网出网，装得到。代价是每次冷启动多拉几秒、混进第一条查询墙钟——延迟本来就要
+# 重测，可接受；换来的是不依赖 ext 基底镜像，也就没有「基底版本和 pip 版本对不上」那套自举。
+# arm4（aurora）的 extension 由 EC2 上 user-data 预热，两条 DuckDB arm 都是运行时装、口径一致。
+#
+# /tmp/duckdb-spill 要可写：conn.py 把 home_directory 指到这里，INSTALL 落的 extension 和
+# iceberg 运行时自拉的 avro 都写在这儿（appuser uid 10001）。
+RUN mkdir -p /tmp/duckdb-spill && chown -R appuser:appuser /tmp/duckdb-spill
+
+USER appuser
+
+WORKDIR /app/backend
+EXPOSE 8000 8001 8002 8003
+
+# 四条 arm 同时起在 8000 / 8001 / 8002 / 8003，端口分配与本地测试时一致，隧道那头不用改口径。
+#
+# `DB_BACKEND` 是 db.py 在 import 时读一次的模块级常量，所以必须靠**进程**隔离，
+# 每个 uvicorn 各带自己的值。不用 run.sh：那个脚本会 source .env.local（镜像里没有）
+# 并且写死 --host 127.0.0.1，容器里那样监听等于谁都连不上。
+#
+# 四条 arm 在**同一个任务**里，机器、算力、网络位置、区域完全是同一个——这正是
+# 把它搬上云的全部意义。分成多个任务跑就又引入了任务间差异。
+#
+# arm4（aurora）另需 AURORA_PGHOST/PGPORT/PGDATABASE/PGUSER/PGPASSWORD 几个运行时
+# 环境变量——它们由 **task-def** 注入（见 scripts/aurora/README.md），不烘进镜像。缺了
+# 这几个值时 aurora 进程连不上 pg_duckdb 会自己退，但 `wait` 下另三条 arm 照常可测。
+#
+# 用 `wait` 而不是 `wait -n`：一条 arm 起不来时其余还能测，容器不整体退出。
+# 起没起来看 /health 的 `db.engine`，不要看日志横幅（run.sh 那个横幅对所有 arm
+# 一律打印 backend=athena，不能用来辨认 arm）。
+CMD ["sh","-c","\
+DB_BACKEND=athena   python -m uvicorn server:app --host 0.0.0.0 --port 8000 & \
+DB_BACKEND=duckdb   python -m uvicorn server:app --host 0.0.0.0 --port 8001 & \
+DB_BACKEND=redshift python -m uvicorn server:app --host 0.0.0.0 --port 8002 & \
+DB_BACKEND=aurora   python -m uvicorn server:app --host 0.0.0.0 --port 8003 & \
+wait"]

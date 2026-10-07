@@ -51,12 +51,12 @@ SELECT c.channel_id, c.channel_name,
        count(DISTINCT ua.user_id)  AS new_users,
        (sum(d.cost) / NULLIF(count(DISTINCT ua.user_id), 0))::numeric(12,2) AS weekly_cac
 FROM channel_daily_costs d
-JOIN channels c USING (channel_id)
+JOIN channels c ON c.channel_id = d.channel_id
 LEFT JOIN user_attributions ua
   ON ua.channel_id = d.channel_id
  AND ua.attribution_type = 'last_touch'
  AND ua.attributed_at::date >= date_trunc('week', d.date)::date
- AND ua.attributed_at::date <  date_trunc('week', d.date)::date + 7
+ AND ua.attributed_at::date <  date_trunc('week', d.date)::date + interval '7 days'
 GROUP BY 1, 2, 3;
 
 -- ============ ADS 应用层 ============
@@ -79,7 +79,7 @@ SELECT COALESCE(p.dt, r.dt) AS dt,
        COALESCE(p.gross_revenue, 0)::numeric(14,2) AS gross_revenue,
        COALESCE(r.refund_amount, 0)::numeric(14,2) AS refund_amount,
        (COALESCE(p.gross_revenue, 0) - COALESCE(r.refund_amount, 0))::numeric(14,2) AS net_revenue
-FROM paid p FULL OUTER JOIN refunds r USING (dt);
+FROM paid p FULL OUTER JOIN refunds r ON p.dt = r.dt;
 
 DROP TABLE IF EXISTS growth_daily_gmv;
 CREATE TABLE growth_daily_gmv AS
@@ -106,6 +106,6 @@ SELECT c.channel_id, c.channel_name,
        sum(d.cost)::numeric(14,2) AS total_cost,
        NULL::numeric(14,2)        AS attributed_gmv,
        NULL::numeric(8,4)         AS roi
-FROM channel_daily_costs d JOIN channels c USING (channel_id)
+FROM channel_daily_costs d JOIN channels c ON c.channel_id = d.channel_id
 WHERE d.date < DATE '2026-01-10'
 GROUP BY 1, 2;

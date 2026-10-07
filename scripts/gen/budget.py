@@ -28,7 +28,33 @@ genlib 向量化重写**。这是本次工作量的主要节省点。
 """
 from __future__ import annotations
 
+import datetime as _dt
+
 FACT, SUB, FIXED = "fact", "sub", "fixed"
+
+# 数据时间窗（钉死，不读系统时间；见模块 docstring）
+AS_OF = "2026-01-24"
+DATA_START = "2025-10-26"
+WINDOW_DAYS = 91
+
+# 投放成本表**单独一根更长的轴**，铺到 2026-09-01（比业务日历长 8 个月）。
+#
+# 这不是缺陷，是本项目最核心的教学素材：它是「禁用每张表自己的 max(时间列)、
+# 一律走 (SELECT max(as_of_date) FROM meta_snapshot)」这条铁律的唯一具体例子，
+# 已经写进 backend/agent.py 的系统提示、backend/metrics_def.py 的 cac/roi clamp、
+# backend/metric_layer.py、README 双语、docs/ 四篇、以及 8 张 knowledge 卡片。
+# 把轴收进窗口等于删掉这个陷阱，还要连带改提示词（AGENTS.md：提示词变更要跑全量 L7）。
+# 所以生成器只修「花费与归因新客脱钩」那个量的缺陷，**不动轴的形状**。
+COST_AXIS_END = "2026-09-01"
+COST_AXIS_DAYS = (_dt.date.fromisoformat(COST_AXIS_END)
+                  - _dt.date.fromisoformat(DATA_START)).days + 1      # 311
+
+# 有投放花费的渠道数：channels.csv 里 channel_type ∈ {paid, kol} 的那 9 个。
+# organic / referral / direct 一行都不进成本表（它们的 CAC 该是「不适用」而非 0，
+# knowledge/metrics/governed_metrics.md:46 讲的正是这个口径）。
+# 这个 9 在 tables._prep_channel_costs 里被交叉断言：那边从 channels.csv 现读，
+# 两边不一致会直接停下，而不是静默少生成一个渠道。
+PAID_CHANNELS = 9
 
 # 表名 → (当前实测行数, 缩放类别)
 # 实测来源：eval/baseline/consistency.postgres.json（35 张原始表，不含 mart/派生层）
@@ -62,13 +88,21 @@ BASE: dict[str, tuple[int, str]] = {
     "subscriptions":        (50,    FACT),
     # ---------------- 归因域 ----------------
     "channels":             (14,    FIXED),
-    "ad_campaigns":         (50,    SUB),
-    "ad_creatives":         (144,   SUB),
-    "channel_daily_costs":  (910,   FIXED),   # = 渠道数 × 天数，两者都固定
+    # ad_campaigns / ad_creatives 声明过 SUB，但它们是 dims_to_parquet.DIMS 里的透传表，
+    # 逐字节来自 v1 CSV，**没有任何代码在按 sqrt(scale) 兑现这个声明**（D-02 同一类问题）。
+    # 声明与产出不一致时，错的是声明：eval 金标依赖现有那 50 / 144 行的具体 id 和名字，
+    # 改数据要连带改金标，而把声明改成 FIXED 是零风险的。
+    # main.check_table_coverage() 有一条交叉断言：DIMS 里的表必须全是 FIXED。
+    "ad_campaigns":         (50,    FIXED),
+    "ad_creatives":         (144,   FIXED),
+    # = 投放渠道数 × 成本轴天数。两者都固定，且都在上面显式定义，不写字面量——
+    # 900 这个数原先是 v1 CSV 的实测行数（910），而 v1 的日期是每渠道随机撒的、
+    # 不成网格，那个数说明不了任何事。
+    "channel_daily_costs":  (PAID_CHANNELS * COST_AXIS_DAYS, FIXED),   # 9 × 311 = 2799
     "user_attributions":    (350,   FACT),
     # ---------------- 营销域 ----------------
-    "campaigns":            (50,    SUB),
-    "coupons":              (150,   SUB),
+    "campaigns":            (50,    FIXED),   # 同 ad_campaigns：透传表，SUB 从未被兑现
+    "coupons":              (150,   FIXED),   # 同上；user_coupons 的外键指向这 150 行
     "user_coupons":         (22735, FACT),
     "banners":              (119,   FIXED),
     "push_notifications":   (10000, FACT),
@@ -77,11 +111,6 @@ BASE: dict[str, tuple[int, str]] = {
     "ab_test_variants":     (30,    FIXED),
     "ab_test_assignments":  (1850,  FACT),
 }
-
-# 数据时间窗（钉死，不读系统时间；见模块 docstring）
-AS_OF = "2026-01-24"
-DATA_START = "2025-10-26"
-WINDOW_DAYS = 91
 
 # 分片：每个 CSV shard 的目标行数。作用有两个——
 #  1. 把生成峰值内存与表大小解耦（按块生成、写完即释放）

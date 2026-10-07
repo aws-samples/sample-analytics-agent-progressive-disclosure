@@ -28,9 +28,12 @@
 
 ## 构建口径（本表如何从基表算出）
 
+> 方言为 Trino（Athena）。真源是 `schema_manifest.yaml` 里的 Postgres 写法，
+> 由 `scripts/gen/pg_to_trino.py` 转换而来。
+
 ```sql
-SELECT placed_at::date AS dt,
-       sum(actual_amount) FILTER (WHERE status IN ('paid','shipped','delivered'))::numeric(14,2) AS gmv,
+SELECT CAST(placed_at AS date) AS dt,
+       CAST(sum(actual_amount) FILTER (WHERE status IN ('paid','shipped','delivered')) AS decimal(14,2)) AS gmv,
        count(*) FILTER (WHERE status IN ('paid','shipped','delivered'))          AS paid_orders,
        count(DISTINCT user_id) FILTER (WHERE status IN ('paid','shipped','delivered')) AS paying_users,
        count(*) AS all_orders

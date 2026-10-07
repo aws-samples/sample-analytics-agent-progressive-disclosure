@@ -31,27 +31,27 @@
 ### 各渠道 CAC（某月）
 ```sql
 SELECT channel_name,
-       sum(cost)::int AS cost,
+       CAST(sum(cost) AS integer) AS cost,
        sum(new_users_attributed) AS new_users,
        round(sum(cost)/nullif(sum(new_users_attributed),0),1) AS cac
 FROM mart_channel_daily
-WHERE to_char(dt,'YYYY-MM')='2025-12'
+WHERE date_format(dt, '%Y-%m')='2025-12'
 GROUP BY 1 ORDER BY cac DESC NULLS LAST;
 ```
 
 ### 各渠道 ROI（某月）
 ```sql
 SELECT channel_name,
-       sum(cost)::int AS cost,
-       sum(gmv_attributed)::int AS gmv,
+       CAST(sum(cost) AS integer) AS cost,
+       CAST(sum(gmv_attributed) AS integer) AS gmv,
        round(sum(gmv_attributed)/nullif(sum(cost),0),2) AS roi
 FROM mart_channel_daily
-WHERE to_char(dt,'YYYY-MM')='2025-12'
+WHERE date_format(dt, '%Y-%m')='2025-12'
 GROUP BY 1 ORDER BY roi DESC NULLS LAST;
 ```
 
 ### 投放成本趋势
 ```sql
-SELECT dt, sum(cost)::int AS cost FROM mart_channel_daily
+SELECT dt, CAST(sum(cost) AS integer) AS cost FROM mart_channel_daily
 WHERE channel_type='paid' GROUP BY 1 ORDER BY 1;
 ```

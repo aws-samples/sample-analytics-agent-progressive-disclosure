@@ -257,9 +257,20 @@ SQL_RESERVED = {
 
 
 def metric_columns() -> dict[str, set[str]]:
-    """治理指标层：每个 metric 的目标表 → 其 SQL 里引用的标识符。"""
+    """治理指标层：每个 metric 的目标表 → 该 metric 会引用到的列。
+
+    不止 SQL 里字面出现的标识符。metric_layer 编译时还会**隐式注入**两类列，
+    它们在注册表里是配置、不在 sql 字符串里，原来这个函数扫不到：
+      · 时间锚点列（time_col，缺省 dt）—— 出现在 WHERE 和 (SELECT max(...)) 里
+      · 维度列（dimensions → DIMENSIONS[d]['sql']）—— 出现在 SELECT / GROUP BY 里
+    漏掉的代价是真实发生过的：repurchase_rate_30d 作用在 mart_user_summary（按用户
+    建行、无 dt 列），带时间窗调用时在 Athena 上抛 COLUMN_NOT_FOUND，而对账**照样通过**，
+    因为 dt 既不在它的 sql 里、又被 SQL_RESERVED 过滤掉。现在两类都算进来，
+    这类"配置指向了表里不存在的列"在 L2 就红，不用等运行时。
+    """
     import metrics_def
     sql_words = re.compile(r"[a-z_][a-z0-9_]*")
+    bare_col = re.compile(r"^[a-z_][a-z0-9_]*$")
     reserved = SQL_RESERVED
     out: dict[str, set[str]] = {}
     for name, m in metrics_def.METRICS.items():
@@ -270,6 +281,21 @@ def metric_columns() -> dict[str, set[str]]:
         words = set()
         for p in parts:
             words |= {w for w in sql_words.findall(str(p).lower()) if w not in reserved}
+        # 被过滤的时间列：time_col 显式为 None = 该指标不支持时间窗，没有列要校验。
+        time_col = m.get("time_col", "dt")
+        if time_col:
+            words.add(str(time_col).lower())
+        # 全局锚点表（meta_snapshot.as_of_date）：它不是任何指标的 table，但每个带
+        # 时间窗的调用都会查它。少了它 = 所有相对窗口在运行时炸，所以也要对账。
+        anchor = re.search(r"max\((\w+)\)\s+from\s+(\w+)",
+                           str(getattr(metrics_def, "ANCHOR_SQL", "")).lower())
+        if anchor and time_col:
+            out.setdefault(anchor.group(2), set()).add(anchor.group(1))
+        # 维度列：只校验裸列名；表达式型维度（含函数/运算）跳过，交给 verify_doc_sql。
+        for d in m.get("dimensions", []):
+            dim_sql = str(metrics_def.DIMENSIONS.get(d, {}).get("sql", "")).lower()
+            if bare_col.match(dim_sql):
+                words.add(dim_sql)
         out.setdefault(table, set())
         out[table] |= words
     return out

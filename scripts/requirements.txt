@@ -1,2 +1,6 @@
 numpy>=2.0
 pyyaml>=6.0
+# 可移植性判据(`scripts/gen/verify_portability.py`)的 `--static` / `--selftest` 都要它:
+# `arrow_types.arrow_type()` 直接产 pyarrow 类型对象。它是 L0 的两条,所以 CI 也要装。
+# 版本下限跟 `scripts/bench/Dockerfile` 一致。
+pyarrow>=17

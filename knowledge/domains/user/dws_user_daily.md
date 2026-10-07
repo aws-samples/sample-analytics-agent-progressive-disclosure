@@ -30,14 +30,17 @@
 
 ## 构建口径（本表如何从基表算出）
 
+> 方言为 Trino（Athena）。真源是 `schema_manifest.yaml` 里的 Postgres 写法，
+> 由 `scripts/gen/pg_to_trino.py` 转换而来。
+
 ```sql
 WITH ev AS (
-  SELECT user_id, event_time::date AS dt,
+  SELECT user_id, CAST(event_time AS date) AS dt,
          count(*) AS event_cnt, count(DISTINCT session_id) AS session_cnt
   FROM events WHERE user_id IS NOT NULL GROUP BY 1, 2
 ),
 od AS (
-  SELECT user_id, placed_at::date AS dt,
+  SELECT user_id, CAST(placed_at AS date) AS dt,
          count(*) AS order_cnt,
          sum(actual_amount) FILTER (WHERE status IN ('paid','shipped','delivered')) AS paid_amount
   FROM orders GROUP BY 1, 2
@@ -47,6 +50,6 @@ SELECT COALESCE(ev.user_id, od.user_id) AS user_id,
        COALESCE(ev.event_cnt, 0)        AS event_cnt,
        COALESCE(ev.session_cnt, 0)      AS session_cnt,
        COALESCE(od.order_cnt, 0)        AS order_cnt,
-       COALESCE(od.paid_amount, 0)::numeric(14,2) AS paid_amount
+       CAST(COALESCE(od.paid_amount, 0) AS decimal(14,2)) AS paid_amount
 FROM ev FULL OUTER JOIN od ON ev.user_id = od.user_id AND ev.dt = od.dt
 ```

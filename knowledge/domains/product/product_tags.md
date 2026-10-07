@@ -80,7 +80,7 @@ SELECT
     AVG(p.sold_count) AS avg_sold_per_product
 FROM product_tags pt
 JOIN products p ON pt.product_id = p.product_id
-WHERE p.status = 'active'
+WHERE p.status = 'on_sale'
 GROUP BY pt.tag_name, pt.tag_type
 HAVING COUNT(DISTINCT p.product_id) >= 10
 ORDER BY total_sold DESC

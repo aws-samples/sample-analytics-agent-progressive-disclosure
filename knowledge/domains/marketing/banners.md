@@ -23,21 +23,29 @@
 ## 字段枚举值
 
 ### position 展示位置
-| 值 | 说明 |
-|----|------|
-| home_top | 首页顶部轮播 |
-| home_middle | 首页中部推荐位 |
-| category_top | 分类页顶部 |
-| detail_bottom | 商品详情页底部 |
+| 值 | 说明 | 实测行数 |
+|----|------|------|
+| cart_bottom | 购物车页底部 | 30 |
+| splash | 启动闪屏 | 19 |
+| search_top | 搜索页顶部 | 18 |
+| detail_bottom | 商品详情页底部 | 16 |
+| home_top | 首页顶部轮播 | 14 |
+| home_middle | 首页中部推荐位 | 11 |
+| category_top | 分类页顶部 | 11 |
+
+> 共 7 个位置、119 行。旧文档只写了后 4 个，漏掉的 `cart_bottom` / `splash` /
+> `search_top` 恰好是行数最多的三个——按旧列表做 GROUP BY 会漏掉 57% 的 banner。
 
 ### target_type 跳转类型
-| 值 | 说明 |
-|----|------|
-| product | 跳转到商品详情页 |
-| category | 跳转到分类页 |
-| campaign | 跳转到活动页 |
-| external | 跳转到外部链接 |
-| deeplink | 深度链接（APP内跳转） |
+| 值 | 说明 | 实测行数 |
+|----|------|------|
+| product | 跳转到商品详情页 | 29 |
+| external | 跳转到外部链接 | 28 |
+| campaign | 跳转到活动页 | 24 |
+| content | 跳转到内容/帖子页 | 21 |
+| category | 跳转到分类页 | 17 |
+
+> **没有** `deeplink`（旧文档写过）；APP 内跳内容页用的是 `content`。
 
 ## 索引
 
@@ -87,7 +95,7 @@ SELECT
     SUM(click_count) AS total_clicks,
     ROUND(SUM(click_count) * 100.0 / NULLIF(SUM(impression_count), 0), 2) AS avg_ctr
 FROM banners
-WHERE start_date >= CURRENT_DATE - INTERVAL '30 days'
+WHERE start_date >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '30' day
 GROUP BY position
 ORDER BY total_impressions DESC;
 ```

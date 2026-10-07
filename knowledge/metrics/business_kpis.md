@@ -12,7 +12,7 @@ SELECT
     AVG(total_amount) AS aov
 FROM orders
 WHERE status IN ('paid', 'shipped', 'delivered')
-  AND created_at >= CURRENT_DATE - INTERVAL '30 days'
+  AND created_at >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '30' day
 GROUP BY DATE(created_at)
 ORDER BY date;
 ```
@@ -37,12 +37,12 @@ WITH period_revenue AS (
     SELECT SUM(total_amount) AS total_revenue
     FROM orders
     WHERE status IN ('paid', 'shipped', 'delivered')
-      AND created_at >= CURRENT_DATE - INTERVAL '30 days'
+      AND created_at >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '30' day
 ),
 period_users AS (
     SELECT COUNT(DISTINCT user_id) AS active_users
     FROM events
-    WHERE event_time >= CURRENT_DATE - INTERVAL '30 days'
+    WHERE event_time >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '30' day
 )
 SELECT
     pr.total_revenue,
@@ -68,17 +68,22 @@ ORDER BY month;
 
 ### LTV (用户生命周期价值) - 简化计算
 ```sql
-WITH user_value AS (
+-- 注册时间列是 registered_at，**不是 created_at**：后者是灌数时的记录创建时刻，
+-- 当前库里 500 行同一个值，用它算「注册至今多少天」会让四档 cohort 全部塌进同一档
+-- （不报错、数看着合理、分层是假的）。同理时间锚用 meta_snapshot，不用 NOW()。
+WITH a AS (SELECT max(as_of_date) AS d FROM meta_snapshot),
+user_value AS (
     SELECT
         u.user_id,
-        u.created_at AS register_date,
+        u.registered_at AS register_date,
         COALESCE(SUM(o.total_amount), 0) AS total_spend,
         COUNT(DISTINCT o.order_id) AS order_count,
-        EXTRACT(DAY FROM NOW() - u.created_at) AS days_since_register
+        date_diff('day', CAST(u.registered_at AS date), a.d) AS days_since_register
     FROM users u
     LEFT JOIN orders o ON u.user_id = o.user_id
         AND o.status IN ('paid', 'shipped', 'delivered')
-    GROUP BY u.user_id, u.created_at
+    CROSS JOIN a
+    GROUP BY u.user_id, u.registered_at, a.d
 )
 SELECT
     CASE
@@ -112,64 +117,72 @@ SELECT
     cohort_month,
     total_users,
     paying_users,
-    ROUND(paying_users::numeric / total_users * 100, 2) AS pay_rate_pct
+    ROUND(CAST(paying_users AS decimal(38,6)) / total_users * 100, 2) AS pay_rate_pct
 FROM monthly_stats
 ORDER BY cohort_month;
 ```
 
 ## 渠道效果指标
 
+> 渠道/活动都是**用 id 关联的**：`user_attributions` 里只有 `channel_id` /
+> `ad_campaign_id`，没有 `channel`、也没有 `first_touch_campaign` 这种列。
+> 渠道名要 JOIN `channels` 取。
+
 ### CAC (获客成本) 按渠道
 ```sql
 WITH channel_spend AS (
-    -- 假设从 ad_campaigns 获取投放成本
-    SELECT
-        channel,
-        SUM(budget) AS total_spend
-    FROM ad_campaigns
-    WHERE status = 'completed'
-    GROUP BY channel
+    -- 花费用 channel_daily_costs（实际投放花费）；ad_campaigns.budget_total 是预算不是花费
+    SELECT channel_id, SUM(cost) AS total_spend
+    FROM channel_daily_costs
+    GROUP BY channel_id
 ),
 channel_users AS (
-    SELECT
-        channel,
-        COUNT(DISTINCT user_id) AS acquired_users
+    SELECT channel_id, COUNT(DISTINCT user_id) AS acquired_users
     FROM user_attributions
     WHERE attribution_type = 'first_touch'
-    GROUP BY channel
+    GROUP BY channel_id
 )
 SELECT
-    cu.channel,
+    ch.channel_name,
     cs.total_spend,
     cu.acquired_users,
     ROUND(cs.total_spend / NULLIF(cu.acquired_users, 0), 2) AS cac
 FROM channel_users cu
-LEFT JOIN channel_spend cs ON cu.channel = cs.channel
+JOIN channels ch       ON ch.channel_id = cu.channel_id
+LEFT JOIN channel_spend cs ON cs.channel_id = cu.channel_id
 ORDER BY cac;
 ```
+
+注意这里归因口径是 **first_touch**，而 `mart_channel_daily` / `dws_channel_weekly`
+用的是 **last_touch**，两边的 CAC 对不上是口径不同。要官方口径走 `call_metric`。
 
 ### ROI (投资回报率) 按广告活动
 ```sql
 WITH campaign_revenue AS (
     SELECT
-        ua.first_touch_campaign AS campaign_id,
+        ua.ad_campaign_id,
         SUM(o.total_amount) AS revenue
     FROM user_attributions ua
     JOIN orders o ON ua.user_id = o.user_id
-    WHERE o.status IN ('paid', 'shipped', 'delivered')
-    GROUP BY ua.first_touch_campaign
+    -- 必须过滤归因类型：一个用户会有多条归因记录，不过滤就把同一笔订单算好几遍
+    WHERE ua.attribution_type = 'first_touch'
+      AND o.status IN ('paid', 'shipped', 'delivered')
+    GROUP BY ua.ad_campaign_id
 )
 SELECT
-    ac.campaign_id,
+    ac.ad_campaign_id,
     ac.campaign_name,
-    ac.budget AS spend,
+    ac.budget_total AS spend,
     COALESCE(cr.revenue, 0) AS revenue,
-    ROUND((COALESCE(cr.revenue, 0) - ac.budget) / NULLIF(ac.budget, 0) * 100, 2) AS roi_pct
+    ROUND((COALESCE(cr.revenue, 0) - ac.budget_total) / NULLIF(ac.budget_total, 0) * 100, 2) AS roi_pct
 FROM ad_campaigns ac
-LEFT JOIN campaign_revenue cr ON ac.campaign_id = cr.campaign_id
+LEFT JOIN campaign_revenue cr ON cr.ad_campaign_id = ac.ad_campaign_id
 WHERE ac.status = 'completed'
 ORDER BY roi_pct DESC;
 ```
+
+`spend` 用的是 `budget_total`（**预算**）。要按实际花费算 ROI，换成
+`channel_daily_costs` 按 `ad_campaign_id` 聚合的 `SUM(cost)`。
 
 ## 运营活动效果
 
@@ -183,7 +196,7 @@ SELECT
     c.status,
     COUNT(DISTINCT usm.user_id) AS target_users
 FROM campaigns c
-LEFT JOIN user_segment_members usm ON usm.segment_id = ANY(c.target_segment_ids)
+LEFT JOIN user_segment_members usm ON contains(c.target_segment_ids, usm.segment_id)
     AND usm.exited_at IS NULL
 WHERE c.status IN ('active', 'completed')
 GROUP BY c.campaign_id, c.campaign_name, c.campaign_type, c.status
@@ -197,7 +210,7 @@ SELECT
     COUNT(*) AS total_issued,
     COUNT(CASE WHEN status = 'used' THEN 1 END) AS used,
     COUNT(CASE WHEN status = 'expired' THEN 1 END) AS expired,
-    ROUND(COUNT(CASE WHEN status = 'used' THEN 1 END)::numeric / COUNT(*) * 100, 2) AS redemption_rate
+    ROUND(CAST(COUNT(CASE WHEN status = 'used' THEN 1 END) AS decimal(38,6)) / COUNT(*) * 100, 2) AS redemption_rate
 FROM coupons
 GROUP BY coupon_type
 ORDER BY redemption_rate DESC;
@@ -224,7 +237,7 @@ SELECT
     variant_id,
     users,
     orders,
-    ROUND(orders::numeric / users * 100, 2) AS conversion_rate,
+    ROUND(CAST(orders AS decimal(38,6)) / users * 100, 2) AS conversion_rate,
     revenue,
     ROUND(revenue / NULLIF(users, 0), 2) AS revenue_per_user
 FROM experiment_metrics
@@ -240,14 +253,14 @@ SELECT
     p.product_name,
     pc.category_name,
     SUM(oi.quantity) AS total_sold,
-    SUM(oi.subtotal) AS total_revenue,
+    SUM(oi.actual_amount) AS total_revenue,   -- order_items 没有 subtotal，明细实付是 actual_amount
     COUNT(DISTINCT oi.order_id) AS order_count
 FROM order_items oi
 JOIN products p ON oi.product_id = p.product_id
 JOIN categories pc ON p.category_id = pc.category_id
 JOIN orders o ON oi.order_id = o.order_id
 WHERE o.status IN ('paid', 'shipped', 'delivered')
-  AND o.created_at >= CURRENT_DATE - INTERVAL '30 days'
+  AND o.created_at >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '30' day
 GROUP BY p.product_id, p.product_name, pc.category_name
 ORDER BY total_revenue DESC
 LIMIT 20;
@@ -258,7 +271,7 @@ LIMIT 20;
 WITH category_sales AS (
     SELECT
         pc.category_name,
-        SUM(oi.subtotal) AS revenue
+        SUM(oi.actual_amount) AS revenue
     FROM order_items oi
     JOIN products p ON oi.product_id = p.product_id
     JOIN categories pc ON p.category_id = pc.category_id

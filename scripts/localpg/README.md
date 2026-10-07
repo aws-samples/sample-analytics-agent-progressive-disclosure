@@ -1,5 +1,15 @@
 # 本地 Postgres rig(localpg)
 
+> **这是 v1 的 legacy 路径,保留但不再维护。** 现行数据层是 Athena + S3 Tables (Iceberg),
+> 建法见 [../../docs/deployment.md](../../docs/deployment.md),对应脚本在
+> `scripts/lakehouse/`。这套 rig 只服务 `DB_BACKEND=postgres`,不在
+> `scripts/test_all.sh` 的覆盖范围内(它跑的是 athena 后端),边界见
+> [../../docs/legacy.md](../../docs/legacy.md)。
+>
+> 湖仓侧的对应关系:建表 = `scripts/lakehouse/athena.py --file database/iceberg/01_tables.sql`,
+> 灌数 = `load.py`,mart = `02_mart.sql`,`meta_snapshot` 同样存 `as_of_date`,
+> 「最近 N 天」的锚点口径两条路径一致。
+
 本机 Docker Desktop 被组织策略锁(需 amazonians 登录),Docker initdb hook 这条路走不通。
 这套脚本用 **brew postgresql@16** 起一个本机集群,作为所有本地验证的统一环境。
 

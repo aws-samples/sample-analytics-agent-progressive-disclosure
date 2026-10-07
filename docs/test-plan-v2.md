@@ -1,5 +1,19 @@
 # v2 迁移测试流程
 
+> ## 📜 历史文档：**这是 v2(Redshift)的验收流程**,正文原样保留
+>
+> **现行验收文档是 [test-plan.md](test-plan.md)**（湖仓：S3 Tables + Glue + Athena，
+> 含 L8 的 21 个负测用例与「没有自动化覆盖」清单）。本文只在想知道 v2 怎么验的时候读。
+>
+> 当前验收流程是同一个入口 `bash scripts/test_all.sh`,但**内容已整体改成湖仓链路**:
+> L1 查 S3 Tables + Glue + Athena workgroup,L2 加了「卡片枚举取值 ⟷ Athena 实际取值」
+> 这条路径(`scripts/lakehouse/verify_enums.py`),L3 换成 CSV 真源 ⟷ Athena 现查
+> (不再用会过期的基线 JSON),**L4 治理层尚未实现**——那一节现在打印的是「缺什么」而不是 PASS。
+>
+> 所以本文的价值在**方法**(为什么分层、为什么早层先跑、L8 那六个缺陷注入怎么设计),
+> 不在具体命令:文中的 `scripts/redshift/*`、`scripts/glue/*` 已是死路径,
+> 预期值也都绑在 v2 那批 8000 万行数据上。当前的实际检查项以 `scripts/test_all.sh` 为准。
+
 覆盖 Redshift + Glue 这次全部改动的验收流程。分九层，**从不依赖云资源的秒级自测往上走**，
 越靠后越慢越贵，早层挂了就没必要跑后面。
 
