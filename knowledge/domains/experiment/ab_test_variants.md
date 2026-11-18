@@ -10,7 +10,7 @@
 | variant_key | VARCHAR(50) | 变体标识符（如 control, treatment_a） |
 | description | TEXT | 变体描述 |
 | traffic_percentage | DECIMAL(5,2) | 该变体分配的流量百分比 |
-| config_json | `string` | 变体配置参数（JSON 文本；**不是 Postgres 的 JSONB**，取值用 `json_extract_scalar`）。**种子数据里整列为 NULL** |
+| config_json | `string` | 变体配置参数（JSON 文本；**不是 Postgres 的 JSONB**，取值用 `json_extract_scalar`）。**当前数据里整列为 NULL**（30 行全空），下面的示例只是设计形态 |
 | is_control | BOOLEAN | 是否为对照组 |
 | created_at | TIMESTAMP | 记录创建时间 |
 
@@ -81,7 +81,7 @@ ORDER BY t.test_name;
 ```
 
 ### 查看特定配置项的变体
-> ⚠️ **这段查询在当前种子数据上返回 0 行**：`config_json` 整列为 NULL（登记在
+> ⚠️ **这段查询在当前数据上返回 0 行**：`config_json` 整列为 NULL（登记在
 > `scripts/lakehouse/verify_constants.py` 的清单里）。留着是给"以后填上了怎么查"当模板，
 > **别拿它去回答实际问题**——真实分流效果看 `ab_test_assignments`。
 > 另外 Postgres 的 `json ? 'k'`（判断键存在）在 Trino 里**是语法错**，

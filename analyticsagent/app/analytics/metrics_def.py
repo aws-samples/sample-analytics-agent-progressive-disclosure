@@ -306,15 +306,22 @@ METRICS = {
         "time_col": None,
         "time_window_hint": "复购率是用户终身队列指标，mart_user_summary 按用户建行、无日期轴。"
                             "要看时间趋势请手写 SQL 按 first_paid_date 划队列，"
-                            "并在结论里说明：最近不满 30 天的队列还没走完观察窗，率会偏低。",
+                            "并且只取首单日 ≤ 锚点 − 30 天的队列；更近的队列还没走完观察窗，不要放进同一张趋势图。",
         "type": "ratio",
-        "numerator": "SUM(CASE WHEN is_repurchaser_30d THEN 1 ELSE 0 END)",
-        "denominator": "SUM(CASE WHEN first_paid_date IS NOT NULL THEN 1 ELSE 0 END)",
+        # 只算观察窗已满的队列：首单日 ≤ 锚点 − 30 天。以前分母含「最近 30 天才首单」的用户，
+        # 他们还没机会在 30 天内复购，率被系统性压低（全量 63.1% vs 观察窗满的 76.9%，2026-11-06 实测）。
+        # 分子分母用同一个条件，锚点走全局业务日历，与其它指标一致。
+        "numerator": "SUM(CASE WHEN is_repurchaser_30d AND first_paid_date <= "
+                     "(SELECT max(as_of_date) FROM meta_snapshot) - INTERVAL '30' DAY THEN 1 ELSE 0 END)",
+        "denominator": "SUM(CASE WHEN first_paid_date IS NOT NULL AND first_paid_date <= "
+                       "(SELECT max(as_of_date) FROM meta_snapshot) - INTERVAL '30' DAY THEN 1 ELSE 0 END)",
         "unit": "%",
         "as_pct": True,
-        "filters": ["分母仅含有首单用户"],
+        "filters": ["分母仅含有首单用户", "只含观察窗已满的队列：首单日 ≤ 锚点 − 30 天"],
         "dimensions": ["register_channel"],
-        "口径声明": "复购率 = 首单后30天内再次有效下单的用户 / 有首单的用户。分母绝不能用全体用户。",
+        "口径声明": "复购率 = 首单后30天内再次有效下单的用户 / 有首单的用户，**只统计观察窗已满的队列**"
+                  "（首单日 ≤ 锚点 − 30 天）。最近 30 天才首单的用户还没走完观察窗，计入分母会把率系统性压低。"
+                  "分母绝不能用全体用户。",
         "version": "v1",
     },
     "new_subscriptions": {

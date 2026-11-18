@@ -46,16 +46,47 @@ APP Analytics 数据库包含 **8 个原始业务域（共 35 张明细表）**�
 | `as_of_date` | date | 数据里的「今天」= `max(mart_daily_kpi.dt)`。所有相对日期从这里起算 |
 | `data_start` | date | 数据起始日 = `min(mart_daily_kpi.dt)` |
 
-一行，两列。**「最近 / 上周 / 本月」一律写 `(SELECT max(as_of_date) FROM meta_snapshot)`**：
+一行，两列。**「最近 / 上周 / 本月」一律写 `(SELECT max(as_of_date) FROM meta_snapshot)`**。
+
+**「近 N 天」= 截至 `as_of_date`、含当天在内共 N 天。** 写法按时间列的类型分两种，别混用：
 
 ```sql
+-- 日期列（mart_* 的 dt、channel_daily_costs.date 等）：
 WHERE dt >  (SELECT max(as_of_date) FROM meta_snapshot) - interval '30' day
   AND dt <= (SELECT max(as_of_date) FROM meta_snapshot)
+
+-- 时间戳列（placed_at / registered_at / event_time / view_time / start_time / created_at …）：
+WHERE placed_at >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '29' day   -- N-1
+  AND placed_at <  (SELECT max(as_of_date) FROM meta_snapshot) + interval '1' day
 ```
 
+`as_of_date` 是**日期**，跟时间戳比较时它等于当天零点，所以两种最常见的写错各差一天，而且都不报错
+（近 30 天订单数实测：正确 316,925）：
+
+- 时间戳写 `>= 锚点 - interval '30' day`：把第 31 天整天算进来，**多一天** → 326,209。
+- 时间戳写 `<= 锚点`：锚点当天零点之后的记录全被排除，**少一天** → 303,663。
+
+上界用 `< 锚点 + interval '1' day`，不要用 `<= 锚点`。
+
+**「减一」只属于时间戳列，日期列不要减一。** 判断标准是列类型，不是"含不含当天"的直觉：
+
+| 列类型 | 近 N 天的下界 | 近 90 天示例 |
+|---|---|---|
+| **日期**（`dt`、`date`，没有时分秒） | `> 锚点 - interval 'N' day`（**直接写 N**） | `dt > 锚点 - interval '90' day AND dt <= 锚点` |
+| **时间戳**（`*_at`、`*_time`，带时分秒） | `>= 锚点 - interval 'N-1' day` | `placed_at >= 锚点 - interval '89' day AND placed_at < 锚点 + interval '1' day` |
+
+日期列写成 `dt > 锚点 - interval '89' day` 只有 89 天，**少一天**，同样不报错。不确定列类型时先看该表卡片的字段表。
+
 - **禁用 `current_date` / `now()`**：语法合法、不报错，但落在数据区间之外，安静地返回 0 行。
-- **也禁用该表自己的 `max(时间列)`**：这条更隐蔽，它不返回空集而是返回一个错的数——**全库 91 个时间列里有 12 类轴末超出业务日历**（2026-09-17 实测）：`subscriptions.end_date` 到 2027-01-24、`ad_campaigns.end_date` 到 2026-10-01、`channel_daily_costs` / `mart_channel_daily` 到 2026-09-01、`coupons.end_date`、`user_coupons.expire_at`、`campaigns.end_date`、`banners.end_date` 依次递减。拿各自的 max 当今天，两张表的「最近 7 天」指向完全不同的两段日期。
-- **开窗必须同时写上下界**，只写下界会把日历外的行捞进来（实测 CAC 从 2880 变成 15137，不报错）。全表轴末对照见 `../metrics/governed_metrics.md` §时间锚点。
+- **也禁用该表自己的 `max(时间列)`**：这条更隐蔽，它不返回空集而是返回一个错的数——**全库 107 个时间列里有 11 类轴末超出业务日历**（2026-11 重灌后实测）：`subscriptions.end_date` 到 2027-01-24、`channel_daily_costs` / `mart_channel_daily` 到 2026-09-01、`ad_campaigns.end_date` 到 2026-05-08、`campaigns.end_date`、`coupons.end_date`、`banners.end_date`、`campaigns.start_date`、`user_coupons.expire_at` 依次递减。拿各自的 max 当今天，两张表的「最近 7 天」指向完全不同的两段日期。
+- **开窗必须同时写上下界**，只写下界会把日历外的行捞进来（当前数据实测近 30 天 CAC 从 17.12 变成 125.48，7 倍多，不报错）。全表轴末对照见 `../metrics/governed_metrics.md` §时间锚点。
+
+## 默认统计范围（问句没说明时）
+
+- **订单数**：全部订单，不限状态；**GMV / 销售额 / 客单价 / 付费用户**：只算有效订单（`paid / shipped / delivered`），金额用 `actual_amount`。
+- **用户数**：`users` 全部记录，**不要自己加 `status = 'active'`**；**帖子数**：`posts` 全部记录，不要自己加 `status = 'published'`。问句明确说了「活跃账号」「已发布」才加。
+- **单表总量**（一共花了多少、一共多少次点击）：统计全部行，**不要自己按锚点截断**；只有两张表放进同一个比值（如 CAC = 成本 / 新客）时才两边都截到锚点日。
+- 完整定义表见 `../metrics/governed_metrics.md` §核心指标唯一定义。
 
 ## 跨域分析
 

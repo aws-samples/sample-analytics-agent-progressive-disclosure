@@ -37,17 +37,13 @@
 |----|------|
 | active | 生效中 |
 
-> 种子数据里 10 个分群全是 `active`；`paused` / `archived` 在业务上存在，但数据里没有。
+> 实测 10 个分群全是 `active`；`paused` / `archived` 在业务上存在，但数据里没有。
 
 ### rules_json 示例结构
+实测是「字段名 → {value, operator}」的扁平对象，**没有** `conditions` 数组 / `logic` 键（例：分群 1、8）：
 ```json
-{
-  "conditions": [
-    {"field": "user_level", "operator": ">=", "value": 3},
-    {"field": "last_active_at", "operator": ">=", "value": "-30d"}
-  ],
-  "logic": "AND"
-}
+{"total_spent": {"value": 5000, "operator": ">="}}
+{"cart_items": {"value": 0, "operator": ">"}, "recent_purchase": {"value": false, "operator": "=="}}
 ```
 
 ## 索引

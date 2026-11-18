@@ -1,48 +1,50 @@
 # 业务 KPI 计算
 
+> 金额口径统一：GMV / 营收 / 客单价 / ARPU 一律用 `orders.actual_amount`（实付），限有效订单 `status IN ('paid','shipped','delivered')`，按下单时间 `placed_at` 归日。`total_amount` 是优惠前的商品总额，不是成交额。完整定义表见 `governed_metrics.md` §核心指标唯一定义。
+
 ## 收入指标
 
 ### GMV (成交总额)
 ```sql
 -- 日 GMV
 SELECT
-    DATE(created_at) AS date,
+    DATE(placed_at) AS date,
     COUNT(DISTINCT order_id) AS orders,
-    SUM(total_amount) AS gmv,
-    AVG(total_amount) AS aov
+    SUM(actual_amount) AS gmv,
+    AVG(actual_amount) AS aov
 FROM orders
 WHERE status IN ('paid', 'shipped', 'delivered')
-  AND created_at >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '30' day
-GROUP BY DATE(created_at)
+  AND placed_at >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '29' day AND placed_at < (SELECT max(as_of_date) FROM meta_snapshot) + interval '1' day
+GROUP BY DATE(placed_at)
 ORDER BY date;
 ```
 
 ```sql
 -- 月度 GMV 趋势
 SELECT
-    DATE_TRUNC('month', created_at) AS month,
-    SUM(total_amount) AS gmv,
+    DATE_TRUNC('month', placed_at) AS month,
+    SUM(actual_amount) AS gmv,
     COUNT(DISTINCT order_id) AS orders,
     COUNT(DISTINCT user_id) AS buyers,
-    SUM(total_amount) / COUNT(DISTINCT user_id) AS revenue_per_buyer
+    SUM(actual_amount) / COUNT(DISTINCT user_id) AS revenue_per_buyer
 FROM orders
 WHERE status IN ('paid', 'shipped', 'delivered')
-GROUP BY DATE_TRUNC('month', created_at)
+GROUP BY DATE_TRUNC('month', placed_at)
 ORDER BY month;
 ```
 
 ### ARPU (每用户平均收入)
 ```sql
 WITH period_revenue AS (
-    SELECT SUM(total_amount) AS total_revenue
+    SELECT SUM(actual_amount) AS total_revenue
     FROM orders
     WHERE status IN ('paid', 'shipped', 'delivered')
-      AND created_at >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '30' day
+      AND placed_at >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '29' day AND placed_at < (SELECT max(as_of_date) FROM meta_snapshot) + interval '1' day
 ),
 period_users AS (
     SELECT COUNT(DISTINCT user_id) AS active_users
     FROM events
-    WHERE event_time >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '30' day
+    WHERE event_time >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '29' day AND event_time < (SELECT max(as_of_date) FROM meta_snapshot) + interval '1' day
 )
 SELECT
     pr.total_revenue,
@@ -54,13 +56,13 @@ FROM period_revenue pr, period_users pu;
 ### ARPPU (每付费用户平均收入)
 ```sql
 SELECT
-    DATE_TRUNC('month', created_at) AS month,
-    SUM(total_amount) AS revenue,
+    DATE_TRUNC('month', placed_at) AS month,
+    SUM(actual_amount) AS revenue,
     COUNT(DISTINCT user_id) AS paying_users,
-    ROUND(SUM(total_amount) / COUNT(DISTINCT user_id), 2) AS arppu
+    ROUND(SUM(actual_amount) / COUNT(DISTINCT user_id), 2) AS arppu
 FROM orders
 WHERE status IN ('paid', 'shipped', 'delivered')
-GROUP BY DATE_TRUNC('month', created_at)
+GROUP BY DATE_TRUNC('month', placed_at)
 ORDER BY month;
 ```
 
@@ -68,15 +70,14 @@ ORDER BY month;
 
 ### LTV (用户生命周期价值) - 简化计算
 ```sql
--- 注册时间列是 registered_at，**不是 created_at**：后者是灌数时的记录创建时刻，
--- 当前库里 500 行同一个值，用它算「注册至今多少天」会让四档 cohort 全部塌进同一档
--- （不报错、数看着合理、分层是假的）。同理时间锚用 meta_snapshot，不用 NOW()。
+-- 注册时间列是 registered_at，**不是 created_at**：后者语义上是记录写入时刻。当前数据集里两列
+-- 恰好逐行相等，但别依赖这一点——换一批数据它们就可能不等。同理时间锚用 meta_snapshot，不用 NOW()。
 WITH a AS (SELECT max(as_of_date) AS d FROM meta_snapshot),
 user_value AS (
     SELECT
         u.user_id,
         u.registered_at AS register_date,
-        COALESCE(SUM(o.total_amount), 0) AS total_spend,
+        COALESCE(SUM(o.actual_amount), 0) AS total_spend,
         COUNT(DISTINCT o.order_id) AS order_count,
         date_diff('day', CAST(u.registered_at AS date), a.d) AS days_since_register
     FROM users u
@@ -105,13 +106,13 @@ ORDER BY 1;
 ```sql
 WITH monthly_stats AS (
     SELECT
-        DATE_TRUNC('month', u.created_at) AS cohort_month,
+        DATE_TRUNC('month', u.registered_at) AS cohort_month,
         COUNT(DISTINCT u.user_id) AS total_users,
         COUNT(DISTINCT o.user_id) AS paying_users
     FROM users u
     LEFT JOIN orders o ON u.user_id = o.user_id
         AND o.status IN ('paid', 'shipped', 'delivered')
-    GROUP BY DATE_TRUNC('month', u.created_at)
+    GROUP BY DATE_TRUNC('month', u.registered_at)
 )
 SELECT
     cohort_month,
@@ -161,7 +162,7 @@ ORDER BY cac;
 WITH campaign_revenue AS (
     SELECT
         ua.ad_campaign_id,
-        SUM(o.total_amount) AS revenue
+        SUM(o.actual_amount) AS revenue
     FROM user_attributions ua
     JOIN orders o ON ua.user_id = o.user_id
     -- 必须过滤归因类型：一个用户会有多条归因记录，不过滤就把同一笔订单算好几遍
@@ -177,7 +178,7 @@ SELECT
     ROUND((COALESCE(cr.revenue, 0) - ac.budget_total) / NULLIF(ac.budget_total, 0) * 100, 2) AS roi_pct
 FROM ad_campaigns ac
 LEFT JOIN campaign_revenue cr ON cr.ad_campaign_id = ac.ad_campaign_id
-WHERE ac.status = 'completed'
+WHERE ac.status = 'ended'      -- ad_campaigns 只有 active / ended / paused，没有 completed
 ORDER BY roi_pct DESC;
 ```
 
@@ -205,14 +206,17 @@ ORDER BY target_users DESC;
 
 ### 优惠券核销率
 ```sql
+-- 发放 / 核销状态在 user_coupons（每张发出去的券一行）；coupons 是券模板，它的 status 是
+-- active / expired / depleted / inactive，没有 used，在模板表上数 used 恒为 0
 SELECT
-    coupon_type,
+    c.coupon_type,
     COUNT(*) AS total_issued,
-    COUNT(CASE WHEN status = 'used' THEN 1 END) AS used,
-    COUNT(CASE WHEN status = 'expired' THEN 1 END) AS expired,
-    ROUND(CAST(COUNT(CASE WHEN status = 'used' THEN 1 END) AS decimal(38,6)) / COUNT(*) * 100, 2) AS redemption_rate
-FROM coupons
-GROUP BY coupon_type
+    COUNT(CASE WHEN uc.status = 'used' THEN 1 END) AS used,
+    COUNT(CASE WHEN uc.status = 'expired' THEN 1 END) AS expired,
+    ROUND(CAST(COUNT(CASE WHEN uc.status = 'used' THEN 1 END) AS decimal(38,6)) / COUNT(*) * 100, 2) AS redemption_rate
+FROM user_coupons uc
+JOIN coupons c ON c.coupon_id = uc.coupon_id
+GROUP BY c.coupon_type
 ORDER BY redemption_rate DESC;
 ```
 
@@ -226,10 +230,11 @@ WITH experiment_metrics AS (
         ata.variant_id,
         COUNT(DISTINCT ata.user_id) AS users,
         COUNT(DISTINCT o.order_id) AS orders,
-        COALESCE(SUM(o.total_amount), 0) AS revenue
+        COALESCE(SUM(o.actual_amount), 0) AS revenue
     FROM ab_test_assignments ata
     LEFT JOIN orders o ON ata.user_id = o.user_id
-        AND o.created_at >= ata.assigned_at
+        AND o.placed_at >= ata.assigned_at
+        AND o.status IN ('paid', 'shipped', 'delivered')
     WHERE ata.test_id = 1  -- 指定实验ID
     GROUP BY ata.test_id, ata.variant_id
 )
@@ -260,7 +265,7 @@ JOIN products p ON oi.product_id = p.product_id
 JOIN categories pc ON p.category_id = pc.category_id
 JOIN orders o ON oi.order_id = o.order_id
 WHERE o.status IN ('paid', 'shipped', 'delivered')
-  AND o.created_at >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '30' day
+  AND o.placed_at >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '29' day AND o.placed_at < (SELECT max(as_of_date) FROM meta_snapshot) + interval '1' day
 GROUP BY p.product_id, p.product_name, pc.category_name
 ORDER BY total_revenue DESC
 LIMIT 20;

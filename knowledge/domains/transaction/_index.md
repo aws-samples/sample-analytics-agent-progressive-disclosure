@@ -44,7 +44,7 @@ actual_amount = total_amount - discount_amount + shipping_fee
 |--------|----------|
 | 订单、GMV、销售额、下单、发货、签收、取消 | `orders.md` |
 | 退款率、退款订单、哪些单退了 | `orders.md` |
-| **退款总额、累计退款、一共退了多少、净收入、财务口径收入** | `fin_daily_revenue.md`（按 `refunded_at` 建轴，是退款的**唯一全量口径**；⚠️ 别用 `mart_daily_kpi.refund_amt` 跨日求和，那张表的轴不含 `refunded_at`，合计偏低约 4% 且不报错） |
+| **退款总额、累计退款、一共退了多少、净收入、财务口径收入** | `fin_daily_revenue.md`（按 `refunded_at` 建轴，是退款的**唯一全量口径**；当前数据上 `mart_daily_kpi.refund_amt` 与它逐日相等，合计都是 9,897,495.82；2026-11 重灌前 mart 那张表偏低约 4%，已作废） |
 | 商品销量、销售排行、SKU、购买数量、商品明细 | `order_items.md` |
 | 支付、支付宝、微信、银行卡、支付成功率、支付失败 | `payments.md` |
 | 订阅、会员、续费、自动扣款、订阅取消 | `subscriptions.md` |

@@ -112,6 +112,15 @@ def check_groups(decl: dict, counts: dict[str, int], label: str) -> list[str]:
         elif scale > 1 and not (seed[t] <= got < seed[t] * scale):
             bad.append(f"{label}：{t} 是 sublinear 组，应落在 "
                        f"[{seed[t]:,}, {seed[t] * scale:,.0f}) 之间，实际 {got:,}")
+    # rule_derived：行数由业务规则推导（分群按 rules_json、实验分组按档期剔除），不等比，
+    # 只钉方向——规模放大时它必须跟着变大。见 docs/scale.json 的 group_notes。
+    for t in decl["groups"].get("rule_derived", []):
+        got = counts.get(t)
+        if got is None:
+            bad.append(f"{label}：{t} 缺行数")
+        elif scale > 1 and not got > seed[t]:
+            bad.append(f"{label}：{t} 是 rule_derived 组，规模放大后应多于种子的 "
+                       f"{seed[t]:,} 行，实际 {got:,}")
     return bad
 
 
@@ -211,7 +220,8 @@ def selftest(decl: dict) -> int:
     print(f"  groups 恰好划分 {len(seed_rows)} 张表"
           f"（scaled {len(decl['groups']['scaled'])} / "
           f"sublinear {len(decl['groups']['sublinear'])} / "
-          f"fixed {len(decl['groups']['fixed'])}）")
+          f"fixed {len(decl['groups']['fixed'])} / "
+          f"rule_derived {len(decl['groups'].get('rule_derived', []))}）")
     print(f"  文档声明 {len(decl['declarations'])} 条"
           f"（共 {sum(d.get('occurrences', 1) for d in decl['declarations'])} 处原文）"
           f"，出现次数与数值都与所述批次相符")
@@ -277,6 +287,8 @@ def run(decl: dict, as_json: bool) -> int:
                   f"（容差 ±{SCALED_TOL:.1%}）")
             print(f"  ✅ fixed {len(decl['groups']['fixed'])} 张不随 scale 变")
             print(f"  ✅ sublinear {len(decl['groups']['sublinear'])} 张落在两者之间")
+            if decl["groups"].get("rule_derived"):
+                print(f"  ✅ rule_derived {len(decl['groups']['rule_derived'])} 张随规模增长（按规则推导，不等比）")
         for x in gbad:
             print(f"  ❌ {x}")
 

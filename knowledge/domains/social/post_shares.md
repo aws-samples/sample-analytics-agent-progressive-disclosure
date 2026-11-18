@@ -15,20 +15,21 @@
 ### share_channel 分享渠道
 | 值 | 说明 | 实测行数 |
 |----|------|------|
-| wechat_friend | 微信好友 | 2,420 |
-| wechat_moments | 微信朋友圈 | 1,748 |
-| weibo | 微博 | 1,043 |
-| copy_link | 复制链接 | 725 |
-| qq | QQ | 715 |
-| other | 其他渠道 | 349 |
+| wechat_friend | 微信好友 | 1,032,833 |
+| wechat_moments | 微信朋友圈 | 746,313 |
+| weibo | 微博 | 446,448 |
+| copy_link | 复制链接 | 309,746 |
+| qq | QQ | 305,525 |
+| other | 其他渠道 | 148,625 |
 
 > 只有这 6 个值。**没有** `save_image` / `in_app`（旧文档写过），零散渠道都归进 `other`。
 
 ## 字段说明
 
 - 同一用户可以多次分享同一帖子到不同渠道
-- `posts.share_count` 通过触发器或定时任务同步更新
+- `posts.share_count` 通过触发器或定时任务同步更新（当前数据逐帖与本表计数相等）
 - 分享是社交裂变的核心指标
+
 
 ## 索引
 
@@ -44,7 +45,7 @@ SELECT
     COUNT(*) AS share_count,
     ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER(), 2) AS pct
 FROM post_shares
-WHERE created_at >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '30' day
+WHERE created_at >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '29' day AND created_at < (SELECT max(as_of_date) FROM meta_snapshot) + interval '1' day
 GROUP BY share_channel
 ORDER BY share_count DESC;
 ```
@@ -62,7 +63,7 @@ FROM posts p
 JOIN users u ON p.user_id = u.user_id
 JOIN post_shares ps ON p.post_id = ps.post_id
 WHERE p.status = 'published'
-    AND ps.created_at >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '7' day
+    AND ps.created_at >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '6' day AND ps.created_at < (SELECT max(as_of_date) FROM meta_snapshot) + interval '1' day
 GROUP BY p.post_id, p.title, p.content_type, u.username
 ORDER BY share_count DESC
 LIMIT 50;
@@ -78,7 +79,7 @@ SELECT
     COUNT(DISTINCT post_id) AS unique_posts
 FROM post_shares
 WHERE share_channel IN ('wechat_friend', 'wechat_moments')
-    AND created_at >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '30' day
+    AND created_at >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '29' day AND created_at < (SELECT max(as_of_date) FROM meta_snapshot) + interval '1' day
 GROUP BY DATE(created_at), share_channel
 ORDER BY share_date DESC, share_count DESC;
 ```

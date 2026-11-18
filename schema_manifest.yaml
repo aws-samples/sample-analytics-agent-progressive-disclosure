@@ -163,10 +163,10 @@ tables:
       - {name: channel_id,   type: INT,           desc: 渠道ID}
       - {name: channel_name, type: VARCHAR(100),  desc: 渠道名}
       - {name: week_start,   type: DATE,          desc: ISO 周一}
-      - {name: cost,         type: NUMERIC(14,2), desc: 当周投放花费。⚠️【虚高，倍数随数据规模变】归因表在聚合前 LEFT JOIN，一条成本行匹配 N 条归因就被数 N 遍。虚高的倍数就是"每条成本行平均匹配到几条归因"，所以它跟着数据规模走：2026-09-17 实测本表合计 524993074.37 而真实花费 4351988.47（120.6 倍），v1 那批只有 1.21 倍。**记机制不要记数字**；要准确花费查 channel_daily_costs 或 mart_channel_daily}
+      - {name: cost,         type: NUMERIC(14,2), desc: 当周投放花费。⚠️【虚高，倍数随数据规模变】归因表在聚合前 LEFT JOIN，一条成本行匹配 N 条归因就被数 N 遍。虚高的倍数就是"每条成本行平均匹配到几条归因"，所以它跟着数据规模走：2026-11 重灌后实测本表合计 533713187.46 而真实花费 4369314.80（122.1 倍），v1 那批只有 1.21 倍。**记机制不要记数字**；要准确花费查 channel_daily_costs 或 mart_channel_daily}
       - {name: installs,     type: BIGINT,        desc: 当周安装数（渠道上报）。⚠️ 同 cost，被同一个 join 扇出重复计数}
       - {name: new_users,    type: BIGINT,        desc: 当周 last_touch 归因新客。这一列用了 count(DISTINCT)，【不受】扇出影响，可以放心用}
-      - {name: weekly_cac,   type: NUMERIC(12,2), desc: 周 CAC = cost / new_users，无归因新客时为 NULL 而不是 0。⚠️ 两件事：① 分子 cost 虚高（见上），本列同样偏高；② 2026-09-17 实测 414 行里 288 行是 NULL，且**全部**落在 week_start > 2026-01-24 那一侧——成本轴铺到 2026-09-01 而归因止于业务日历末端，那些周有花费、零新客。业务日历内 126 行 126 行都有值，所以读到 NULL 应当理解成"这一周在业务日历外"，不是"这周的 CAC 算不出来"}
+      - {name: weekly_cac,   type: NUMERIC(12,2), desc: 周 CAC = cost / new_users，无归因新客时为 NULL 而不是 0。⚠️ 两件事：① 分子 cost 虚高（见上），本列同样偏高；② 2026-11 重灌后实测 414 行里 288 行是 NULL（与 2026-09 那批相同），且**全部**落在 week_start > 2026-01-24 那一侧——成本轴铺到 2026-09-01 而归因止于业务日历末端，那些周有花费、零新客。业务日历内 126 行 126 行都有值，所以读到 NULL 应当理解成"这一周在业务日历外"，不是"这周的 CAC 算不出来"}
     caveats:
       - 归因口径固定 last_touch，与 mart_channel_daily 一致
       - 首尾是残周；周环比要掐头去尾，或用完整 ISO 周
@@ -190,29 +190,31 @@ tables:
         SELECT paid_at::date AS dt,
                sum(actual_amount - shipping_fee) AS gross_revenue
         FROM orders
-        WHERE status IN ('paid','shipped','delivered') AND paid_at IS NOT NULL
+        WHERE status IN ('paid','shipped','delivered','refunded') AND paid_at IS NOT NULL
         GROUP BY 1
       ),
       refunds AS (
-        SELECT refunded_at::date AS dt, sum(actual_amount) AS refund_amount
+        SELECT refunded_at::date AS dt, sum(actual_amount) AS refund_amount,
+               sum(actual_amount - shipping_fee) AS refund_revenue
         FROM orders WHERE status = 'refunded' AND refunded_at IS NOT NULL
         GROUP BY 1
       )
       SELECT COALESCE(p.dt, r.dt) AS dt,
              COALESCE(p.gross_revenue, 0)::numeric(14,2) AS gross_revenue,
              COALESCE(r.refund_amount, 0)::numeric(14,2) AS refund_amount,
-             (COALESCE(p.gross_revenue, 0) - COALESCE(r.refund_amount, 0))::numeric(14,2) AS net_revenue
+             (COALESCE(p.gross_revenue, 0) - COALESCE(r.refund_revenue, 0))::numeric(14,2) AS net_revenue
       FROM paid p FULL OUTER JOIN refunds r ON p.dt = r.dt
     columns:
       - {name: dt,             type: DATE,          desc: 日期（按支付/退款发生日）}
-      - {name: gross_revenue,  type: NUMERIC(14,2), desc: 毛收入 = 有效订单实付 - 运费，按 paid_at 记账}
+      - {name: gross_revenue,  type: NUMERIC(14,2), desc: 毛收入 = 已付款订单（含之后退款的）实付 - 运费，按 paid_at 记账}
       - {name: refund_amount,  type: NUMERIC(14,2), desc: 当日发生的退款额。本表按 refunded_at 建轴，所以 sum 是【全量退款】—— 问退款总额用这一列}
-      - {name: net_revenue,    type: NUMERIC(14,2), desc: 净收入 = 毛收入 - 退款}
+      - {name: net_revenue,    type: NUMERIC(14,2), desc: 净收入 = 毛收入 - 当日冲回的收入（退款订单实付 - 运费，按 refunded_at）。refund_amount 含运费，不能直接拿来减}
     caveats:
       - 与 mart_daily_revenue/growth_daily_gmv 数字对不上是【设计使然】——那边按 placed_at 计下单额、含运费、不扣退款
       - 回答收入问题前先判断问的是哪个部门的口径；不确定时在结论里注明口径
       - 退款问题优先用本表：mart_daily_kpi.refund_amt 的日期轴由 placed_at 决定、不含 refunded_at，轴末之后的退款被 LEFT JOIN 丢掉，合计偏低；差值就是轴外退款
-      - ⚠️ 本表轴末是 2026-02-02（退款发生日），比其他表的下单日轴末 2026-01-24 晚 9 天——最后一批订单下在 01-24，退款一路发生到 02-02。所以本表的"最近 7/30 天"与 GMV 的同名窗口**不是同一段日期**；同时报多个指标时要统一写显式日期区间，或在结论里标明每个数的区间
+      - 本表轴末与业务日历一致（2026-01-24）：生成器把订单生命周期的时间戳都截在 as_of_date 以内，退款不再发生在轴外。但口径上它按 paid_at / refunded_at 记账，跟 GMV 的下单日口径仍不是同一段日期，同时报多个指标时要写明区间
+      - 净收入不能用「毛收入 − refund_amount」自己算：refund_amount 是退款现金（含运费），毛收入不含运费，两者口径不同；直接用 net_revenue
     eval_trap: 问"12月财务确认净收入"用 GMV 口径会明显偏高（差 = 运费+退款+跨日支付）
 
   - name: growth_daily_gmv

@@ -12,7 +12,8 @@
 
 - 每个用户对每个帖子只能点赞一次
 - 取消点赞后记录删除（物理删除）
-- `posts.like_count` 通过触发器或定时任务同步更新
+- `posts.like_count` 通过触发器或定时任务同步更新（当前数据 427,070 帖逐帖与本表计数相等）
+
 
 ## 索引
 
@@ -28,7 +29,7 @@ SELECT
     DATE(created_at) AS like_date,
     COUNT(*) AS like_count
 FROM post_likes
-WHERE created_at >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '7' day
+WHERE created_at >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '6' day AND created_at < (SELECT max(as_of_date) FROM meta_snapshot) + interval '1' day
 GROUP BY DATE(created_at)
 ORDER BY like_date;
 ```
@@ -61,7 +62,7 @@ SELECT
     COUNT(DISTINCT DATE(pl.created_at)) AS active_days
 FROM post_likes pl
 JOIN users u ON pl.user_id = u.user_id
-WHERE pl.created_at >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '30' day
+WHERE pl.created_at >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '29' day AND pl.created_at < (SELECT max(as_of_date) FROM meta_snapshot) + interval '1' day
 GROUP BY pl.user_id, u.username
 HAVING COUNT(*) >= 50
 ORDER BY total_likes DESC

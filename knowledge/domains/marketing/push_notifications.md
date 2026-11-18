@@ -48,7 +48,7 @@
 > 后果有两条：一是没有待发送的推送，二是「计划到实发的延迟」
 > （`date_diff('second', scheduled_at, sent_at)`）**恒为 0**，那不是「投递很快」，
 > 是这两列没有独立信息。被问到发送时效时要说明这一点，别把 0 秒当成一个业务结论。
-> 这是生成器的已知形态，2026-09-01 重灌后依旧如此。
+> 这是生成器的已知形态，2026-11 重灌后依旧如此。
 
 ### failure_reason 失败原因
 
@@ -113,7 +113,7 @@ SELECT
     ROUND(COUNT(CASE WHEN is_opened THEN 1 END) * 100.0 /
           NULLIF(COUNT(CASE WHEN is_delivered THEN 1 END), 0), 2) AS open_rate
 FROM push_notifications
-WHERE sent_at >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '30' day
+WHERE sent_at >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '29' day AND sent_at < (SELECT max(as_of_date) FROM meta_snapshot) + interval '1' day
 GROUP BY push_type
 ORDER BY total_sent DESC;
 ```
@@ -126,7 +126,7 @@ SELECT
     ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER(), 2) AS pct
 FROM push_notifications
 WHERE failure_reason IS NOT NULL
-  AND sent_at >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '7' day
+  AND sent_at >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '6' day AND sent_at < (SELECT max(as_of_date) FROM meta_snapshot) + interval '1' day
 GROUP BY failure_reason
 ORDER BY failure_count DESC;
 ```

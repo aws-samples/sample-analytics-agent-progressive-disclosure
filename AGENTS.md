@@ -10,7 +10,7 @@
   not migration stages and none replaces another; each is measured against the
   others on correctness first, then time and cost.
   1. **Athena + S3 Tables** — `scripts/lakehouse/`. Deployed. 35 base tables plus
-     13 derived, 79,943,758 rows in namespace `app_analytics`.
+     13 derived, 80,017,470 rows in namespace `app_analytics` (reloaded 2026-11-06 after the generator data-layer fixes).
   2. **DuckDB + S3 Tables** — `scripts/duckdb/`. Reads the **same** Iceberg tables
      as arm 1 through `ATTACH ... (TYPE iceberg, ENDPOINT_TYPE s3_tables)`, so it
      needs no storage of its own, only compute. `conn.py` is the connection layer
@@ -20,7 +20,7 @@
      `scripts/glue/`. Deployed in us-west-2: workgroup `analytics-agent-wg`,
      namespace `analytics-agent-ns`, db `app_analytics`, **base 8 / max 8 RPU
      (pinned, so compute is repeatable across runs)**, `publiclyAccessible=false`.
-     35 tables, 79,943,758 rows, loaded by `scripts/redshift/load_from_s3.py`
+     35 tables, 80,017,470 rows (reloaded 2026-11-06), loaded by `scripts/redshift/load_from_s3.py`
      from `s3://analytics-agent-raw/parquet/`. It is the one arm that needs a
      separate materialization, because `COPY` cannot read Iceberg — that extra
      copy is itself one of the comparison findings, not an oversight. Two knobs
@@ -514,6 +514,23 @@
   still fails); and whether milliseconds are lossless here cannot be checked with Athena
   (it would report 0 either way) — it was established with a local DuckDB `read_parquet`
   census, which `--selftest`'s precondition documents. It scans ~240 MB per `--probe`.
+  **`--regen` is for a full regeneration** (2026-11-06 reload): old Iceberg and new
+  Parquet are *supposed* to differ, so pre-load diffs are printed instead of blocking, and
+  the gate moves to after the load — every metric of the Iceberg table must equal the source
+  Parquet. Pass the tables explicitly with `--only` (the default is still the three-table
+  set). Three things learned on that reload: tables whose timestamps carry microseconds
+  (`ab_tests`, `ab_test_variants`, `categories`, `channels`, `event_definitions`) are refused by
+  the sub-second census and must be handled separately (that time `ab_tests` was patched with
+  a targeted `UPDATE`); array columns are JSON text in Parquet, so the external table declares
+  them `string` and the `INSERT` `json_parse`s them back; and the script now **dry-reads the
+  INSERT's SELECT (`LIMIT 1`) before `DELETE`**, because a failed INSERT after the DELETE left
+  four tables empty for minutes. After rebuilding the mart layer with
+  `athena.py --file database/iceberg/02_mart.sql`, re-run `governance.py --apply` — the
+  `DROP TABLE` wipes the 13 mart tables' Lake Formation grants. `athena.py --file` stops at the
+  first failure and now **lists the statements it did not run**; resume from there rather than
+  re-running the whole file. On Redshift the equivalent is re-running
+  `database/redshift/04_governance.sql` with
+  `--tolerate 'not exist|already exists|cannot be dropped'` after `02_mart.sql` / `03_derived.sql`.
 - `backend/.venv/bin/python scripts/bench/fargate.py --selftest` audits the task
   role's policy, the Lake Formation grant plan and the image's compute knobs offline;
   `--setup` creates/updates ECR, both roles, the LF grants and the task definition

@@ -30,12 +30,12 @@
 ### status 商品状态
 | 值 | 说明 | 实测行数 |
 |----|------|------|
-| on_sale | 已上架，正常销售 | 149 |
-| pre_sale | 预售 | 20 |
-| off_sale | 已下架 | 18 |
-| sold_out | 售罄 | 13 |
+| on_sale | 已上架，正常销售 | 3,026 |
+| pre_sale | 预售 | 429 |
+| off_sale | 已下架 | 384 |
+| sold_out | 售罄 | 294 |
 
-> 200 个 SKU 只有这 4 个值。**没有** `active` / `inactive` / `draft` / `pending` /
+> 全表 4,133 个商品，只有这 4 个值。**没有** `active` / `inactive` / `draft` / `pending` /
 > `out_of_stock` / `deleted`——旧文档写的是另一套枚举，照它写 `WHERE status='active'`
 > 会拿到空集。在售商品的条件是 `status = 'on_sale'`。
 
@@ -70,11 +70,13 @@ SELECT
     p.product_name,
     p.sold_count,
     p.price,
-    p.sold_count * p.price AS gmv
+    p.sold_count * p.price AS list_value_est   -- 当前标价 × 累计销量的估算值，**不是 GMV**：
+                                               -- sold_count 含订单窗口之前的推算销量，price 是现价不是成交价。
+                                               -- GMV 一律从 orders / order_items 的实付金额算
 FROM products p
 JOIN categories c ON p.category_id = c.category_id
 WHERE p.status = 'on_sale'
-    AND c.level = 2  -- 二级分类
+    AND c.level = 3  -- 商品全部挂在三级（叶子）类目上；按二级类目汇总要再 JOIN 一次 parent_id
 ORDER BY p.sold_count DESC
 LIMIT 20;
 ```

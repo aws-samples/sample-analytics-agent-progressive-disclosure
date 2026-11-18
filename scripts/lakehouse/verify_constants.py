@@ -184,7 +184,8 @@ BY_DESIGN_CONST = {
 # 不是豁免，是"已知、且当前没有任何代码负责产它"。要修得给这些表写 builder，
 # 那和 budget.py 那 4 张声明 SUB 却没人兑现的表是同一批活（docs/test-plan.md 有记）。
 DIMS_PASSTHROUGH = {
-    "ad_campaigns.updated_at", "ad_creatives.status", "ad_creatives.created_at",
+    # ad_creatives.created_at 已移出（2026-11）：dims_coherence.py 把它改成「活动开始前 12～72 小时」，不再是常量
+    "ad_campaigns.updated_at", "ad_creatives.status",
     "banners.updated_at", "campaigns.updated_at",
     "categories.created_at", "categories.is_active", "categories.updated_at",
     # channel_daily_costs.currency / .created_at 已移出：P0-5 之后这张表不再透传
@@ -194,25 +195,32 @@ DIMS_PASSTHROUGH = {
     "channels.is_active", "channels.created_at",
     "event_definitions.created_at", "event_definitions.updated_at",
     "user_segments.status", "user_segments.created_at", "user_segments.updated_at",
+    # 2026-11 dims_coherence.py 给 4 个已结束实验补结论时写成了同一句「实验组未达到统计显著，
+    # 保留对照组方案」，没有看实际组间差异（按订单转化重算，实验 5 / 11 的 z≈3）——是缺陷不是口径。
+    # 清除条件：生成器按 traffic_percentage 分流、
+    # dims_coherence 按实际组间差异写结论（I7）并重灌后，这一列不再是常量，这条会红，删掉它。
+    "ab_tests.conclusion",
 }
 
 # 整列 NULL：**登记在册，未逐条裁定**（理由见文件头）。只钉集合——新增一列会红，
 # 某列被填上了也会红（要求从这里删）。其中 tmp_campaign_roi_analysis 那两列是
 # eval 刻意的陷阱题，不该被裁定成缺陷。
 ALL_NULL_PINNED = {
-    # DIMS 透传表（16）
-    "ab_test_variants.config_json", "ab_tests.description", "ab_tests.conclusion",
-    "ab_tests.winner_variant_id", "ad_campaigns.target_audience",
+    # DIMS 透传表（11）。2026-11 删了 5 条：dims_coherence.py 给已结束实验补了 conclusion /
+    # winner_variant_id、给券补了 coupon_code / valid_days、给召回 / 拉新活动补了 target_segment_ids
+    # ——按这一桶的契约（某列被填上就红、要求从这里删）删掉
+    "ab_test_variants.config_json", "ab_tests.description",
+    "ad_campaigns.target_audience",
     "ad_creatives.creative_format", "ad_creatives.description",
     "ad_creatives.headline", "ad_creatives.content_url", "banners.target_id",
     "channels.description",
-    "coupons.coupon_code", "coupons.valid_days", "coupons.applicable_products",
+    "coupons.applicable_products",
     "event_definitions.owner", "event_definitions.properties_schema",
     # 这两列是**数组列**，2026-08-31 加上数组普查那一刻才第一次进到判据里（此前
     # 所有数组列一律跳过，见文件头）。两张表都在 DIMS 里透传，v1 CSV 那两列本来就空，
     # 重灌不会修。语义是「定向到哪些人群包」，整列 NULL 意味着卡片里"按人群包看实验/
     # 活动"这类问法在库上恒返回空——和 push_notifications 那两列同一种形态。
-    "campaigns.target_segment_ids", "ab_tests.target_segment_ids",
+    "ab_tests.target_segment_ids",
     # 生成器侧（6）
     #
     # **原来这里有 30 条，2026-09-01 全量重灌后删掉了 24 条。** 那 24 条一起红正是重灌
@@ -611,10 +619,10 @@ def selftest() -> int:
     want("未登记整列空数组", A("posts.media_urls", 0, 0, 1000, 1000)[0],
          "FAIL-array-empty")
     want("数组列整列 NULL 已登记",
-         A("campaigns.target_segment_ids", 0, 0, 0, 50)[0], "null_pinned")
+         A("ab_tests.target_segment_ids", 0, 0, 0, 12)[0], "null_pinned")
     want("数组列整列 NULL 未登记", A("posts.tags", 0, 0, 0, 1000)[0], "FAIL-null")
     want("数组列 NULL 条目过期（已被填上）",
-         A("campaigns.target_segment_ids", 30, 2, 50, 50)[0], "FAIL-stale-null")
+         A("ab_tests.target_segment_ids", 30, 2, 12, 12)[0], "FAIL-stale-null")
     want("数组列空表", A("whatever.col", 0, 0, 0, 0)[0], "empty")
     # 「行非 NULL 但每行都是 []」和「整列 NULL」必须分开判：两者的成因和修法不同，
     # 前者是 builder 产了 `[]`，后者是这一列压根没人填。

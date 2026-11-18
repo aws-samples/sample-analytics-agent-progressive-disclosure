@@ -67,18 +67,19 @@ WITH paid AS (
   SELECT paid_at::date AS dt,
          sum(actual_amount - shipping_fee) AS gross_revenue
   FROM orders
-  WHERE status IN ('paid','shipped','delivered') AND paid_at IS NOT NULL
+  WHERE status IN ('paid','shipped','delivered','refunded') AND paid_at IS NOT NULL
   GROUP BY 1
 ),
 refunds AS (
-  SELECT refunded_at::date AS dt, sum(actual_amount) AS refund_amount
+  SELECT refunded_at::date AS dt, sum(actual_amount) AS refund_amount,
+         sum(actual_amount - shipping_fee) AS refund_revenue
   FROM orders WHERE status = 'refunded' AND refunded_at IS NOT NULL
   GROUP BY 1
 )
 SELECT COALESCE(p.dt, r.dt) AS dt,
        COALESCE(p.gross_revenue, 0)::numeric(14,2) AS gross_revenue,
        COALESCE(r.refund_amount, 0)::numeric(14,2) AS refund_amount,
-       (COALESCE(p.gross_revenue, 0) - COALESCE(r.refund_amount, 0))::numeric(14,2) AS net_revenue
+       (COALESCE(p.gross_revenue, 0) - COALESCE(r.refund_revenue, 0))::numeric(14,2) AS net_revenue
 FROM paid p FULL OUTER JOIN refunds r ON p.dt = r.dt;
 
 DROP TABLE IF EXISTS growth_daily_gmv;

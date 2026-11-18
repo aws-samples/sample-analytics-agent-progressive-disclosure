@@ -29,7 +29,7 @@
 
 ### creative_format 素材格式
 
-> ⚠️ **这一列在种子数据里整列为 NULL**（144 行全空），按它分组只会得到一个 NULL 桶。
+> ⚠️ **这一列在当前数据里整列为 NULL**（144 行全空），按它分组只会得到一个 NULL 桶。
 > 旧文档列过 `banner` / `interstitial` / `native` / `rewarded`，数据里一个都没有。
 > 要区分素材形态就用 `creative_type`。
 
@@ -92,7 +92,7 @@ SELECT
     COUNT(*) AS usage_count,
     ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER(), 2) AS pct
 FROM ad_creatives
-WHERE status IN ('active', 'paused')
+WHERE status = 'active'          -- 当前数据里 144 个素材全是 active
 GROUP BY call_to_action
 ORDER BY usage_count DESC;
 ```

@@ -367,6 +367,7 @@ def metric_columns() -> dict[str, set[str]]:
     """
     import metrics_def
     sql_words = re.compile(r"[a-z_][a-z0-9_]*")
+    subq = re.compile(r"\(\s*select\s+max\((\w+)\)\s+from\s+(\w+)\s*\)")
     bare_col = re.compile(r"^[a-z_][a-z0-9_]*$")
     reserved = SQL_RESERVED
     out: dict[str, set[str]] = {}
@@ -377,7 +378,15 @@ def metric_columns() -> dict[str, set[str]]:
         parts = [m.get("sql", ""), m.get("numerator", ""), m.get("denominator", "")]
         words = set()
         for p in parts:
-            words |= {w for w in sql_words.findall(str(p).lower()) if w not in reserved}
+            p = str(p).lower()
+            # 内嵌的锚点子查询 `(SELECT max(col) FROM tbl)`：列属于子查询里那张表，不属于
+            # 指标的目标表——把它记到那张表名下照样对账，再从文本里拿掉。不拿掉的话
+            # repurchase_rate_30d（2026-11 把首单门槛锚到 meta_snapshot）会被误报成
+            # 「mart_user_summary 没有 as_of_date / meta_snapshot 列」。
+            for col, tbl in subq.findall(p):
+                out.setdefault(tbl, set()).add(col)
+            p = subq.sub(" ", p)
+            words |= {w for w in sql_words.findall(p) if w not in reserved}
         # 被过滤的时间列：time_col 显式为 None = 该指标不支持时间窗，没有列要校验。
         time_col = m.get("time_col", "dt")
         if time_col:

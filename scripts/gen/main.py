@@ -85,6 +85,10 @@ ROWS_WRITEBACK = {
     "product_tags":      0.35,   # 与 tables._prep_product_tags 里那条断言同口径
     "payments":          0.20,
     "user_attributions": 0.10,
+    # 2026-11：分组只能落在实验档期内、用户注册之后，区间为空的对被剔除（tables._prep_ab_assignments）
+    "ab_test_assignments": 0.60,
+    # 2026-11：分群成员按 rules_json 从事实推导（tables._prep_segments），行数由规则决定
+    "user_segment_members": 1.00,
 }
 
 
@@ -198,6 +202,34 @@ def load_dim_ids() -> dict[str, np.ndarray]:
         raise ValueError(f"这些投放渠道没有 ad_campaign，成本行无处可挂：{nocamp}")
     out["_campaigns_by_channel"] = camps
     out["_campaign_spans"] = spans
+
+    # 事实表要求落在维表的档期 / 生效期内（2026-11 数据普查补的三条）：
+    #  · 活动推送只在活动档期内发（campaigns.start_date / end_date）
+    #  · 实验分组只发生在实验进行期间，草稿实验没有分组（ab_tests）
+    #  · 领券、用券都在券的有效期内，且受门槛 / 封顶约束（coupons）
+    # 维表本身的自洽由 scripts/gen/dims_coherence.py 保证。
+    def _ts(v):
+        return np.datetime64(v.replace(" ", "T"), "s") if v else None
+    cper: dict[int, tuple] = {}
+    with (CSV_DIR / "campaigns.csv").open(encoding="utf-8") as f:
+        for r in csv.DictReader(f):
+            cper[int(r["campaign_id"])] = (_ts(r["start_date"]), _ts(r["end_date"]), r["status"])
+    out["_campaign_periods"] = cper
+    tper: dict[int, tuple] = {}
+    with (CSV_DIR / "ab_tests.csv").open(encoding="utf-8") as f:
+        for r in csv.DictReader(f):
+            tper[int(r["test_id"])] = (_ts(r["start_date"]), _ts(r["end_date"]), r["status"])
+    out["_test_periods"] = tper
+    cpi: dict[int, dict] = {}
+    with (CSV_DIR / "coupons.csv").open(encoding="utf-8") as f:
+        for r in csv.DictReader(f):
+            cpi[int(r["coupon_id"])] = {
+                "type": r["coupon_type"], "value": float(r["discount_value"]),
+                "min": float(r["min_purchase"] or 0),
+                "max": float(r["max_discount"]) if r["max_discount"] else None,
+                "valid_days": int(r["valid_days"] or 30),
+                "start": _ts(r["start_date"]), "end": _ts(r["end_date"])}
+    out["_coupon_info"] = cpi
 
     crea: dict[int, list[int]] = {}
     with (CSV_DIR / "ad_creatives.csv").open(encoding="utf-8") as f:

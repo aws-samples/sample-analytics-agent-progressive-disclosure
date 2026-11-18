@@ -7,9 +7,9 @@
 所有 NL→SQL 产生的查询都经 run_query 执行，强制：单条语句、只读、超时、行数上限。
 这是 agent 的 SQL 安全边界。
 
-## 四种后端：三条对比 arm + 一条 legacy
+## 五种后端：四条对比 arm + 一条 legacy
 
-`DB_BACKEND` 环境变量选择。前三个是**架构对比的三条 arm**，谁都不取代谁：
+`DB_BACKEND` 环境变量选择。前四个是**架构对比的 arm**，谁都不取代谁：
 
 - `athena`（默认）—— Athena 查 S3 Tables（Iceberg）。**不需要 VPC、不需要连接池、
   不需要在容器里存密码**，是 HTTPS + IAM 的 AWS API 调用。代价是异步（提交→轮询→取结果），
@@ -24,6 +24,20 @@
   `s3://analytics-agent-raw/parquet/` 那一份拷贝。这次拷贝本身是对比结论之一。
   （这一支 2026-08 曾整体删除、判为退役；现在回来的身份不同——它是被比较的一方，
   不是主线数据层。）
+- `aurora` —— Aurora PostgreSQL（Serverless v2）作为**统一数据入口**，但库里不存数据：
+  装 `pg_duckdb` 扩展，查询由内嵌的 DuckDB 执行，直读 `athena`/`duckdb` 那条共享的
+  **同一批** Iceberg 表（不单独物化，和 Redshift 那条相反）。所以这条 arm 的身份是
+  「用 Postgres 线协议进来、拿 DuckDB 引擎的性能、不进 Redshift 那种拷贝成本」。
+  连接走 psycopg（PG wire，和 legacy `postgres` 同一套客户端），但**引擎是 DuckDB**，
+  所以方言附录与 `duckdb` 同源（见 DIALECTS）。这条和 v1 那个「把 19 万行原生存进
+  Aurora PG」的老形态**完全不是一回事**：v1 是数据在库里，这条是库只做入口、数据在
+  Iceberg。超时口径：这条只下发 PG 侧 `statement_timeout`，不另装 client-side watchdog。
+  **实测坐实（2026-10-07，pg_duckdb v1.1.1）：PG statement_timeout 掐得住下推进 DuckDB
+  的 CPU-bound 计算**——2s 超时在 2002ms 取消 `SELECT sum(i) FROM range(5e9)`，取消信号
+  传进了内嵌 DuckDB 执行器（错误来自 pg_duckdb 自定义扫描节点 `Duckdb_ExecCustomScan_Cpp:
+  Query cancelled`）。此前「掐不住下推的 DuckDB 扫描、要 pg_duckdb 自己取消」那条判断被这次
+  实测推翻，所以不需要像 duckdb arm 那样补 watchdog。仍有一个未验边角：卡在 S3 网络 I/O 上
+  的扫描是否同样可中断没测到（CPU-bound 频繁命中中断检查，I/O-bound 未必）。
 - `postgres` —— psycopg 直连。**LEGACY，不是对比 arm**：只剩本地容器 rig
   （docker-compose.cloud.yml，约 19 万行、无 Glue 目录）。代码保留、不随架构演进，
   测试套件也不覆盖它。见 docs/legacy.md。
@@ -155,6 +169,17 @@ PG = {
     "user": os.getenv("PGUSER", "postgres"),
     "password": os.getenv("PGPASSWORD", ""),
 }
+# Aurora arm 的连接独立于 legacy 本地 PG：它是云上的统一入口，端点/库名/口令都不同，
+# 复用 PGHOST 会让「我在测 Aurora」和「我连到本地容器」从配置上分不出来——对比场景
+# 下这正是最该避免的混淆。默认值刻意留空 host，没设 AURORA_PGHOST 就连不上而不是
+# 静默落到 127.0.0.1。口令优先从 secret 注入的 AURORA_PGPASSWORD 读，别写进代码。
+AURORA = {
+    "host": os.getenv("AURORA_PGHOST", ""),
+    "port": int(os.getenv("AURORA_PGPORT", "5432")),
+    "dbname": os.getenv("AURORA_PGDATABASE", "app_analytics"),
+    "user": os.getenv("AURORA_PGUSER", "analytics_agent_ro"),
+    "password": os.getenv("AURORA_PGPASSWORD", ""),
+}
 MAX_ROWS = int(os.getenv("SQL_MAX_ROWS", "1000"))
 STMT_TIMEOUT_MS = int(os.getenv("SQL_TIMEOUT_MS", "15000"))
 # 默认 athena：数据层在 S3 Tables（Iceberg）上。默认指向一个不再维护的本地 Postgres
@@ -163,14 +188,14 @@ STMT_TIMEOUT_MS = int(os.getenv("SQL_TIMEOUT_MS", "15000"))
 # （docker-compose.cloud.yml 已钉）。
 BACKEND = os.getenv("DB_BACKEND", "athena").lower()
 
-BACKENDS = ("athena", "duckdb", "redshift", "postgres")
+BACKENDS = ("athena", "duckdb", "redshift", "aurora", "postgres")
 if BACKEND not in BACKENDS:
     # 早炸而不是走到默认分支。拼错 `DB_BACKEND=duckdb ` 之类的值原来会静默落到
     # Athena 分支上，于是「我在测 DuckDB」和「实际在测 Athena」这两件事从输出里
     # 分不出来——对比场景下这是最坏的一种错。
     raise RuntimeError(
         f"DB_BACKEND={BACKEND!r} 不认识，只能是 {'/'.join(BACKENDS)}。"
-        f"前三个是对比 arm，postgres 是 legacy 本地路径。")
+        f"前四个是对比 arm，postgres 是 legacy 本地路径。")
 
 # 引擎名的**唯一**出处。`/health` 在还没拿到完整 backend_info() 时也要报得出引擎
 # （那一步冷启动要 AssumeRole，见 backend_info 的注释），所以它不能只活在那个函数里面。
@@ -178,6 +203,7 @@ ENGINE_LABEL = {
     "athena": "Athena + S3 Tables (Iceberg)",
     "duckdb": "DuckDB + S3 Tables (Iceberg)",
     "redshift": "Redshift Serverless",
+    "aurora": "Aurora PG + pg_duckdb (Iceberg)",
     "postgres": "PostgreSQL",
 }[BACKEND]
 
@@ -211,13 +237,28 @@ DIALECTS = {
         "- 字符串拼接用 `||`，`concat` 只接两个参数。\n"
         "- `approx_distinct` 不存在，用 `APPROXIMATE COUNT(DISTINCT x)`。\n"
     ),
+    # Aurora 这条是从 Postgres 线协议进来、但执行引擎是内嵌 DuckDB（pg_duckdb），
+    # 所以函数语义跟着 DuckDB 走，与 duckdb arm 同源。方言附录因此和 duckdb 一致，
+    # 只把开头的「引擎是谁」改掉——其余 bullet 必须与 duckdb 逐条对齐，否则两条共享
+    # 同一引擎的 arm 却教模型写不同的 SQL，差异就不再只来自「入口」这一个变量。
+    "aurora": (
+        "\n\n## 本次的 SQL 方言：DuckDB（经 Aurora pg_duckdb，覆盖前文说的 Athena / Trino）\n"
+        "你连的是 Aurora PostgreSQL，但查询由内嵌的 DuckDB 执行（pg_duckdb），不是 Athena。\n"
+        "表和数据与前面完全一样，只是引擎是 DuckDB，方言按 DuckDB 写：\n"
+        "- 日期加减写 `d + INTERVAL 7 DAY`，不写 `date_add('day', 7, d)`。\n"
+        "- 取子串偏好 `substr`；`format_datetime` 不存在，用 `strftime(ts, '%Y-%m-%d')`。\n"
+        "- `approx_distinct` 不存在，用 `approx_count_distinct`。\n"
+        "- 数组下标从 1 开始，与 Trino 相同。\n"
+    ),
 }
 DIALECT = DIALECTS[BACKEND]
 
-if BACKEND == "postgres":
-    import psycopg
+if BACKEND in ("postgres", "aurora"):
+    import psycopg                                    # 两条都走 PG 线协议
+    from psycopg import sql as _pgsql                 # aurora 要用它把 SQL 安全内联成字面量
 else:
-    psycopg = None                                   # 另三条 arm 都不需要它
+    psycopg = None                                   # athena/duckdb/redshift 都不需要它
+    _pgsql = None
 
 # 只读闸门。`unload` / `analyze` 是 Trino/Athena 特有的写动作（UNLOAD 往 S3 写文件、
 # ANALYZE 写统计），Postgres/Redshift 时代的清单里没有它们。下面的起始关键字检查
@@ -481,6 +522,77 @@ def _run_query_redshift(sql: str) -> dict:
             "bytes_scanned": 0}
 
 
+# ---------------------------------------------------------------- Aurora 后端
+
+# pg_duckdb 会话初始化（**每连接一次**，连接级状态不跨连接保留）：装 extension →
+# 建 credential_chain secret → ATTACH 同一批 S3 Tables Iceberg（READ_ONLY）→ 把默认
+# schema 切到 lake.app_analytics。坐标（ARN / REGION / NAMESPACE / ALIAS）全部复用
+# duckdb arm 的 conn 模块：两条 arm 必须 ATTACH 到**字面相同**的 catalog，否则差异就
+# 不止来自「入口」这一个变量，对比就不成立。这些是 side-effecting DDL，经
+# duckdb.raw_query() 下发、**不过 validate()**（validate 本就禁 ATTACH/SET/USE；只读
+# 边界由 agent SQL 自己过 validate() 保证，见下）。
+def _aurora_init_statements() -> tuple[str, ...]:
+    conn = _arm_module("conn", "duckdb")             # duckdb arm 同一个 catalog 源
+    arn = conn.table_bucket_arn()                    # 要 STS，所以惰性：只在真跑查询时拼
+    return (
+        "INSTALL httpfs; INSTALL aws; INSTALL iceberg; "
+        "LOAD httpfs; LOAD aws; LOAD iceberg;",
+        # 内嵌 DuckDB 的算力/溢写口径必须和 arm2(scripts/duckdb/conn.py::_configure) 逐项一致，
+        # 否则 arm2 vs arm4 比的是两套执行计划而不是「入口方式」:memory_limit 决定何时溢写、
+        # threads 决定并行度（这俩不同则两次跑不可比）,enable_object_cache 让列块元数据留在
+        # 内存（与 arm2 热态口径一致）。temp_directory 给一条 EC2 容器内可写路径,空则溢写变 OOM。
+        # 跑在 pg_duckdb 的 EC2 实例(t3.xlarge 4vCPU/16GB,与 Fargate 任务同规格)上。
+        f"SET memory_limit='{conn.MEMORY_LIMIT}'; SET threads={int(conn.THREADS)}; "
+        f"SET temp_directory='/tmp/duckdb-spill'; SET enable_object_cache=true;",
+        f"CREATE OR REPLACE SECRET s3_default "
+        f"(TYPE s3, PROVIDER credential_chain, REGION '{conn.REGION}', REFRESH auto)",
+        f"ATTACH IF NOT EXISTS '{arn}' AS {conn.ALIAS} "
+        f"(TYPE iceberg, ENDPOINT_TYPE s3_tables, READ_ONLY)",
+        f"USE {conn.ALIAS}.{conn.NAMESPACE}",
+    )
+
+
+def _aurora_raw(cur, stmt: str) -> None:
+    """经 pg_duckdb 的 duckdb.raw_query() 下发 side-effecting DDL（LOAD/SECRET/ATTACH/USE）。
+    必须把 SQL **内联成字面量**，不能用绑定参数：psycopg 走扩展协议会把参数标成 UNKNOWN
+    类型，pg_duckdb 转不动，报 `Could not convert DuckDB type: UNKNOWN`（v1.1.1 实测）。
+    sql.Literal 负责安全转义。"""
+    cur.execute(_pgsql.SQL("SELECT duckdb.raw_query({})").format(_pgsql.Literal(stmt)))
+
+
+def _aurora_query(cur, agent_sql: str) -> None:
+    """已过 validate() 的只读 SQL 包进 duckdb.query() 交内嵌 DuckDB 执行，列名/类型照常回来。
+    不能用「透明执行」（force_execution + 裸 SQL）：三段式名 lake.app_analytics.events 会被
+    Postgres 解析器在 pg_duckdb 接手前就拒掉（cross-database references not implemented）。
+    同样内联成字面量，理由见 _aurora_raw。"""
+    cur.execute(_pgsql.SQL("SELECT * FROM duckdb.query({})").format(_pgsql.Literal(agent_sql)))
+
+
+def _run_query_aurora(sql: str) -> dict:
+    clean = validate(sql)                            # 只读闸门四条 arm 共用
+    with psycopg.connect(**AURORA, connect_timeout=8) as conn:
+        conn.read_only = True                        # 多一层防御：PG 侧也不许写
+        with conn.cursor() as cur:
+            # PG 侧超时：只掐得住 Postgres 执行器，掐不住已下推进 DuckDB 的扫描
+            # （见模块 docstring 的 aurora 段）。set_config 是普通 PG 函数、非 duckdb.*，
+            # 不被 pg_duckdb 接管，所以这里绑定参数是安全的。
+            cur.execute("SELECT set_config('statement_timeout', %s, false)",
+                        (str(int(STMT_TIMEOUT_MS)),))
+            for stmt in _aurora_init_statements():
+                _aurora_raw(cur, stmt)
+            t0 = time.perf_counter()
+            _aurora_query(cur, clean)
+            cols = [d.name for d in cur.description] if cur.description else []
+            fetched = cur.fetchmany(MAX_ROWS + 1)
+            exec_ms = round((time.perf_counter() - t0) * 1000, 1)
+            truncated = len(fetched) > MAX_ROWS
+            rows = [[_jsonable(c) for c in r] for r in fetched[:MAX_ROWS]]
+    # bytes_scanned 恒 0：pg_duckdb 不按扫描字节计费（成本是跑它那台机器的时间），
+    # 与 duckdb/redshift 两条一致，用 0 而非省略以保持返回契约与 arm 无关。
+    return {"columns": cols, "rows": rows, "rowcount": len(rows),
+            "truncated": truncated, "exec_ms": exec_ms, "bytes_scanned": 0}
+
+
 # ---------------------------------------------------------------- Postgres 后端
 
 def _run_query_sync(sql: str) -> dict:
@@ -490,6 +602,8 @@ def _run_query_sync(sql: str) -> dict:
         return _run_query_duckdb(sql)
     if BACKEND == "redshift":
         return _run_query_redshift(sql)
+    if BACKEND == "aurora":
+        return _run_query_aurora(sql)
     clean = validate(sql)
     with psycopg.connect(**PG, connect_timeout=8) as conn:
         conn.read_only = True
@@ -535,6 +649,14 @@ def system_query(sql: str) -> list[tuple]:
         return [tuple(r) for r in _duck().execute(clean).get("rows", [])]
     if BACKEND == "redshift":
         return [tuple(r) for r in _rs().execute(clean).get("rows", [])]
+    if BACKEND == "aurora":
+        with psycopg.connect(**AURORA, connect_timeout=8) as conn:
+            conn.read_only = True
+            with conn.cursor() as cur:
+                for stmt in _aurora_init_statements():
+                    _aurora_raw(cur, stmt)
+                _aurora_query(cur, clean)           # 元数据查询也走 DuckDB（表在 attach 的 catalog 里）
+                return cur.fetchall()
     with psycopg.connect(**PG, connect_timeout=8) as conn:
         conn.read_only = True
         with conn.cursor() as cur:
@@ -595,6 +717,27 @@ def backend_info() -> dict:
             # "治理接上了没有"唯一可从外面看见的证据，`governance.py
             # --verify-backend` 断言的就是它。
             "identity": _identity,
+        }
+    if BACKEND == "aurora":
+        # 复用 duckdb arm 的 conn 常量（纯读 env，不触发 STS），把「读的是哪批 Iceberg」
+        # 的坐标摆到 /health 上——它是「arm4 与 athena/duckdb 读同一份存储」唯一能从
+        # 外面核对的证据。真正拼 ARN（要 STS）发生在跑查询时，不在这里。
+        conn = _arm_module("conn", "duckdb")
+        return {
+            "engine": ENGINE_LABEL,
+            "name": AURORA["dbname"],
+            "host": AURORA["host"],
+            "port": AURORA["port"],
+            "transport": "psycopg → pg_duckdb",      # PG 线协议进，内嵌 DuckDB 执行
+            "table_bucket": conn.TABLE_BUCKET,
+            "region": conn.REGION,
+            "catalog": f"{conn.ALIAS}.{conn.NAMESPACE}",   # ATTACH 后的默认 schema
+            # 存储和 athena/duckdb 共享那批 Iceberg 表，库本身不存数据。摆出来免得
+            # 看着 /health 以为 Aurora 里有一份原生拷贝（v1 老形态才是那样）。
+            "storage": "S3 Tables（Iceberg，经 pg_duckdb 直读，与 athena/duckdb 同一批）",
+            # 列级治理待定：PG 自己有 GRANT/RLS，但查询下推进 DuckDB 后这些是否仍生效
+            # 要有实例才能坐实，所以这里先留空（空=尚未接上，不是"无治理"）。
+            "identity": "",
         }
     return {
         "engine": ENGINE_LABEL,
@@ -688,7 +831,9 @@ def _selftest() -> int:
                        ("redshift", "FILTER (WHERE"),
                        ("redshift", "approx_distinct"),
                        ("duckdb", "TO_CHAR"),
-                       ("duckdb", "date_add")):
+                       ("duckdb", "date_add"),
+                       ("aurora", "TO_CHAR"),       # aurora 走 DuckDB 引擎，同 duckdb
+                       ("aurora", "date_add")):
         for line in DIALECTS[arm].splitlines():
             if alien in line and not any(n in line for n in _NEG):
                 bad += 1
@@ -707,15 +852,16 @@ def _selftest() -> int:
 
 
 def ping() -> bool:
-    if BACKEND != "postgres":
+    if BACKEND not in ("postgres", "aurora"):
         runner = {"athena": _athena, "duckdb": _duck, "redshift": _rs}[BACKEND]
         try:
             runner().execute("SELECT 1")
             return True
         except Exception:
             return False
+    cfg = AURORA if BACKEND == "aurora" else PG
     try:
-        with psycopg.connect(**PG, connect_timeout=4) as conn:
+        with psycopg.connect(**cfg, connect_timeout=4) as conn:
             with conn.cursor() as cur:
                 cur.execute("SELECT 1")
                 cur.fetchone()

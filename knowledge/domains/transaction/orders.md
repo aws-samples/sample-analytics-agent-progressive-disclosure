@@ -8,13 +8,13 @@
 | order_no | VARCHAR(50) | 订单编号（业务唯一标识） |
 | user_id | BIGINT | 用户ID，关联 users.user_id |
 | status | VARCHAR(20) | 订单状态 |
-| total_amount | DECIMAL(12,2) | 商品总金额 |
-| discount_amount | DECIMAL(10,2) | 优惠减免金额 |
+| total_amount | DECIMAL(12,2) | 商品总金额（= 该单 `order_items.actual_amount` 之和，即单品促销后的商品金额） |
+| discount_amount | DECIMAL(10,2) | 订单级优惠 = 所用优惠券的优惠；**没用券的单恒为 0** |
 | shipping_fee | DECIMAL(8,2) | 运费 |
 | actual_amount | DECIMAL(12,2) | 实付金额 |
 | item_count | INT | 商品件数 |
 | coupon_id | INT | 使用的优惠券ID |
-| shipping_address | `string` | 收货地址（JSON 文本；**不是 Postgres 的 JSONB**，取值用 `json_extract_scalar`）。**种子数据里整列为 NULL** |
+| shipping_address | `string` | 收货地址（JSON 文本；**不是 Postgres 的 JSONB**，取值用 `json_extract_scalar`）。当前数据 100% 非空、只有 10 个取值，见下「地址结构」（早期种子数据里整列为 NULL，已作废） |
 | remark | TEXT | 订单备注 |
 | placed_at | TIMESTAMP | 下单时间 |
 | paid_at | TIMESTAMP | 支付时间 |
@@ -89,7 +89,7 @@ province / city / district，冒号后有一个空格：
 > ⚠️ **只有 10 个地址，不是连续的地理分布。** 「各省 GMV 分布」按它算得到 8 个省级桶
 > （上海、北京两个直辖市的 province 与 city 同名），这是真结论；但**别把它当成全国
 > 覆盖**——一个省只有一个城市、一个城市只有一个区，「城市下钻」到区一级就只剩一行。
-> 用户侧的地域维度另有一套：`user_profiles.province` / `city` 是逐行不同的，
+> 用户侧的地域维度另有一套：`user_profiles.province` / `city` 是逐行不同的（城市不带「市」后缀，如 `深圳`），
 > 两者**不保证一致**（收货地和常住地本来就可以不同），别混着 JOIN 当同一个维度用。
 >
 > 省名带「省」「市」后缀（`广东省` 而不是 `广东`），
@@ -143,7 +143,13 @@ province / city / district，冒号后有一个空格：
 
 ```
 actual_amount = total_amount - discount_amount + shipping_fee
+total_amount  = SUM(order_items.actual_amount)        -- 同一单
 ```
+
+> **优惠分两层，别相加也别互相对账**：`order_items.discount_amount` 是单品促销
+> （标价 × 件数 − 行实付），已经扣在 `total_amount` 里；`orders.discount_amount` 是订单级的券优惠，
+> 在 `total_amount` 之后再减。"总让利" = 两层之和。券优惠的计算规则见
+> `../marketing/coupons.md`（满减面值 / 折扣封顶 / 包邮 = 运费）。
 
 ## 索引
 
@@ -158,15 +164,15 @@ actual_amount = total_amount - discount_amount + shipping_fee
 SELECT
     DATE(placed_at) AS order_date,
     COUNT(*) AS total_orders,
-    COUNT(CASE WHEN status NOT IN ('cancelled') THEN 1 END) AS valid_orders,
-    SUM(total_amount) AS gmv,
+    -- 有效订单 = paid / shipped / delivered（不含 pending、cancelled、refunded），GMV / 客单价都只算有效订单的实付金额
+    COUNT(CASE WHEN status IN ('paid', 'shipped', 'delivered') THEN 1 END) AS valid_orders,
     SUM(CASE WHEN status IN ('paid', 'shipped', 'delivered')
-        THEN actual_amount ELSE 0 END) AS revenue,
+        THEN actual_amount ELSE 0 END) AS gmv,
     SUM(discount_amount) AS total_discount,
-    ROUND(AVG(CASE WHEN status NOT IN ('cancelled')
+    ROUND(AVG(CASE WHEN status IN ('paid', 'shipped', 'delivered')
         THEN actual_amount END), 2) AS avg_order_value
 FROM orders
-WHERE placed_at >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '30' day
+WHERE placed_at >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '29' day AND placed_at < (SELECT max(as_of_date) FROM meta_snapshot) + interval '1' day
 GROUP BY DATE(placed_at)
 ORDER BY order_date DESC;
 ```
@@ -179,7 +185,7 @@ SELECT
     ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER(), 2) AS pct,
     SUM(actual_amount) AS total_amount
 FROM orders
-WHERE placed_at >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '30' day
+WHERE placed_at >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '29' day AND placed_at < (SELECT max(as_of_date) FROM meta_snapshot) + interval '1' day
 GROUP BY status
 ORDER BY order_count DESC;
 ```
@@ -194,7 +200,7 @@ SELECT
     ROUND(COUNT(CASE WHEN status = 'cancelled' THEN 1 END) * 100.0 / COUNT(*), 2) AS cancel_rate,
     ROUND(COUNT(CASE WHEN status = 'refunded' THEN 1 END) * 100.0 / COUNT(*), 2) AS refund_rate
 FROM orders
-WHERE placed_at >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '30' day
+WHERE placed_at >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '29' day AND placed_at < (SELECT max(as_of_date) FROM meta_snapshot) + interval '1' day
 GROUP BY DATE(placed_at)
 ORDER BY order_date DESC;
 ```

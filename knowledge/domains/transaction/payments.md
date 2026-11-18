@@ -80,7 +80,7 @@ SELECT
     ROUND(COUNT(CASE WHEN status = 'success' THEN 1 END) * 100.0 / COUNT(*), 2) AS success_rate,
     SUM(CASE WHEN status = 'success' THEN amount ELSE 0 END) AS total_amount
 FROM payments
-WHERE paid_at >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '30' day
+WHERE paid_at >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '29' day AND paid_at < (SELECT max(as_of_date) FROM meta_snapshot) + interval '1' day
    OR status = 'failed'
 GROUP BY payment_method
 ORDER BY total_amount DESC;
@@ -95,7 +95,7 @@ SELECT
     SUM(CASE WHEN status = 'success' THEN amount ELSE 0 END) AS total_amount,
     ROUND(COUNT(CASE WHEN status = 'success' THEN 1 END) * 100.0 / COUNT(*), 2) AS success_rate
 FROM payments
-WHERE paid_at >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '30' day
+WHERE paid_at >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '29' day AND paid_at < (SELECT max(as_of_date) FROM meta_snapshot) + interval '1' day
 GROUP BY payment_method, payment_channel
 ORDER BY total_amount DESC;
 ```

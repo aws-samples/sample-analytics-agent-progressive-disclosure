@@ -36,6 +36,7 @@ import re
 import sys
 from pathlib import Path
 
+import json
 import numpy as np
 
 HERE = Path(__file__).resolve().parent
@@ -87,6 +88,7 @@ SERIAL_OK = {
     "payments.payment_no":      "支付流水号，同上",
     "payments.transaction_id":  "第三方交易号，真实形态同为前缀+流水",
     "user_coupons.coupon_code":  "券码按券种发放（基数=券种数），不是逐行序号",
+    "coupons.coupon_code":       "券种编码 CP+6 位券号，与 user_coupons.coupon_code 同一套（2026-11 coupons 改由生成器产出）",
     # 手机号是纯数字，前缀恒为空，形态规则对它必然误判。判据没有丢，是**委派**给了
     # 下面 CN_MOBILE_RE 那条更严的格式断言（要求真实号段，比"有没有数字尾"强得多）。
     # 空前缀这一支仍然保留：将来若有别的纯数字文本列冒出来，它照样会被拦下。
@@ -902,21 +904,37 @@ def check_attribution_costs(t: dict, ctx) -> None:
        f"实测 {int(paid[int(np.argmin(cac))])}）")
 
     # ---------- 归因表自身 ----------
-    ok(len(np.unique(a_uid)) == len(a_uid), "每个用户至多一条归因")
-    ok((np.asarray(ua["attributed_at"]) == np.asarray(ua["click_time"])).all(),
-       "attributed_at == click_time（v1 是灌数那一瞬，按归因时间分桶只有一个桶）")
-    ok((np.asarray(ua["install_time"]).astype("datetime64[s]")
-        - np.asarray(ua["click_time"]).astype("datetime64[s]")
-        == (np.asarray(ua["days_to_install"]) * 86400).astype("timedelta64[s]")).all(),
-       "install_time − click_time == days_to_install 天")
+    # 2026-11：被归因的用户恰好 first_touch + last_touch 各一行，时序 click ≤ install ≤ 注册
+    typ = np.asarray(ua["attribution_type"], dtype=object)
+    nf = np.bincount(a_uid[typ == "first_touch"], minlength=len(u["user_id"]) + 1)
+    nl = np.bincount(a_uid[typ == "last_touch"], minlength=len(u["user_id"]) + 1)
+    att = np.unique(a_uid)
+    ok((nf[att] == 1).all() and (nl[att] == 1).all(),
+       "被归因的用户 first_touch / last_touch 各恰好一行（同一用户的两种归因视角）")
+    clk = np.asarray(ua["click_time"]).astype("datetime64[s]")
+    ins_t = np.asarray(ua["install_time"]).astype("datetime64[s]")
+    reg_u = np.asarray(u["registered_at"]).astype("datetime64[s]")[a_uid - 1]
+    ok((clk <= ins_t).all() and (ins_t <= reg_u).all(), "click ≤ install ≤ 注册")
+    ok((np.asarray(ua["attributed_at"]).astype("datetime64[s]") == reg_u).all(),
+       "attributed_at == 注册时刻（归因在转化时落定）")
+    ok(((ins_t - clk).astype(np.int64) // 86400 == np.asarray(ua["days_to_install"])).all(),
+       "days_to_install == ⌊(install − click) / 1 天⌋")
+    fi = np.flatnonzero(typ == "first_touch")
+    ok((clk[fi] <= clk[fi + 1]).all() and (a_uid[fi] == a_uid[fi + 1]).all(),
+       "first_touch 的点击不晚于同一用户的 last_touch")
     ua_a = np.asarray(ua["ad_campaign_id"], dtype=object).tolist()
     ua_c = np.asarray(ua["creative_id"], dtype=object).tolist()
     hasa = np.array([x is not None for x in ua_a])
     hasc = np.array([x is not None for x in ua_c])
     is_ad = np.array([ch_type[int(c)] in ("paid", "kol") for c in a_ch.tolist()])
-    ok((hasa == is_ad).all(),
-       f"归因的 ad_campaign_id 非空 ⟺ 渠道是 paid/kol（自然量没有广告活动，这是语义"
-       f"而不是概率；违例 {int((hasa != is_ad).sum())}）")
+    ok((hasa <= is_ad).all(),
+       f"归因的 ad_campaign_id 非空 ⇒ 渠道是 paid/kol（自然量没有广告活动；违例 "
+       f"{int((hasa & ~is_ad).sum())}）")
+    cday = (clk.astype("datetime64[D]") - day0).astype(np.int64)
+    ok(all(spans[int(a)][0] <= int(d) <= spans[int(a)][1]
+           for a, d in zip(np.asarray(ua_a, dtype=object)[hasa], cday[hasa])),
+       "归因挂的广告活动在点击当天处于档期内（投放渠道没有在档活动时为 NULL）")
+    ok(hasa[is_ad].mean() > 0.3, f"投放渠道的归因多数能挂到活动（{hasa[is_ad].mean():.0%}）")
     ok(all(ac_owner[int(a)] == int(c)
            for a, c in zip(np.asarray(ua_a, dtype=object)[hasa], a_ch[hasa])),
        "归因挂的活动属于本渠道")
@@ -926,6 +944,153 @@ def check_attribution_costs(t: dict, ctx) -> None:
            zip(np.asarray(ua_c, dtype=object)[hasc],
                np.asarray(ua_a, dtype=object)[hasc])),
        "归因挂的素材属于它所挂的那个活动")
+
+
+def check_census_2026_11(t: dict, ctx) -> None:
+    """2026-11 数据普查修掉的那批跨表关系。"""
+    print("\n2026-11 数据普查：设备 / 分群 / 券 / 成交价 / 保留事件")
+    u, prof = t["users"], t["user_profiles"]
+    nu = len(u["user_id"])
+    reg = np.asarray(u["registered_at"]).astype("datetime64[s]")
+
+    # ---- 设备归属 ----
+    d = t["user_devices"]
+    d_uid = np.asarray(d["user_id"], np.int64)
+    dev_owner = dict(zip(np.asarray(d["device_id"]).tolist(), d_uid.tolist()))
+    prim = np.bincount(d_uid[np.asarray(d["is_primary"], bool)], minlength=nu + 1)[1:]
+    ok((prim == 1).all(), f"每个用户恰好一台主设备（违例 {int((prim != 1).sum())}）")
+    s_ = t["sessions"]
+    s_uid = np.asarray(s_["user_id"], np.int64)
+    bad = sum(dev_owner.get(x) != int(y) for x, y in zip(np.asarray(s_["device_id"]).tolist(),
+                                                           s_uid.tolist()))
+    ok(bad == 0, f"会话的设备属于会话用户（违例 {bad}）")
+    ev = t["events"]
+    bad = sum(dev_owner.get(x) != int(y) for x, y in zip(np.asarray(ev["device_id"]).tolist(),
+                                                           np.asarray(ev["user_id"]).tolist()))
+    ok(bad == 0, f"事件的设备属于事件用户（违例 {bad}）")
+    first = np.asarray(d["first_seen_at"]).astype("datetime64[s]")
+    ok((first >= reg[d_uid - 1]).all(), "设备首次出现 ≥ 本人注册时刻")
+    st = np.asarray(s_["start_time"]).astype("datetime64[s]")
+    row = {x: i for i, x in enumerate(np.asarray(d["device_id"]).tolist())}
+    s_row = np.array([row[x] for x in np.asarray(s_["device_id"]).tolist()], np.int64)
+    mn = np.full(len(first), np.datetime64("2100-01-01", "s"))
+    np.minimum.at(mn, s_row, st)
+    has = mn < np.datetime64("2100-01-01", "s")
+    ok((first[has] == mn[has]).all(), "有会话的设备 first_seen_at == 其上最早会话开始")
+
+    # ---- 保留事件的时刻 ----
+    names = np.asarray(ev["event_name"], dtype=object)
+    et = np.asarray(ev["event_time"]).astype("datetime64[s]")
+    eu = np.asarray(ev["user_id"], np.int64)
+    rg = names == "register"
+    ok((et[rg] == reg[eu[rg] - 1]).all(), "register 事件时刻 == 注册时刻")
+    o = t["orders"]
+    pu = np.flatnonzero(names == "purchase")
+    oid = np.array([int(json.loads(x)["order_id"]) if isinstance(x, str) else int(x["order_id"])
+                    for x in np.asarray(ev["properties"], dtype=object)[pu]], np.int64)
+    ok((et[pu] == np.asarray(o["paid_at"]).astype("datetime64[s]")[oid - 1]).all(),
+       "purchase 事件时刻 == 订单 paid_at")
+    sid = np.array([0 if x is None else int(x) for x in ev["session_id"]], np.int64)
+    s_end = st + np.asarray(s_["duration_seconds"]).astype("timedelta64[s]")
+    m = sid > 0
+    ok(((et[m] >= st[sid[m] - 1]) & (et[m] <= s_end[sid[m] - 1] + np.timedelta64(1, "s"))).all(),
+       "有 session_id 的事件落在所属会话窗口内")
+
+    # ---- 分群按规则 ----
+    sm = t["user_segment_members"]
+    seg = np.asarray(sm["segment_id"], np.int64)
+    su = np.asarray(sm["user_id"], np.int64)
+    valid = np.isin(o["status"], list(T.VALID_STATUS))
+    spend = np.bincount(np.asarray(o["user_id"])[valid],
+                        weights=np.asarray(o["actual_amount"], float)[valid], minlength=nu + 1)[1:]
+    want1 = set((np.flatnonzero(spend >= 5000) + 1).tolist())
+    ok(set(su[seg == 1].tolist()) == want1, "分群 1 成员 == 累计有效消费 ≥ 5000 的用户")
+    vip = np.asarray(u["is_vip"], bool)
+    ok(set(su[seg == 4].tolist()) == set((np.flatnonzero(vip) + 1).tolist()), "分群 4 成员 == VIP 用户")
+    ios = set(d_uid[np.asarray(d["device_type"], dtype=object) == "ios"].tolist())
+    ok(set(su[seg == 9].tolist()) == ios, "分群 9 成员 == 拥有 iOS 设备的用户")
+    ent = np.asarray(sm["entered_at"]).astype("datetime64[s]")
+    ok((ent >= reg[su - 1]).all(), "分群进入时刻 ≥ 注册时刻")
+
+    # ---- 券 ----
+    cp = t["coupons"]
+    info = {int(c): i for i, c in enumerate(np.asarray(cp["coupon_id"]).tolist())}
+    oc = np.asarray(o["coupon_id"], dtype=object)
+    has = np.array([x is not None for x in oc])
+    ci = np.array([info[int(x)] for x in oc[has]], np.int64)
+    placed = np.asarray(o["placed_at"]).astype("datetime64[s]")[has]
+    cs = np.asarray(cp["start_date"]).astype("datetime64[s]")[ci]
+    ce = np.asarray(cp["end_date"]).astype("datetime64[s]")[ci]
+    ok(((placed >= cs) & (placed <= ce)).all(), "用券下单时刻在券有效期内")
+    tot = np.asarray(o["total_amount"], float)
+    ok((tot[has] + 1e-6 >= np.asarray(cp["min_purchase"], float)[ci]).all(), "用券订单满足券门槛")
+    disc = np.asarray(o["discount_amount"], float)
+    ok((disc[~has] == 0).all(), "未用券订单的订单级优惠为 0")
+    typ = np.asarray(cp["coupon_type"], dtype=object)[ci]
+    v = np.asarray(cp["discount_value"], float)[ci]
+    mx = np.array([np.nan if x is None else float(x) for x in np.asarray(cp["max_discount"], dtype=object)])[ci]
+    ship = np.asarray(o["shipping_fee"], float)[has]
+    want = np.where(typ == "fixed_amount", v,
+                    np.where(typ == "free_shipping", ship,
+                             np.where(np.isnan(mx), tot[has] * v / 100, np.minimum(tot[has] * v / 100, mx))))
+    ok((np.abs(disc[has] - want) <= 0.02).all(), "订单优惠 == 按券规则算出的优惠（满减 / 折扣封顶 / 包邮）")
+    uc = t["user_coupons"]
+    k = np.array([info[int(x)] for x in np.asarray(uc["coupon_id"]).tolist()], np.int64)
+    issued = np.bincount(k, minlength=len(info))
+    quota = np.asarray(cp["total_quota"], np.int64)
+    ok((issued <= quota).all(), "每张券实发量 ≤ total_quota")
+    dep = np.asarray(cp["status"], dtype=object) == "depleted"
+    ok((issued[dep] == quota[dep]).all(), "depleted 的券实发量 == total_quota")
+    vd = np.asarray(cp["valid_days"], np.int64)[k]
+    rcv = np.asarray(uc["received_at"]).astype("datetime64[s]")
+    exp = np.asarray(uc["expire_at"]).astype("datetime64[s]")
+    ok((exp - rcv == (vd * 86400).astype("timedelta64[s]")).all(), "expire_at == received_at + valid_days")
+    ok((rcv >= np.asarray(cp["start_date"]).astype("datetime64[s]")[k]).all(), "领券不早于券开始")
+
+    # ---- 成交价 ----
+    it, pr = t["order_items"], t["products"]
+    pidx = {int(x): i for i, x in enumerate(np.asarray(pr["product_id"]).tolist())}
+    pp = np.asarray(pr["price"], float)[[pidx[int(x)] for x in np.asarray(it["product_id"]).tolist()]]
+    ok((np.abs(np.asarray(it["unit_price"], float) - pp) < 0.005).all(),
+       "order_items.unit_price == 所购商品的 products.price")
+    ok((np.asarray(it["discount_amount"], float) >= 0).all(), "明细单品优惠非负")
+
+
+def _inject_coupon_min_raised(t: dict, cache: dict) -> None:
+    """把第一张用券订单所用券的门槛抬到够不着（订单侧一个数都不动）。"""
+    cid = next(x for x in t["orders"]["coupon_id"] if x is not None)
+    i = int(np.flatnonzero(np.asarray(t["coupons"]["coupon_id"]) == int(cid))[0])
+    t["coupons"]["min_purchase"][i] = 1e9
+
+
+def _inject_discount_without_coupon(t: dict, cache: dict) -> None:
+    """旧形态：没用券的单也有订单级优惠。头公式、明细合计、明细行内公式都保持成立。"""
+    o, it = t["orders"], t["order_items"]
+    oid = np.asarray(it["order_id"])
+    for k in np.flatnonzero(np.asarray(it["discount_amount"]) >= 5):
+        r = int(oid[k]) - 1
+        if o["coupon_id"][r] is None:
+            o["discount_amount"][r] += 5.0
+            o["total_amount"][r] += 5.0
+            it["actual_amount"][k] += 5.0
+            it["discount_amount"][k] -= 5.0
+            return
+    raise AssertionError("找不到可注入的未用券订单")
+
+
+def _inject_expire_fixed_30d(t: dict, cache: dict) -> None:
+    """旧形态：到期恒为领券 + 30 天。只改核销行（它们的状态不随到期变），免得先撞状态判据。"""
+    uc = t["user_coupons"]
+    used = np.flatnonzero(np.asarray(uc["status"], dtype=object) == "used")
+    uc["expire_at"][used] = (np.asarray(uc["received_at"]).astype("datetime64[s]")[used]
+                             + np.timedelta64(30 * 86400, "s") + np.timedelta64(86400, "s"))
+
+
+def _inject_unit_price_unlinked(t: dict, cache: dict) -> None:
+    """旧形态：成交单价与商品标价脱节。行内公式 actual = unit×qty − discount 保持成立。"""
+    it = t["order_items"]
+    it["unit_price"][0] += 1.0
+    it["discount_amount"][0] += float(it["quantity"][0])
 
 
 def build_tables() -> tuple:
@@ -1024,7 +1189,9 @@ def run_all_checks(t: dict, ctx) -> None:
 
     s = t["sessions"]
     ns = len(s["session_id"])
-    ev_real = np.bincount(t["events"]["session_id"], minlength=ns + 1)[1:]
+    # purchase / use_coupon 是服务端事件，不在任何会话窗口内时 session_id 为 NULL
+    ev_sid = np.array([0 if x is None else int(x) for x in t["events"]["session_id"]], np.int64)
+    ev_real = np.bincount(ev_sid[ev_sid > 0], minlength=ns + 1)[1:]
     pv_real = np.bincount(t["page_views"]["session_id"], minlength=ns + 1)[1:]
     ok((s["event_count"] == ev_real).all(), "sessions.event_count == events 真实行数")
     ok((s["page_view_count"] == pv_real).all(),
@@ -1174,7 +1341,8 @@ def run_all_checks(t: dict, ctx) -> None:
         >= reg[np.asarray(uc["user_id"]) - 1]).all(), "领券时刻 ≥ 本人注册时刻")
     sess_uid = np.zeros(ns + 1, np.int64)
     sess_uid[s["session_id"]] = s["user_id"]
-    ok((ev_uid == sess_uid[ev["session_id"]]).all(), "事件 user == 所属会话 user")
+    in_s = ev_sid > 0
+    ok((ev_uid[in_s] == sess_uid[ev_sid[in_s]]).all(), "事件 user == 所属会话 user")
 
     lag = ((ev_ts - reg[ev_uid - 1]).astype("timedelta64[D]").astype(np.int64))
     h = np.bincount(lag[(lag >= 0) & (lag <= 30)], minlength=31)
@@ -1203,6 +1371,7 @@ def run_all_checks(t: dict, ctx) -> None:
 
     # ---------- P0-5 归因 ⟷ 投放成本 ----------
     check_attribution_costs(t, ctx)
+    check_census_2026_11(t, ctx)
 
 
 # ============================================================ 反例一侧（--negative）
@@ -1720,6 +1889,34 @@ NEG_CASES: list[tuple[str, str, object]] = [
     ("literal-phone-duplicated", "users.phone 全列唯一", _inject_phone_duplicated),
     ("post-title-content-mismatch", "posts 正文首句是标题前缀",
      lambda t, c: t["posts"]["content"].__setitem__(0, "完全无关的另一段正文。补充说明")),
+    # ---- 2026-11 数据普查 ----
+    ("census-two-primary-devices", "恰好一台主设备",
+     lambda t, c: t["user_devices"]["is_primary"].__setitem__(
+         slice(None), np.ones(len(t["user_devices"]["is_primary"]), bool))),
+    ("census-session-foreign-device", "会话的设备属于会话用户",
+     lambda t, c: t["sessions"]["device_id"].__setitem__(
+         0, t["user_devices"]["device_id"][
+             int(np.flatnonzero(np.asarray(t["user_devices"]["user_id"]) != t["sessions"]["user_id"][0])[0])])),
+    ("census-register-not-at-reg", "register 事件时刻 == 注册时刻",
+     lambda t, c: t["events"]["event_time"].__setitem__(
+         int(np.flatnonzero(np.asarray(t["events"]["event_name"], dtype=object) == "register")[0]),
+         t["events"]["event_time"][int(np.flatnonzero(np.asarray(t["events"]["event_name"], dtype=object) == "register")[0])]
+         + np.timedelta64(3600, "s"))),
+    ("census-segment-random", "分群 1 成员 == 累计有效消费",
+     lambda t, c: t["user_segment_members"]["segment_id"].__setitem__(
+         int(np.flatnonzero(np.asarray(t["user_segment_members"]["segment_id"]) == 4)[0]), 1)),
+    ("census-coupon-under-min", "用券订单满足券门槛", _inject_coupon_min_raised),
+    ("census-discount-without-coupon", "未用券订单的订单级优惠为 0", _inject_discount_without_coupon),
+    ("census-coupon-over-quota", "实发量 ≤ total_quota",
+     lambda t, c: t["coupons"]["total_quota"].__setitem__(0, 0)),
+    ("census-expire-fixed-30d", "expire_at == received_at + valid_days", _inject_expire_fixed_30d),
+    ("census-unit-price-unlinked", "unit_price == 所购商品的 products.price", _inject_unit_price_unlinked),
+    ("census-attr-single-row", "first_touch / last_touch 各恰好一行",
+     lambda t, c: t["user_attributions"]["attribution_type"].__setitem__(0, "last_touch")),
+    ("census-attr-click-after-reg", "click ≤ install ≤ 注册",
+     lambda t, c: t["user_attributions"]["click_time"].__setitem__(
+         1, np.asarray(t["user_attributions"]["attributed_at"]).astype("datetime64[s]")[1]
+         + np.timedelta64(86400, "s"))),
     # ---- P0-5 归因 ⟷ 投放成本 ----
     # 这一域此前一条断言都没有，所以每个家族都得配一个反例：判据是新写的，
     # 「它真的会红」这件事在这里没有任何历史证据可依赖。
@@ -1747,7 +1944,7 @@ NEG_CASES: list[tuple[str, str, object]] = [
     ("attr-campaign-cross-channel", "归因挂的活动属于本渠道",
      _inject_attr_campaign_cross_channel),
     # 自然量渠道挂上广告活动——「非空 ⟺ paid/kol」那条语义等价的反向。
-    ("attr-organic-has-campaign", "非空 ⟺ 渠道是 paid/kol",
+    ("attr-organic-has-campaign", "非空 ⇒ 渠道是 paid/kol",
      lambda t, c: t["user_attributions"]["ad_campaign_id"].__setitem__(
          int(np.flatnonzero(np.array([x is None for x in
              np.asarray(t["user_attributions"]["ad_campaign_id"], dtype=object).tolist()]))[0]),

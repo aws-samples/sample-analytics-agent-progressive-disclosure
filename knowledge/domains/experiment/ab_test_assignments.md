@@ -18,6 +18,7 @@
 3. 分配结果记录到本表并持久化
 4. 同一用户在整个实验期间保持在同一变体（sticky assignment）
 
+
 ## 索引
 
 - PRIMARY KEY: `id`
@@ -51,7 +52,7 @@ SELECT
     COUNT(*) AS new_assignments
 FROM ab_test_assignments a
 JOIN ab_tests t ON a.test_id = t.test_id
-WHERE a.assigned_at >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '7' day
+WHERE a.assigned_at >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '6' day AND a.assigned_at < (SELECT max(as_of_date) FROM meta_snapshot) + interval '1' day
 GROUP BY t.test_id, t.test_name, DATE(a.assigned_at)
 ORDER BY t.test_name, assign_date DESC;
 ```

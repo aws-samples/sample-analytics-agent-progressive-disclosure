@@ -13,7 +13,7 @@
 以及**拿表自身时间列的 max() 当"今天"**。后者更危险，因为它不查空而是查出错数——
 `mart_channel_daily` / `channel_daily_costs` 的轴铺到 **2026-09-01**，用它自己的 max
 算「近 30 天」会落进只有成本没有成交的一段，得出渠道 GMV = 0、ROI = 0；
-`fin_daily_revenue` 的轴是退款发生日，比下单日轴长 9 天。
+`fin_daily_revenue` 的轴是退款发生日（2026-11 重灌后与下单日轴同尾，重灌前长 9 天，已作废）。
 成因和全表清单见 `metrics/governed_metrics.md` 的「时间轴对照」。
 
 ## 统计公式（异常检测用 Z-score / 3σ 准则，请照此算）

@@ -59,16 +59,16 @@ backend/.venv/bin/python scripts/lakehouse/athena.py \
 
 ## 数据规模与静态样本铁律
 
-当前样本全库 **91,318,282 行 / 48 张表** = 35 张原始表 79,943,758 行 + 13 张派生表
-（mart / dws / dwd / ads / noise / meta）11,374,524 行：
+当前样本全库 **91,309,133 行 / 48 张表** = 35 张原始表 80,017,470 行 + 13 张派生表
+（mart / dws / dwd / ads / noise / meta）11,291,663 行：
 
 > **你自己数不出这两个数，别拿它们当"我查到的"。** 上面是**全量数据集**的规模
 > （真源是生成器产出的 CSV，由 `scripts/lakehouse/verify_load.py` 钉住）。而你用的是
 > `analytics-agent-ro` 角色，`user_messages`（3,951,679 行）不在授权面里，`count(*)` 会失败。
-> 所以从你这个视角数出来的全库是 **87,366,603 行**、原始表 **75,992,079 行**——少的正是那 3,951,679 行。
+> 所以从你这个视角数出来的全库是 **87,357,454 行**、原始表 **76,065,791 行**——少的正是那 3,951,679 行。
 >
 > 被问到"一共多少行"时说清是哪一个：想报全量就引用上面这个数并说明它来自数据集清单，
-> 想报自己实测的就说"我这个角色能看到的是 18 万行，另有 1 张表不授权"。
+> 想报自己实测的就说"我这个角色能看到的是 8,736 万行，另有 1 张表不授权"。
 > 两个都对，混着用就是个**看起来正常但少 4% 的数**——正好是那种没人会去查的错。
 > `/api/catalog` 的 `totals.rows` 同理是治理视角的数，它另有
 > `rows_uncounted_governed` 把差额的来源列出来。
@@ -96,9 +96,9 @@ Iceberg 的 `count(*)` 是**读元数据**得出的，精确且扫描 0 字节�
 而是返回一个错的数。`channel_daily_costs` / `mart_channel_daily` 的轴铺到 2026-09-01
 （投放成本铺了近一年，2,799 行里 1,980 行落在业务轴之后），最远的
 `subscriptions.end_date` 到 2027-01-24。用各表自己的 max 当锚点，「最近 30 天渠道 GMV」
-会算成 0（那 30 天里一笔订单都没有）、成本却有 42.0 万，ROI 跟着变成 0；用全局锚点的
-同一个窗口是成本 47.9 万、归因 GMV 2,043.5 万。
-全库 91 个时间列的轴末普查表写在 `metrics/governed_metrics.md` §时间锚点。
+会算成 0（那 30 天里一笔订单都没有）、成本却有 42.2 万，ROI 跟着变成 0；用全局锚点的
+同一个窗口是成本 48.8 万、归因 GMV 2,013.4 万。
+全库 107 个时间列的轴末普查表写在 `metrics/governed_metrics.md` §时间锚点。
 
 > 本文件**面向人**（见 `README.md` 的文档表），agent 运行时不会读它。所以
 > `meta_snapshot` 的列清单和上面这套锚点规则，真源在 agent 读得到的两处：
@@ -164,6 +164,15 @@ Trino 原生支持、无需改写的：`AGG(x) FILTER (WHERE cond)`（这条恰�
 `count(DISTINCT x)`、`approx_percentile`。
 
 整数除法**截断**（`7/2` = 3），算比率前先 `CAST(... AS decimal(38,6))`。
+
+decimal 相除同样会丢精度：**两个 decimal 直接相除，结果的小数位取两边中较大的那个**。金额列多是
+`decimal(14,2)`，所以 `sum(gmv_attributed)/sum(cost)` 只剩 2 位小数（实测 `CAST(1 AS decimal(14,2))/CAST(3 AS decimal(14,2))`
+= 0.33）。单看比率差别不大，但**在比率上再算增长率、占比、比率之比**时误差会放大（日 ROI 环比 −0.87% 会算成 −1.00%）。
+两个 decimal（或 decimal 与整数）相除算比率时，先把分子转成高精度 decimal：`CAST(sum(x) AS DECIMAL(38,6)) / nullif(sum(y), 0)`。
+外面再套 `round(..., 2)` 也能跑：Athena / Redshift / DuckDB 实测通过（Athena 保留 6 位小数、Redshift 保留 4 位，算增长率足够），PostgreSQL 原生支持 `round(numeric, integer)`。
+**不要转 `DOUBLE PRECISION` 再 `round(..., n)`**：原生 PostgreSQL 没有 `round(double precision, integer)` 这个函数签名，走 PostgreSQL 解析的 arm（Aurora / 本地 Postgres）会报错。
+只转比率的分子，金额合计本身保持 decimal。
+带小数字面量的写法不受影响：`count(x) * 100.0 / count(y)` 里的 `100.0` 在 Athena 上就是双精度（`2*100.0/3` = 66.666…）。
 
 转换工具：`scripts/gen/pg_to_trino.py`（带自测，`--selftest`）。
 

@@ -135,8 +135,12 @@ def external_ddl(table: str, cols: list, bucket: str) -> str:
     下标。按下标的话，生成器将来在中间插一列，读出来的就是整体错位的数据——每一列的
     类型多半还都对得上，于是不报错。名字对不上是报错，错位是静默出错，选会报错的那个。
     """
-    body = ",\n".join(f"  `{c}` {hive_type(gen_ddl.map_type(pg))}"
-                      for c, pg, _, _ in cols)
+    # 数组列在 Parquet 里是 JSON 文本（`["a", "b"]`，为了 Redshift COPY 进 SUPER），
+    # 外部表按 string 读，INSERT 时再 json_parse 回数组（见 insert_sql）。直接声明成
+    # array<...> 会在 INSERT 时报 NOT_SUPPORTED: Unsupported schema for Parquet column。
+    body = ",\n".join(
+        f"  `{c}` {'string' if gen_ddl.map_type(pg).startswith('array<') else hive_type(gen_ddl.map_type(pg))}"
+        for c, pg, _, _ in cols)
     return (
         f"CREATE EXTERNAL TABLE `{table}_pq` (\n{body}\n)\n"
         f"STORED AS PARQUET\n"
@@ -156,7 +160,19 @@ def insert_sql(table: str, cols: list, where: str = "") -> str:
     """
     names = ",\n  ".join(f'"{c}"' for c, _, _, _ in cols)
     tail = f"\nWHERE {where}" if where else ""
-    return (f"INSERT INTO {table} (\n  {names}\n)\nSELECT\n  {names}\n"
+
+    def sel(c: str, pg: str) -> str:
+        ice = gen_ddl.map_type(pg)
+        if not ice.startswith("array<"):
+            return f'"{c}"'
+        # JSON 文本 → array(varchar)；array<int> 再逐元素转整数（JSON 里元素是字符串 "3"）
+        arr = f'CAST(json_parse("{c}") AS array(varchar))'
+        if ice == "array<string>":
+            return f'{arr} AS "{c}"'
+        inner = {"array<int>": "integer", "array<bigint>": "bigint"}[ice]
+        return f'CAST({arr} AS array({inner})) AS "{c}"'
+    sels = ",\n  ".join(sel(c, pg) for c, pg, _, _ in cols)
+    return (f"INSERT INTO {table} (\n  {names}\n)\nSELECT\n  {sels}\n"
             f"FROM awsdatacatalog.{RAW_DB}.{table}_pq{tail}")
 
 
@@ -308,6 +324,9 @@ def main() -> int:
                     help="建外部表并逐项对比，**不写任何数据**")
     ap.add_argument("--apply", action="store_true",
                     help="DELETE FROM + INSERT + 复核。会改 Iceberg 表")
+    ap.add_argument("--regen", action="store_true",
+                    help="整表重新生成后的重灌（2026-11）：新旧数据本来就不同，差异只打印不拦截；"
+                         "灌完要求 Iceberg 与源 Parquet 逐项完全相等")
     ap.add_argument("--print-sql", metavar="TABLE", help="打印该表的 SQL 就退出")
     ap.add_argument("--selftest", action="store_true", help="拼装逻辑自测，不连云")
     a = ap.parse_args()
@@ -369,7 +388,12 @@ def main() -> int:
         m_ice = metrics(ice, t, cols)
         bad = compare(t, m_ice, m_pq, ts_columns(cols))
         n_ice, n_pq = m_ice["count"], m_pq["count"]
-        if bad:
+        if bad and a.regen:
+            # 整表重新生成：旧 Iceberg 与新 Parquet 本来就不同，不是外部表读错。
+            # 读层的风险由上面的亚秒普查兜住；真正的闸门挪到灌完之后（见下）。
+            print(f"  ·  {t:<22} iceberg {n_ice} 行 / parquet {n_pq} 行，"
+                  f"{len(bad)} 项差异（--regen：预期内，灌完逐项复核）")
+        elif bad:
             hard += bad
             print(f"  ❌ {t:<22} iceberg {n_ice} 行 / parquet {n_pq} 行，"
                   f"{len(bad)} 项**非预期**差异")
@@ -398,6 +422,11 @@ def main() -> int:
         cols, t1 = declared[t], time.time()
         want = int(metrics(ice, t, cols, src=f"awsdatacatalog.{RAW_DB}.{t}_pq")["count"])
         try:
+            # 先试读再删：DELETE 之后 INSERT 才失败，表就空着（2026-11 有 4 张带数组列的表
+            # 因 Unsupported schema 空了几分钟）。把 INSERT 的 SELECT 部分原样 LIMIT 1
+            # 跑一遍——类型映射 / json_parse / CAST 有问题会在这里报，表还没被动。
+            probe = insert_sql(t, cols).split("\nSELECT\n", 1)[1]
+            ice.execute(f"SELECT * FROM (SELECT\n{probe}) LIMIT 1", timeout=DML_TIMEOUT)
             ice.execute(f"DELETE FROM {t}", fetch=False, timeout=DML_TIMEOUT)
             spec = gen_ddl.PARTITION_SPEC.get(t)
             batches = [("(整表)", "")]
@@ -428,6 +457,14 @@ def main() -> int:
             continue
         n = int(after["count"])
         ok = n == want
+        if a.regen:
+            # 灌完的 Iceberg 必须与源 Parquet 逐项相等（行数、数值和、微秒时间戳、布尔计数）
+            src = metrics(ice, t, cols, src=f"awsdatacatalog.{RAW_DB}.{t}_pq")
+            diff = compare(t, after, src, ts_columns(cols))
+            if diff:
+                ok = False
+                for d in diff[:10]:
+                    print(f"    {t} 灌完仍不等：{d}")
         # 复核不只看行数：WATCH 那几列必须真的变成多值了。行数相等而列还是假常量，
         # 恰好是「灌了一份一样的数据」，而那是这个脚本唯一要修的东西。
         flat = [c for c in WATCH.get(t, ()) if after.get(f"nd:{c}", "0") in ("0", "1")]
@@ -500,6 +537,10 @@ def selftest() -> int:
     check("不用 SELECT *", "SELECT *" not in ins)
     check("没有 CAST", "CAST(" not in ins, ins[:200])
     check("列数对上", ins.count('"order_id"') == 2)     # 目标列表 + SELECT 各一次
+    # 4b. 删表前的试读：取 INSERT 的 SELECT 部分，数组列的 json_parse 也要在里面
+    pz = insert_sql("posts", declared["posts"]).split("\nSELECT\n", 1)
+    check("INSERT 能切出 SELECT 部分", len(pz) == 2)
+    check("试读覆盖数组列转换", "json_parse(\"media_urls\")" in pz[1], pz[1][:200])
 
     # 5. 切批：每月一条 + 空值一条，且空值那条不能被月份谓词覆盖。
     #    少了空值这一批的后果是静默丢行，所以单独断言。

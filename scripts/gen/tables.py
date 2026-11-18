@@ -568,21 +568,30 @@ def prepare_globals(ctx: Ctx) -> None:
     _prep_posts(ctx)
     prepare_pairs(ctx)
     _prep_users(ctx)
+    # 帖子作者要读注册时间，而赞的时间下界要读（可能被后移过的）发帖时间，所以夹在中间
+    _prep_post_owners(ctx)
     # 社交边的时间要读注册时间和发帖时间，所以在 users / posts / pairs 三者之后。
     _prep_edge_times(ctx)
     # user_profiles 必须在 orders 之前：orders 的金额要按每用户消费倍率缩放（D-01）。
     # 这条顺序就是修复本身——两者顺序反过来，画像与消费之间又没有边了。
     _prep_user_profiles(ctx)
     _prep_orders(ctx)
+    # 必须在 _prep_order_items 之前：券决定订单头的优惠与 total_amount，明细按头缩放
+    _prep_order_coupons(ctx)
     _prep_order_items(ctx)
     # 必须在 _prep_order_items 之后：products 的五个计数器从明细的实际售出回填。
     _prep_product_counters(ctx)
     _prep_payments(ctx)
     _prep_user_coupons(ctx)
     _prep_behavior(ctx)
+    # 设备挂在会话之后：每个会话落在本人的某台设备上，设备的首末出现时间从会话回填
+    _prep_devices(ctx)
     _prep_social(ctx)
     _prep_user_level(ctx)
+    # 分群成员按 user_segments.rules_json 从事实推导，要读消费、活跃、画像、设备
+    _prep_segments(ctx)
 
+    _prep_ab_assignments(ctx)
     _prep_attributions(ctx)
     # 必须在 _prep_attributions 之后：成本表的 installs / cost 从「归因到本渠道、
     # 且当天注册的新客数」派生，那份真值在上一步才落地。
@@ -964,6 +973,17 @@ def _prep_users(ctx: Ctx) -> None:
         reg.astype("datetime64[D]") - ctx.start.astype("datetime64[D]")
     ).astype(np.int64)
     ctx.cache["users_is_vip"] = F.bool_p(ctx.rng("users", "is_vip", "global"), nu, 0.12)
+    # 分群规则要读注册来源（推广注册用户），所以提到全局。随机流键沿用 builder 原来的
+    # (users, 列, off=0)：users 远小于 SHARD_ROWS，原来就是单分片 off=0，取值一字不变。
+    assert nu <= budget.SHARD_ROWS, "users 超过单分片，registration_source 的随机流身份会变"
+    ctx.cache["users_reg_source"] = F.enum(
+        ctx.rng("users", "registration_source", 0), nu,
+        ["referral", "organic", "huawei_store", "web",
+         "ad_campaign", "wechat_mini", "app_store", "google_play"],
+        [73, 68, 65, 62, 61, 59, 57, 55])
+    ctx.cache["users_status"] = F.enum(ctx.rng("users", "status", 0), nu,
+                                       ["active", "inactive", "deleted", "suspended"],
+                                       [376, 68, 30, 26])
 
 
 def _prep_user_profiles(ctx: Ctx) -> None:
@@ -1037,8 +1057,13 @@ def _prep_user_profiles(ctx: Ctx) -> None:
             * _lookup(decade, gen.age_decade_mult))
     mult /= mult.mean()                      # 归一：全库 GMV 量级不漂移
 
+    # 城市同理提到全局（一线城市用户分群要读），随机流键沿用 builder 的 off=0
+    ci = ctx.rng("user_profiles", "city", 0).choice(
+        len(CITIES), size=nu, replace=True,
+        p=np.array([c[2] for c in CITIES], float) / sum(c[2] for c in CITIES))
     ctx.cache["user_profiles"] = {"age": age, "gender": gender,
-                                  "income_level": income, "occupation": occupation}
+                                  "income_level": income, "occupation": occupation,
+                                  "city_idx": ci}
     ctx.cache["user_spend_multiplier"] = mult
 
 
@@ -1122,6 +1147,24 @@ def _prep_orders(ctx: Ctx) -> None:
         "actual_amount": np.round(total - disc + ship, 2),
         "is_valid": np.isin(status, list(VALID_STATUS)),
     }
+    # 生命周期时间戳全局算一次（2026-11 数据普查）：原来在 build_orders 里逐块抽，
+    # payments 又按自己的流另抽一份 paid_at / refunded_at，同一笔支付两张表的时间
+    # 99.99% 对不上（相差可达 ±3.4 小时）。现在两张表读同一份。
+    life_status = status
+    pl = ctx.cache["orders"]["placed_at"]
+    ctx.cache["orders_life"] = {
+        "paid_at": _cond_ts(ctx.rng("orders", "paid_at", "global"), pl,
+                            np.isin(life_status, ["paid", "shipped", "delivered", "refunded"]),
+                            1, 240, ctx.as_of_end),
+        "shipped_at": _cond_ts(ctx.rng("orders", "shipped_at", "global"), pl,
+                               np.isin(life_status, ["shipped", "delivered"]), 240, 2880, ctx.as_of_end),
+        "delivered_at": _cond_ts(ctx.rng("orders", "delivered_at", "global"), pl,
+                                 life_status == "delivered", 2880, 10080, ctx.as_of_end),
+        "cancelled_at": _cond_ts(ctx.rng("orders", "cancelled_at", "global"), pl,
+                                 life_status == "cancelled", 5, 1440, ctx.as_of_end),
+        "refunded_at": _cond_ts(ctx.rng("orders", "refunded_at", "global"), pl,
+                                life_status == "refunded", 1440, 20160, ctx.as_of_end),
+    }
 
     # 每单件数：长尾、至少 1 行。orders.item_count 必须从这里读——
     # 旧版 builder 另抽了一份 int_weighted，70% 的单与明细行数不符（审计 L4.2）。
@@ -1135,8 +1178,131 @@ def _prep_orders(ctx: Ctx) -> None:
     # 用户核销的券必须是他持有的那一张，而"持有"要受 coupons.per_user_limit 约束
     # （P1-11）。方向只能是 user_coupons → orders：在这里先按 150 张券均匀抽的话，
     # 一个用户在同一张限领 1 张的券上下 26 单也照样"合法"——实测就是这个形态。
+    # 2026-11：这里只定「想用券」的候选单；能不能用上、用哪张，由 _prep_order_coupons
+    # 按券的有效期 / 门槛 / 每人限领判定，用不上的候选单回退为不用券。
     has_cp = ctx.rng("orders", "coupon_id", "global").random(no) < 0.38
     ctx.cache["orders_coupon_rows"] = np.flatnonzero(has_cp)      # 0-based
+
+
+def _coupon_arrays(ctx: Ctx) -> dict:
+    """150 张券的属性按 coupon_id 顺序排成数组（向量化判定用）。"""
+    if "_coupon_arrays" in ctx.cache:
+        return ctx.cache["_coupon_arrays"]
+    info, lim = ctx.dim_ids["_coupon_info"], ctx.dim_ids["_coupon_limits"]
+    cid = np.array(sorted(info), dtype=np.int64)
+    a = {
+        "id": cid,
+        "type": np.array([info[c]["type"] for c in cid], dtype=object),
+        "value": np.array([info[c]["value"] for c in cid], float),
+        "min": np.array([info[c]["min"] for c in cid], float),
+        "max": np.array([np.nan if info[c]["max"] is None else info[c]["max"] for c in cid], float),
+        "valid_days": np.array([info[c]["valid_days"] for c in cid], np.int64),
+        "start": np.array([info[c]["start"] for c in cid], dtype="datetime64[s]"),
+        "end": np.array([info[c]["end"] for c in cid], dtype="datetime64[s]"),
+        "limit": np.array([lim[int(c)] for c in cid], np.int64),
+    }
+    ctx.cache["_coupon_arrays"] = a
+    return a
+
+
+def _coupon_discount(ca: dict, goods: np.ndarray, ship: np.ndarray) -> tuple:
+    """每单 × 每张券的 (优惠额, 商品总额)，实付 actual 固定不变（GMV 不漂移）。
+
+    goods = actual − shipping_fee（扣掉运费后实付的商品钱）。三类券：
+      fixed_amount   优惠 = 面值；商品总额 = goods + 面值
+      percentage     discount_value 是「减百分之几」（20 = 8 折）：商品总额 = goods / (1 − v%)，
+                     优惠 = 总额 − goods；超过 max_discount 时封顶，总额 = goods + 封顶额
+      free_shipping  优惠 = 运费；商品总额 = goods + 运费（= actual）
+    返回的两个矩阵形状都是 (单数, 券数)，按分取整。
+    """
+    g = goods[:, None]
+    typ, v, mx = ca["type"][None, :], ca["value"][None, :], ca["max"][None, :]
+    pv = np.where(typ == "percentage", v, 0.0)          # 只有百分比券走这条，别的券面值可能是 100
+    pct_total = g / (1.0 - pv / 100.0)
+    pct_disc = pct_total - g
+    pct_disc = np.where(np.isnan(mx), pct_disc, np.minimum(pct_disc, mx))
+    disc = np.where(typ == "fixed_amount", v,
+                    np.where(typ == "percentage", pct_disc, ship[:, None] + 0 * v))
+    disc = np.round(disc, 2)
+    return disc, np.round(g + disc, 2)
+
+
+def _prep_order_coupons(ctx: Ctx) -> None:
+    """给候选用券单分配一张**用得上**的券，并由券反推订单头的优惠与商品总额（2026-11）。
+
+    原来订单的 discount_amount 按 0/5/10/20% 独立抽（与用没用券无关），券号又在
+    _prep_user_coupons 里从持有槽位随机配：37% 的用券单不满门槛、56% 不在券有效期内、
+    max_discount 封顶被突破，没用券的单也有优惠。
+
+    现在：实付 actual_amount、运费不动（GMV 及全部金标不漂移），对每张候选单判定
+    「下单时刻在券有效期内 ∧ 商品总额 ≥ 门槛 ∧ 每人限领未用完 ∧（包邮券要有运费）」，
+    在用得上的券里均匀随机挑一张；用不上任何券的候选单回退为不用券。
+    订单头 discount_amount = 券的优惠（不用券为 0），total_amount = actual − 运费 + 优惠，
+    恒等式 actual = total − discount + shipping 照旧精确成立。order_items 的
+    discount_amount 是单品级促销，与订单头的券优惠是两层，不相加也不相等。
+    """
+    og = ctx.cache["orders"]
+    ca = _coupon_arrays(ctx)
+    nc = len(ca["id"])
+    cand = ctx.cache["orders_coupon_rows"]
+    uid = ctx.cache["orders_user_id"][cand]
+    placed = og["placed_at"][cand].astype("datetime64[s]")
+    ship = og["shipping_fee"][cand].astype(float)
+    goods = np.round(og["actual_amount"][cand] - ship, 2)
+
+    disc_m = np.empty((len(cand), nc), np.float32)
+    elig = np.empty((len(cand), nc), bool)
+    CH = 50_000
+    for a in range(0, len(cand), CH):
+        b = min(a + CH, len(cand))
+        d, t = _coupon_discount(ca, goods[a:b], ship[a:b])
+        disc_m[a:b] = d
+        p = placed[a:b, None]
+        elig[a:b] = ((ca["start"][None, :] <= p) & (p <= ca["end"][None, :])
+                     & (t >= ca["min"][None, :]) & (d > 0))
+
+    # 逐轮挑券：每轮每张未定单在剩余可用券里随机挑一张；同一 (用户, 券) 上按下单
+    # 先后排队，超出每人限领的退回、把这张券从它的可选里划掉，下一轮再挑
+    r = ctx.rng("orders", "coupon_pick", "global")
+    chosen = np.full(len(cand), -1, np.int64)
+    used = {}                                            # (uid*1000+券下标) → 已用张数
+    todo = np.flatnonzero(elig.any(axis=1))
+    for _ in range(12):
+        if len(todo) == 0:
+            break
+        sc = r.random((len(todo), nc)).astype(np.float32)
+        sc[~elig[todo]] = -1.0
+        pick = sc.argmax(axis=1)
+        ok_any = sc[np.arange(len(todo)), pick] >= 0
+        todo, pick = todo[ok_any], pick[ok_any]
+        key = uid[todo] * 1000 + pick
+        o = np.lexsort((placed[todo], key))
+        ks = key[o]
+        rank = np.arange(len(ks)) - np.searchsorted(ks, ks, side="left")
+        prev = np.array([used.get(int(k), 0) for k in ks], np.int64)
+        acc = prev + rank < ca["limit"][pick[o]]
+        chosen[todo[o[acc]]] = pick[o[acc]]
+        uk, uc = np.unique(ks[acc], return_counts=True)
+        for k, c in zip(uk.tolist(), uc.tolist()):
+            used[k] = used.get(k, 0) + c
+        rej = todo[o[~acc]]
+        elig[rej, pick[o[~acc]]] = False
+        todo = rej[elig[rej].any(axis=1)]
+
+    got = chosen >= 0
+    rows = cand[got]
+    disc = np.zeros(ctx.n("orders"))
+    disc[rows] = disc_m[np.flatnonzero(got), chosen[got]].astype(float)
+    disc = np.round(disc, 2)
+    total = np.round(og["actual_amount"] - og["shipping_fee"] + disc, 2)
+    assert np.allclose(total - disc + og["shipping_fee"], og["actual_amount"], atol=0.005)
+    og["discount_amount"] = disc
+    og["total_amount"] = total
+    ctx.cache["orders_coupon_rows"] = rows
+    coupon = np.full(ctx.n("orders"), None, dtype=object)
+    coupon[rows] = ca["id"][chosen[got]]
+    ctx.cache["orders_coupon_id"] = coupon
+    ctx.cache["orders_coupon_idx"] = chosen[got]          # 券下标（与 rows 一一对应）
 
 
 def _prep_order_items(ctx: Ctx) -> None:
@@ -1157,37 +1323,83 @@ def _prep_order_items(ctx: Ctx) -> None:
 
     qty = F.int_weighted(ctx.rng("order_items", "quantity", "global"), ni,
                          [1, 2, 3, 5], [68, 20, 8, 4])
-    unit = F.decimal_lognorm(ctx.rng("order_items", "unit_price", "global"), ni,
-                             79.0, sigma=0.8, lo=4.9, hi=9999)
     rate = F.enum(ctx.rng("order_items", "disc", "global"), ni,
                   [0.0, 0.05, 0.15], [70, 20, 10]).astype(float)
+    total = ctx.cache["orders"]["total_amount"]
+    head_c = np.round(total * 100).astype(np.int64)
 
-    raw = unit * qty * (1.0 - rate)                     # 未缩放的行净额
-    scale = np.repeat(ctx.cache["orders"]["total_amount"]
-                      / np.add.reduceat(raw, starts), cnt)
+    # —— 选 SKU：按「价格贴合」挑，成交单价 = 商品标价（2026-11 数据普查）——
+    # 原来 unit_price 是独立抽的对数正态再按单缩放，与所购商品的 price 相关系数 ≈ 0
+    # （¥12,359 的商品按 ¥3 成交、¥4.9 的商品按 ¥800 成交）。现在：先把订单头的商品总额
+    # 按权重拆到各行，得到每行的目标标价 P* = 行份额 /（件数 ×（1 − 单品促销率）），
+    # 再在标价 ∈ [P*, 1.10·P*] 的商品里按热度加权挑一个（窗口为空就取标价不低于 P* 的
+    # 最便宜那个）。头的 total_amount 不动，行实付按单缩放后 ≤ 标价 × 件数，差额就是
+    # 单品优惠 discount_amount（非负）。
+    p = ctx.cache["products"]
+    price_c_all = np.round(np.asarray(p["price"], float) * 100).astype(np.int64)
+    np_ = len(price_c_all)
+    order_p = np.argsort(price_c_all, kind="stable")
+    price_sorted = price_c_all[order_p]
+    pop = ctx.rng("order_items", "popularity", "global").lognormal(0.0, 1.2, np_)
+    cw = np.concatenate(([0.0], np.cumsum(pop[order_p])))
 
-    head_c = np.round(ctx.cache["orders"]["total_amount"] * 100).astype(np.int64)
-    act_c = np.round(raw * scale * 100).astype(np.int64)
+    split = ctx.rng("order_items", "split", "global").lognormal(0.0, 0.6, ni)
+    share = split / np.repeat(np.add.reduceat(split, starts), cnt)
+    gross_c = np.repeat(head_c, cnt) * share                     # 行份额（分）
+    pmax = float(price_sorted[-1])
+    big = gross_c / (qty * (1.0 - rate)) > 0.8 * pmax              # 单价放不下就加件数
+    qty = np.where(big, np.ceil(gross_c / (0.8 * pmax)).astype(np.int64), qty)
+    target = gross_c / (qty * (1.0 - rate))
+    lo = np.searchsorted(price_sorted, np.ceil(target), side="left")
+    hi = np.searchsorted(price_sorted, target * 1.10, side="right")
+    lo = np.minimum(lo, np_ - 1)
+    hi = np.maximum(hi, lo + 1)
+    u = ctx.rng("order_items", "product_id", "global").random(ni)
+    pos = np.searchsorted(cw, cw[lo] + u * (cw[hi] - cw[lo]), side="right") - 1
+    pos = np.clip(pos, lo, hi - 1)
+    prod_idx = order_p[pos]
+    unit_c = price_c_all[prod_idx]
+
+    # 标价 × 件数之和不足头总额的单（窗口为空、取了更便宜的 SKU）：给该单最贵的一行加件数补足
+    for _ in range(3):
+        list_c = unit_c * qty
+        short = head_c - np.add.reduceat(list_c, starts)
+        bad = np.flatnonzero(short > 0)
+        if len(bad) == 0:
+            break
+        seg = [np.arange(starts[o], ends[o] + 1) for o in bad]
+        top = np.array([g[np.argmax(unit_c[g])] for g in seg], np.int64)
+        qty[top] += -(-short[bad] // unit_c[top])
+    list_c = unit_c * qty
+    assert (np.add.reduceat(list_c, starts) >= head_c).all(), "有订单的标价合计仍低于头总额"
+
+    # 行实付：按「标价 ×（1 − 单品促销率）」的比例分摊头总额，末行吸收舍入差
+    raw = list_c * (1.0 - rate)
+    act_c = np.floor(raw * np.repeat(head_c / np.add.reduceat(raw, starts), cnt)).astype(np.int64)
+    act_c = np.minimum(act_c, list_c)
     act_c[ends] += head_c - np.add.reduceat(act_c, starts)
-    # 末行吸收的舍入差 < 件数×0.5 分，而缩放后行净额至少若干分，不该出现非正金额；
-    # 万一行预算/件数分布改到极端值，这里要炸出来而不是灌进库
-    assert (act_c > 0).all(), "明细缩放出现非正金额，检查件数分布与订单头下限"
-
-    disc_c = np.clip(np.round(unit * qty * rate * scale * 100), 0, None).astype(np.int64)
-    unit_c = -(-(act_c + disc_c) // qty)                # ceil 到分，保证行折扣非负
-
-    # 卖的是哪个 SKU **也在这里定**（原来在 build_order_items 里逐分片抽）。挪上来是因为
-    # products.sold_count 要从这份归属回填，而回填必须看到全量明细。分片抽样在当前规模下
-    # 本来就是单分片（order_items 180 万行 < SHARD_ROWS 500 万），换到全局只改随机流身份、
-    # 不改分布族；而它换来的是「累计销量与窗内销量指向同一批 SKU」这条跨表闭环。
-    prod_idx = F.fk_skewed(ctx.rng("order_items", "product_id", "global"), ni,
-                           1, len(ctx.dim_ids["products"])) - 1
+    # 末行吸收后若超过自身标价，把超出部分挪回同单其它行（仍不超各自标价）
+    over = np.flatnonzero(act_c[ends] > list_c[ends])
+    for o in over:
+        e = ends[o]
+        extra = act_c[e] - list_c[e]
+        act_c[e] = list_c[e]
+        for j in range(starts[o], e):
+            room = list_c[j] - act_c[j]
+            take = min(room, extra)
+            act_c[j] += take
+            extra -= take
+            if extra == 0:
+                break
+        assert extra == 0, "订单头总额超过标价合计"
+    assert (act_c > 0).all(), "明细出现非正金额，检查件数分布与订单头下限"
+    assert (act_c <= list_c).all()
 
     ctx.cache["items"] = {
         "product_idx": prod_idx,
         "quantity": qty,
-        "unit_price": unit_c / 100.0,
-        "discount_amount": (unit_c * qty - act_c) / 100.0,   # 公式精确成立
+        "unit_price": unit_c / 100.0,                         # = products.price
+        "discount_amount": (unit_c * qty - act_c) / 100.0,   # 公式精确成立，非负
         "actual_amount": act_c / 100.0,
         "created_at": ctx.cache["orders"]["placed_at"][
             F.expand_ids(np.arange(no), cnt)],
@@ -1305,84 +1517,129 @@ def _prep_user_coupons(ctx: Ctx) -> None:
     槽位下标 int16 约 19MB。
     """
     n_uc, nu = ctx.n("user_coupons"), ctx.n("users")
-    limits = ctx.dim_ids["_coupon_limits"]
-    # 槽位表：券 c 连续出现 limit(c) 次。排布顺序无关——每个用户拿到的是槽位下标的
-    # 一个**均匀随机子集**，所以券的边际分布本来就是均匀的，不必再打散一遍。
-    slot_coupon = np.concatenate(
-        [np.full(limits[int(c)], int(c), dtype=np.int64) for c in ctx.dim_ids["coupons"]])
-    cap = len(slot_coupon)
+    ca = _coupon_arrays(ctx)
+    nc = len(ca["id"])
+    # 槽位表：券 k（下标）连续出现 limit(k) 次
+    slot_k = np.repeat(np.arange(nc, dtype=np.int64), ca["limit"])
+    slot_start = np.concatenate(([0], np.cumsum(ca["limit"])[:-1]))
+    cap = len(slot_k)
 
+    # 核销段：每个用券订单一行，券 = _prep_order_coupons 分配的那张（已守住每人限领）
     cp_rows = ctx.cache["orders_coupon_rows"]
     o_uid = ctx.cache["orders_user_id"][cp_rows]
+    o_k = ctx.cache["orders_coupon_idx"]
     n_used = len(cp_rows)
     if n_used > n_uc:
-        raise ValueError(f"用券订单 {n_used} 超过 user_coupons 行预算 "
-                         f"{ctx.n('user_coupons')}，先调 budget")
+        raise ValueError(f"用券订单 {n_used} 超过 user_coupons 行预算 {n_uc}，先调 budget")
     used_cnt = np.bincount(o_uid, minlength=nu + 1)[1:]
-    if int(used_cnt.max()) > cap:
-        raise ValueError(f"有用户下了 {used_cnt.max()} 单用券，超过全库槽位总数 {cap}，"
-                         f"限领无论怎么分配都守不住——先调 orders 的用券比例或 budget")
+    # 核销行占用的槽位：(用户, 券) 组内第 r 张占该券的第 r 个槽位
+    key = o_uid * 1000 + o_k
+    o = np.argsort(key, kind="stable")
+    ks = key[o]
+    rank = np.arange(n_used) - np.searchsorted(ks, ks, side="left")
+    used_slot = np.empty(n_used, np.int64)
+    used_slot[o] = slot_start[o_k[o]] + rank
+    assert (rank < ca["limit"][o_k[o]]).all(), "核销行越过每人限领"
 
-    # 未核销行的用户仍按 fk_skewed 的集中度抽，再把越过 cap 的部分搬走
+    # 每个用户的可领槽位：券的结束时间不早于他的注册时间（注册前就结束的券领不到——
+    # 原来领券时刻只看注册，12.9% 的领券早于券开始、大量晚于券结束）
+    reg = ctx.cache["users_registered_at"].astype("datetime64[s]")
+    ends_sorted = np.sort(ca["end"][slot_k])
+    feas = cap - np.searchsorted(ends_sorted, reg, side="left")
+    room_u = feas - used_cnt
+    assert (room_u >= 0).all(), "有用户的核销张数超过他可领的槽位"
+
     want = np.bincount(F.fk_skewed(ctx.rng("user_coupons", "user_id", "global"),
                                    n_uc - n_used, 1, nu), minlength=nu + 1)[1:]
-    cnt = used_cnt + want
-    spill = int(np.maximum(cnt - cap, 0).sum())
-    cnt = np.minimum(cnt, cap)
+    g = np.minimum(want, room_u)
+    spill = int((want - g).sum())
     sr = ctx.rng("user_coupons", "spill", "global")
     for _ in range(32):
         if spill == 0:
             break
-        room = cap - cnt
+        room = (room_u - g).astype(float)
         pick = sr.choice(nu, size=spill, replace=True, p=room / room.sum())
-        add = np.minimum(np.bincount(pick, minlength=nu), room)
-        cnt += add
+        add = np.minimum(np.bincount(pick, minlength=nu), room_u - g)
+        g += add
         spill -= int(add.sum())
     if spill:
-        raise ValueError(f"槽位余量搬运 32 轮后仍剩 {spill} 行安置不下（全库容量 "
-                         f"{nu * cap}，需要 {n_uc}）")
-    assert int(cnt.sum()) == n_uc, (int(cnt.sum()), n_uc)
+        raise ValueError(f"槽位余量搬运 32 轮后仍剩 {spill} 行安置不下")
+    n_free = n_uc - n_used
+    assert int(g.sum()) == n_free
 
-    # 每个用户无放回抽 cnt[u] 个槽位下标
-    start = np.concatenate(([0], np.cumsum(cnt)))
-    slot_of = np.empty(n_uc, dtype=np.int16)
+    # 每个用户在「可领 ∧ 未被核销占用」的槽位里无放回抽 g[u] 个
+    free_start = np.concatenate(([0], np.cumsum(g)))
+    free_slot = np.empty(n_free, dtype=np.int16)
+    slot_end = ca["end"][slot_k]
+    used_u_order = np.argsort(o_uid, kind="stable")
+    used_u_sorted = o_uid[used_u_order]
     r = ctx.rng("user_coupons", "slots", "global")
     CHUNK = 20_000
     for a in range(0, nu, CHUNK):
         b = min(a + CHUNK, nu)
-        k = cnt[a:b]
+        k = g[a:b]
         if int(k.max()) == 0:
             continue
-        rank = np.argsort(r.random((b - a, cap)), axis=1)      # 每行一个随机排列
-        slot_of[start[a]:start[b]] = rank[np.arange(cap)[None, :] < k[:, None]]
-
-    # 核销段：每个用户的前 used_cnt[u] 个槽位配给他的用券订单（订单序）
-    ord_u = np.argsort(o_uid, kind="stable")
-    ustart = np.concatenate(([0], np.cumsum(used_cnt)))
-    off_in_grp = np.arange(n_used) - np.repeat(ustart[:-1], used_cnt)
-    used_slot = np.empty(n_used, dtype=np.int64)
-    used_slot[ord_u] = slot_of[np.repeat(start[:-1], used_cnt) + off_in_grp]
-
-    # 未核销段：每个用户剩下的槽位。按用户顺序摊平后整体打乱——不打乱的话整段
-    # 按 user_id 排好序，`SELECT * FROM user_coupons LIMIT 20` 会全是同一个人。
-    g = cnt - used_cnt
-    n_free = n_uc - n_used
-    off_in_grp = np.arange(n_free) - np.repeat(
-        np.concatenate(([0], np.cumsum(g)))[:-1], g)
-    free_slot = slot_of[np.repeat(start[:-1] + used_cnt, g) + off_in_grp]
+        sc = r.random((b - a, cap))
+        sc[slot_end[None, :] < reg[a:b, None]] = 2.0          # 注册前已结束的券
+        lo, hi = np.searchsorted(used_u_sorted, [a + 1, b + 1])
+        jj = used_u_order[lo:hi]
+        sc[o_uid[jj] - 1 - a, used_slot[jj]] = 2.0              # 已被核销行占用
+        rank_m = np.argsort(sc, axis=1)
+        free_slot[free_start[a]:free_start[b]] = rank_m[np.arange(cap)[None, :] < k[:, None]]
     free_uid = np.repeat(np.arange(1, nu + 1, dtype=np.int64), g)
     shuf = ctx.rng("user_coupons", "shuffle", "global").permutation(n_free)
 
-    uc_uid = np.concatenate([o_uid, free_uid[shuf]])
-    uc_cp = np.concatenate([slot_coupon[used_slot], slot_coupon[free_slot[shuf]]])
-    ctx.cache["uc_user_id"] = uc_uid
-    ctx.cache["uc_coupon_id"] = uc_cp
+    ctx.cache["uc_user_id"] = np.concatenate([o_uid, free_uid[shuf]])
+    ctx.cache["uc_coupon_idx"] = np.concatenate([o_k, slot_k[free_slot[shuf]]])
+    ctx.cache["uc_coupon_id"] = ca["id"][ctx.cache["uc_coupon_idx"]]
     ctx.cache["uc_n_used"] = n_used
+    _prep_coupon_times(ctx)
 
-    # 回写订单的券号（见本函数与 _prep_orders 的注释：方向是 user_coupons → orders）
-    coupon = np.full(ctx.n("orders"), None, dtype=object)
-    coupon[cp_rows] = slot_coupon[used_slot]
-    ctx.cache["orders_coupon_id"] = coupon
+
+def _prep_coupon_times(ctx: Ctx) -> None:
+    """领券 / 到期 / 状态，以及 coupons 维表的发放量回填。
+
+    核销行：received ∈ [max(注册, 券开始, 下单 − valid_days), 下单)，所以下单时券既已
+    领到、也没过期；used_at = 下单时刻。
+    未用行：received ∈ [max(注册, 券开始), min(券结束, 窗末)]。
+    expire_at = received + valid_days（原来恒为 +30 天，与券的 valid_days 无关）；
+    status：used / 到期早于快照时刻（锚点日末）为 expired / 否则 unused。
+    """
+    ca = _coupon_arrays(ctx)
+    uid = ctx.cache["uc_user_id"]
+    k = ctx.cache["uc_coupon_idx"]
+    n_used = ctx.cache["uc_n_used"]
+    n = len(uid)
+    reg = ctx.cache["users_registered_at"][uid - 1].astype("datetime64[s]")
+    vd = ca["valid_days"][k].astype("timedelta64[D]").astype("timedelta64[s]")
+    c_st, c_en = ca["start"][k], ca["end"][k]
+    anchor = ctx.as_of_end.astype("datetime64[s]")
+    r = ctx.rng("user_coupons", "recv", "global")
+    u = r.random(n)
+
+    placed = np.full(n, anchor)
+    placed[:n_used] = ctx.cache["orders"]["placed_at"][ctx.cache["orders_coupon_rows"]].astype("datetime64[s]")
+    one = np.timedelta64(1, "s")
+    lo_u = np.maximum(np.maximum(reg, c_st), placed - vd + one)
+    hi_u = placed - one
+    lo_f = np.maximum(reg, c_st)
+    hi_f = np.minimum(c_en, anchor)
+    used = np.arange(n) < n_used
+    lo = np.where(used, lo_u, lo_f)
+    hi = np.maximum(np.where(used, hi_u, hi_f), lo)
+    span = (hi - lo).astype("timedelta64[s]").astype(np.int64)
+    # 领券偏向靠近下单 / 靠近券上线：核销行取 u^0.5（贴近下单），未用行取 u^1.8（贴近起点）
+    w = np.where(used, u ** 0.5, u ** 1.8)
+    recv = lo + (w * span).astype(np.int64).astype("timedelta64[s]")
+    expire = recv + vd
+    assert (recv >= reg).all() and (recv >= c_st).all() and (recv <= anchor).all()
+    assert (expire[used] >= placed[used]).all() and (recv[used] < placed[used]).all()
+    ctx.cache["uc_received_at"] = recv
+    ctx.cache["uc_expire_at"] = expire
+    ctx.cache["uc_status"] = np.where(used, "used",
+                                      np.where(expire < anchor, "expired", "unused"))
+    ctx.cache["coupons_issued"] = np.bincount(k, minlength=len(ca["id"]))
 
 
 def _prep_behavior(ctx: Ctx) -> None:
@@ -1421,13 +1678,17 @@ def _prep_behavior(ctx: Ctx) -> None:
                 .astype("timedelta64[s]"))
     # 注册当天的会话（k=0）小时可能抽在注册时刻之前——按天对齐挡不住小时倒挂，
     # 钳到注册后 60 秒（selftest_closures 抓过这个）
-    start_ts = np.maximum(
-        start_ts, np.repeat(ctx.cache["users_registered_at"], per_user)
-        .astype("datetime64[s]") + np.timedelta64(60, "s"))
+    reg_rep = np.repeat(ctx.cache["users_registered_at"], per_user).astype("datetime64[s]")
+    start_ts = np.maximum(start_ts, reg_rep + np.timedelta64(60, "s"))
+    # 每用户的首会话就是注册那一次会话：从注册时刻开始（register 事件挂在它上面，
+    # 原来首会话的开始时间是随机抽的，register 事件 4.9% 落在会话开始之前）
+    start_ts[first_sess[1:] - 1] = reg_rep[first_sess[1:] - 1]
+    start_ts = np.minimum(start_ts, win_end - np.timedelta64(1, "s"))
     dur = F.int_weighted(ctx.rng("sessions", "duration_seconds", "global"), ns,
                          [12, 45, 120, 300, 900, 2400], [18, 22, 24, 20, 12, 4])
-    dur = np.minimum(dur, np.maximum(
-        (win_end - start_ts).astype("timedelta64[s]").astype(np.int64) - 1, 12))
+    # 会话不越过窗末。原来下限钳在 12 秒，窗末最后几秒开始的会话会越界，其上的
+    # page_view 被钳回窗末后反而早于会话开始（审计 235 行）
+    dur = np.minimum(dur, (win_end - start_ts).astype("timedelta64[s]").astype(np.int64) - 1)
 
     # --- 事件：泛化段（漏斗权重）+ 保底段（从事实表反向） ---
     names = ctx.dim_ids["event_definitions"]
@@ -1456,26 +1717,45 @@ def _prep_behavior(ctx: Ctx) -> None:
         return int(pos[0])
 
     reg_ts = ctx.cache["users_registered_at"].astype("datetime64[s]")
-    rr = ctx.rng("events", "reserved")
-    # register：每用户一条，挂本人首会话，时刻 = 注册时刻
+    life = ctx.cache["orders_life"]
+    # register：每用户一条，挂本人首会话（从注册时刻开始），时刻 = 注册时刻
     res_uid = [np.arange(1, nu + 1, dtype=np.int64)]
     res_sess = [first_sess[1:]]
     res_time = [reg_ts]
     res_name = [np.full(nu, _idx_of("register"), np.int16)]
-    # purchase：每有效单一条，挂下单人首会话，时刻 ≈ 支付窗口内
+    # purchase：每有效单一条，时刻 = 支付时刻 paid_at（与 orders / payments 同一份）；
+    # use_coupon：每个用券订单一条，时刻 = 下单时刻。这两类是服务端事件，所属会话取
+    # 「该用户覆盖此刻的会话」，没有就是 NULL——原来一律挂在下单人的**首会话**上，
+    # 时刻是下单后随机 1–4 小时，13% 的事件落在所属会话窗口之外。
     o_uid = ctx.cache["orders_user_id"][valid_idx]
+    p_time = np.minimum(life["paid_at"][valid_idx].astype("datetime64[s]"),
+                        win_end - np.timedelta64(1, "s"))
     res_uid.append(o_uid)
-    res_sess.append(first_sess[o_uid])
-    res_time.append(og["placed_at"][valid_idx].astype("datetime64[s]")
-                    + rr.integers(60, 4 * 3600, len(valid_idx))
-                    .astype("timedelta64[s]"))
+    res_time.append(p_time)
     res_name.append(np.full(len(valid_idx), _idx_of("purchase"), np.int16))
-    # use_coupon：每核销券一条（= 每个用券订单），时刻 = 下单时刻
     c_uid = ctx.cache["orders_user_id"][cp_rows]
+    c_time = og["placed_at"][cp_rows].astype("datetime64[s]")
     res_uid.append(c_uid)
-    res_sess.append(first_sess[c_uid])
-    res_time.append(og["placed_at"][cp_rows].astype("datetime64[s]"))
+    res_time.append(c_time)
     res_name.append(np.full(len(cp_rows), _idx_of("use_coupon"), np.int16))
+
+    t0 = ctx.start.astype("datetime64[s]")
+    s_sec = (start_ts - t0).astype("timedelta64[s]").astype(np.int64)
+    e_sec = s_sec + dur
+    K = np.int64(1) << 33
+    order = np.lexsort((s_sec, sess_user))
+    keys = sess_user[order] * K + s_sec[order]
+
+    def _covering(uid: np.ndarray, t: np.ndarray) -> np.ndarray:
+        """该用户在 t 时刻所处的会话（session_id），不在任何会话内为 -1。"""
+        ts = (t - t0).astype("timedelta64[s]").astype(np.int64)
+        j = np.searchsorted(keys, uid * K + ts, side="right") - 1
+        jj = order[np.maximum(j, 0)]
+        ok = (j >= 0) & (sess_user[jj] == uid) & (e_sec[jj] >= ts)
+        return np.where(ok, jj + 1, -1)
+
+    res_sess.append(_covering(o_uid, p_time))
+    res_sess.append(_covering(c_uid, c_time))
 
     ev_sess = np.concatenate([g_sess] + res_sess)
     ev_time = np.concatenate([g_time.astype("datetime64[s]")]
@@ -1514,13 +1794,223 @@ def _prep_behavior(ctx: Ctx) -> None:
                                "view_time": pv_time}
 
     # --- 会话计数从事实回填（旧版 event_count 拍脑袋，虚高 5.75 倍，审计 L4.4）---
-    ev_cnt = np.bincount(ev_sess, minlength=ns + 1)[1:]
+    ev_cnt = np.bincount(ev_sess[ev_sess > 0], minlength=ns + 1)[1:]
     pv_cnt = np.bincount(pv_sess, minlength=ns + 1)[1:]
     ctx.cache["sessions"] = {
         "user_id": sess_user, "start_time": start_ts,
         "duration_seconds": dur, "event_count": ev_cnt,
         "page_view_count": pv_cnt, "is_bounce": pv_cnt <= 1,
     }
+
+
+def _prep_devices(ctx: Ctx) -> None:
+    """设备归属与首末出现时间从会话推导（2026-11 数据普查）。
+
+    原来 user_devices 的 user_id 是独立抽的、首次出现时间全窗随机（48% 早于注册），
+    is_primary 按 62% 独立抽（每用户主设备数 0~5 台都有），而 sessions / events 的
+    device_id = opaque_id(user_id)——会话挂的那台设备在 user_devices 里属于**另一个用户**。
+
+    现在：每用户至少一台设备、恰好一台主设备（块内第一台）；每个会话落在本人的某台
+    设备上（70% 主设备）；注册会话固定在主设备上；有会话的设备 first_seen / last_seen =
+    其上会话的最早开始 / 最晚结束，没有会话的设备在注册之后出现。
+    """
+    nu, nd = ctx.n("users"), ctx.n("user_devices")
+    assert nd >= nu, f"user_devices({nd}) 少于 users({nu})，做不到每用户至少一台设备"
+    per = F.children_per_parent(ctx.rng("user_devices", "counts"), nu, nd, min_count=1)
+    d_uid = F.expand_ids(np.arange(1, nu + 1, dtype=np.int64), per)
+    first_dev = np.concatenate(([0], np.cumsum(per)[:-1])).astype(np.int64)   # 0-based
+    is_primary = np.zeros(nd, bool)
+    is_primary[first_dev] = True
+
+    sg = ctx.cache["sessions"]
+    su = sg["user_id"]
+    ns = len(su)
+    r = ctx.rng("sessions", "device")
+    other = np.floor(r.random(ns) * per[su - 1]).astype(np.int64)
+    pick = np.where(r.random(ns) < 0.7, 0, other)
+    # sessions 按用户成块排列（_prep_behavior 的 expand_ids），块首 = 注册会话
+    first_sess = np.concatenate(([0], np.cumsum(np.bincount(su, minlength=nu + 1)[1:])[:-1]))
+    pick[first_sess] = 0                                   # 注册会话在主设备上
+    s_dev = first_dev[su - 1] + pick                       # 0-based 设备行
+    sg["device_row"] = s_dev
+
+    t0 = ctx.start.astype("datetime64[s]")
+    st = (sg["start_time"].astype("datetime64[s]") - t0).astype("timedelta64[s]").astype(np.int64)
+    en = st + sg["duration_seconds"].astype(np.int64)
+    big = np.iinfo(np.int64).max
+    fs = np.full(nd, big, np.int64)
+    np.minimum.at(fs, s_dev, st)
+    ls = np.full(nd, -1, np.int64)
+    np.maximum.at(ls, s_dev, en)
+    has = fs != big
+    reg = ctx.cache["users_registered_at"][d_uid - 1].astype("datetime64[s]")
+    idle_first = _ts_since(ctx.rng("user_devices", "first_seen_at", "global"), reg,
+                           ctx.as_of_end, 2.0).astype("datetime64[s]")
+    first = np.where(has, t0 + np.where(has, fs, 0).astype("timedelta64[s]"), idle_first)
+    idle_last = F.ts_offset(ctx.rng("user_devices", "last_seen_at", "global"), first,
+                            60, 80 * 1440, cap=ctx.as_of_end).astype("datetime64[s]")
+    last = np.where(has, np.minimum(t0 + ls.clip(0).astype("timedelta64[s]"),
+                                    ctx.as_of_end.astype("datetime64[s]")), idle_last)
+    ctx.cache["user_devices"] = {
+        "user_id": d_uid, "is_primary": is_primary,
+        # 权重用现行库实测行数（744 行：android 372 / ios 245 / web 83 / mini_program 44）
+        "device_type": F.enum(ctx.rng("user_devices", "device_type", "global"), nd,
+                              ["android", "ios", "web", "mini_program"], [372, 245, 83, 44]),
+        "first_seen_at": first.astype("datetime64[s]"),
+        "last_seen_at": last.astype("datetime64[s]"),
+        "primary_row": first_dev,
+    }
+
+
+# 一线城市用户分群的城市清单，与 data/csv/user_segments.csv 第 6 条 rules_json 一致
+SEG_FIRST_TIER = ("北京", "上海", "广州", "深圳")
+
+
+def _prep_segments(ctx: Ctx) -> None:
+    """分群成员按 user_segments.rules_json 从事实推导（2026-11 数据普查）。
+
+    原来 (user, segment) 对是随机抽的、entered_at 全窗随机：「高价值用户」里的人
+    累计消费和全体没有差别，「iOS 用户」里大半没有 iOS 设备。现在逐条规则判定，
+    entered_at = 规则开始成立的时刻，exited_at = 规则不再成立的时刻（仍成立为 NULL）：
+
+    1 高价值   累计有效消费 ≥ 5000：进入 = 越过 5000 的那一单的支付时刻；累计不退出
+    2 新注册   注册 ≤ 30 天：进入 = 注册时刻，退出 = 注册 + 30 天（晚于锚点则 NULL）
+    3 沉睡     最后活跃距锚点 ≥ 30 天：进入 = 最后活跃 + 30 天
+    4 VIP      is_vip：进入 = 注册时刻
+    5 年轻     18 ≤ age ≤ 25：进入 = 注册时刻
+    6 一线城市 city ∈ 北上广深：进入 = 注册时刻
+    7 高活跃   某个自然周（窗口起点起每 7 天）会话 ≥ 5 次：进入 = 首个达标周的第 5 次会话，
+               退出 = 最后一个达标周的周末（该周已过完时）
+    8 购物车   最后一次 add_to_cart 之前 30 天内没有有效支付：进入 = 那次加购，
+               退出 = 其后第一笔有效支付（没有则 NULL）
+    9 iOS      拥有 iOS 设备：进入 = 最早一台 iOS 设备的首次出现
+    10 推广注册 registration_source = ad_campaign：进入 = 注册时刻
+
+    主键 (user_id, segment_id) 唯一，每对一行；行数由规则决定，回写 ctx.rows
+    （main.ROWS_WRITEBACK 登记了容差）。当前成员 = exited_at IS NULL。
+    """
+    nu = ctx.n("users")
+    t0 = ctx.start.astype("datetime64[s]")
+    NONE = np.datetime64("NaT", "s")
+    SH = np.int64(1) << 33
+    reg = ctx.cache["users_registered_at"].astype("datetime64[s]")
+    anchor = ctx.as_of_end.astype("datetime64[s]")
+    d30 = np.timedelta64(30 * 86400, "s")
+    uids = np.arange(1, nu + 1, dtype=np.int64)
+    out_u, out_s, out_in, out_ex = [], [], [], []
+
+    def sec(ts):
+        return (ts.astype("datetime64[s]") - t0).astype("timedelta64[s]").astype(np.int64)
+
+    def add(seg, mask, ent, ex=None):
+        m = np.asarray(mask, bool)
+        k = int(m.sum())
+        out_u.append(uids[m])
+        out_s.append(np.full(k, seg, np.int64))
+        out_in.append(np.asarray(ent, "datetime64[s]")[m])
+        out_ex.append(np.full(k, NONE) if ex is None else np.asarray(ex, "datetime64[s]")[m])
+
+    # 1 高价值：按支付时刻累加有效订单金额
+    og, life = ctx.cache["orders"], ctx.cache["orders_life"]
+    v = np.flatnonzero(og["is_valid"])
+    ou = ctx.cache["orders_user_id"][v]
+    pt = life["paid_at"][v].astype("datetime64[s]")
+    amt = og["actual_amount"][v].astype(float)
+    o = np.lexsort((pt, ou))
+    ou_s, pt_s = ou[o], pt[o]
+    c = np.cumsum(amt[o])
+    first_of_user = np.searchsorted(ou_s, ou_s, side="left")
+    cum = c - np.concatenate(([0.0], c))[first_of_user]
+    cross = np.full(nu + 1, NONE)
+    hit = np.flatnonzero(cum >= 5000)
+    if len(hit):
+        u_hit, i_hit = np.unique(ou_s[hit], return_index=True)
+        cross[u_hit] = pt_s[hit[i_hit]]
+    add(1, ~np.isnat(cross[1:]), cross[1:])
+
+    # 2 新注册
+    exit2 = reg + d30
+    add(2, np.ones(nu, bool), reg, np.where(exit2 <= anchor, exit2, NONE))
+
+    # 3 沉睡
+    la = ctx.cache["users_last_active"].astype("datetime64[s]")
+    add(3, la + d30 <= anchor, la + d30)
+
+    # 4 / 5 / 6 / 10：注册时即确定的属性
+    add(4, ctx.cache["users_is_vip"], reg)
+    age = ctx.cache["user_profiles"]["age"]
+    add(5, (age >= 18) & (age <= 25), reg)
+    city = np.array([c_[0] for c_ in CITIES], dtype=object)[ctx.cache["user_profiles"]["city_idx"]]
+    add(6, np.isin(city, SEG_FIRST_TIER), reg)
+
+    # 7 高活跃：每 7 天一桶的会话数
+    sg = ctx.cache["sessions"]
+    su = sg["user_id"]
+    ssec = sec(sg["start_time"])
+    wk = ssec // (7 * 86400)
+    nwk = int(wk.max()) + 1
+    o = np.lexsort((ssec, wk, su))
+    key = su[o] * nwk + wk[o]
+    rank = np.arange(len(key)) - np.searchsorted(key, key, side="left")   # 桶内第几次（0 起）
+    fifth = np.flatnonzero(rank == 4)
+    ent7 = np.full(nu + 1, NONE)
+    ex7 = np.full(nu + 1, NONE)
+    if len(fifth):
+        fu, fw = su[o][fifth], wk[o][fifth]
+        ft = t0 + ssec[o][fifth].astype("timedelta64[s]")
+        u1, i1 = np.unique(fu, return_index=True)          # 按 (user, wk) 有序 ⇒ 首个达标周
+        ent7[u1] = ft[i1]
+        last_i = np.r_[i1[1:], len(fu)] - 1                # 每用户最后一个达标周
+        lw_end = t0 + ((fw[last_i] + 1) * 7 * 86400).astype("timedelta64[s]")
+        ex7[u1] = np.where(lw_end <= anchor, lw_end, NONE)
+    add(7, ~np.isnat(ent7[1:]), ent7[1:], ex7[1:])
+
+    # 8 购物车：最后一次加购，且加购前 30 天内没有有效支付
+    ev = ctx.cache["events"]
+    names = ctx.dim_ids["event_definitions"]
+    atc = int(np.flatnonzero(names == "add_to_cart")[0])
+    m = ev["name_idx"] == atc
+    last_atc = np.full(nu + 1, -1, np.int64)
+    np.maximum.at(last_atc, ev["user_id"][m], sec(ev["event_time"][m]))
+    has8 = last_atc[1:] >= 0
+    lsec = last_atc[1:].clip(0)
+    lt = t0 + lsec.astype("timedelta64[s]")
+    pk = ou_s * SH + sec(pt_s)                             # 有效支付按 (user, 时刻) 有序
+    q = uids * SH + lsec
+    j = np.searchsorted(pk, q, side="right") - 1           # 加购及之前最后一笔支付
+    jj = np.clip(j, 0, len(pk) - 1)
+    recent = (j >= 0) & (ou_s[jj] == uids) & (pt_s[jj] > lt - d30)
+    k = j + 1                                              # 加购之后第一笔支付
+    kk = np.clip(k, 0, len(pk) - 1)
+    nxt = (k < len(pk)) & (ou_s[kk] == uids)
+    add(8, has8 & ~recent, lt, np.where(nxt, pt_s[kk], NONE))
+
+    # 9 iOS：最早一台 iOS 设备的首次出现
+    dv = ctx.cache["user_devices"]
+    im = dv["device_type"] == "ios"
+    big = np.iinfo(np.int64).max
+    ios_first = np.full(nu + 1, big, np.int64)
+    np.minimum.at(ios_first, dv["user_id"][im], sec(dv["first_seen_at"][im]))
+    has9 = ios_first[1:] != big
+    add(9, has9, t0 + np.where(has9, ios_first[1:], 0).astype("timedelta64[s]"))
+
+    # 10 推广注册
+    add(10, ctx.cache["users_reg_source"] == "ad_campaign", reg)
+
+    a = np.concatenate(out_u)
+    b = np.concatenate(out_s)
+    ent = np.concatenate(out_in)
+    ex = np.concatenate(out_ex)
+    segs = set(int(x) for x in ctx.dim_ids["user_segments"])
+    assert set(np.unique(b).tolist()) <= segs, "规则分群号不在 user_segments 里"
+    assert (ent <= anchor).all() and (ent >= reg[a - 1]).all(), "分群进入时间越界"
+    has_ex = ~np.isnat(ex)
+    assert (ex[has_ex] > ent[has_ex]).all() and (ex[has_ex] <= anchor).all(), "分群退出时间越界"
+    o = np.lexsort((b, a))
+    ctx.pairs["user_segment_members"] = (a[o], b[o])
+    ctx.cache["seg_entered_at"] = ent[o]
+    ctx.cache["seg_exited_at"] = ex[o]
+    ctx.rows["user_segment_members"] = len(a)
 
 
 def _prep_posts(ctx: Ctx) -> None:
@@ -1546,6 +2036,28 @@ def _prep_posts(ctx: Ctx) -> None:
     ctx.cache["posts_status"] = status
     ctx.cache["posts_published_ids"] = (np.flatnonzero(status == "published") + 1
                                         ).astype(np.int64)
+
+
+def _day_of(ctx: Ctx, ts: np.ndarray) -> np.ndarray:
+    """时间戳 → 相对 DATA_START 的天偏移（_pick_registered_user 的入参）。"""
+    return (ts.astype("datetime64[D]") - ctx.start.astype("datetime64[D]")).astype(np.int64)
+
+
+def _after_reg(ctx: Ctx, ts: np.ndarray, uid: np.ndarray) -> np.ndarray:
+    """同日内把时间后移到用户注册后 60 秒（日期不变），上限压在窗内。orders 用的同一手法。"""
+    reg = ctx.cache["users_registered_at"][uid - 1].astype("datetime64[s]")
+    win_last = ctx.start.astype("datetime64[s]") + np.timedelta64(ctx.days * 86400 - 1, "s")
+    return np.maximum(ts.astype("datetime64[s]"),
+                      np.minimum(reg + np.timedelta64(60, "s"), win_last))
+
+
+def _prep_post_owners(ctx: Ctx) -> None:
+    """帖子作者全局定：发帖日当天已注册（2026-11 数据普查：原来 build_posts 里 fk_skewed 抽，
+    51% 的帖子早于作者注册）。发帖时间同日后移到注册之后，赞的时间下界随之更新。"""
+    created = ctx.cache["posts_created_at"]
+    uid = _pick_registered_user(ctx, ctx.rng("posts", "user_id", "global"), _day_of(ctx, created))
+    ctx.cache["posts_user_id"] = uid
+    ctx.cache["posts_created_at"] = _after_reg(ctx, created, uid)
 
 
 def _ts_since(rng, lo: np.ndarray, cap: np.datetime64, decay: float) -> np.ndarray:
@@ -1595,10 +2107,42 @@ def _prep_social(ctx: Ctx) -> None:
     """
     npost = ctx.n("posts")
     _, like_post = ctx.pairs["post_likes"]
-    cmt_post = F.fk_skewed(ctx.rng("post_comments", "post_id", "global"),
-                           ctx.n("post_comments"), 1, npost)
-    shr_post = F.fk_skewed(ctx.rng("post_shares", "post_id", "global"),
-                           ctx.n("post_shares"), 1, npost)
+    # 评论和分享只落在已发布的帖子上（与赞同一条规则，见 _prep_posts）：2026-11 数据普查
+    # 查出 91 万条评论挂在草稿 / 待审 / 已删帖子上。抽「已发布帖子下标」再映回 post_id。
+    pub_ids = ctx.cache["posts_published_ids"]
+    cmt_post = pub_ids[F.fk_skewed(ctx.rng("post_comments", "post_id", "global"),
+                                   ctx.n("post_comments"), 1, len(pub_ids)) - 1]
+    shr_post = pub_ids[F.fk_skewed(ctx.rng("post_shares", "post_id", "global"),
+                                   ctx.n("post_shares"), 1, len(pub_ids)) - 1]
+    reg = ctx.cache["users_registered_at"].astype("datetime64[s]")
+    pub = ctx.cache["posts_created_at"].astype("datetime64[s]")
+    nu = ctx.n("users")
+    # 评论：人按长尾抽，时间不早于「帖子已发布、本人已注册」的较晚者，偏向发帖后不久
+    ncm = ctx.n("post_comments")
+    c_uid = F.fk_skewed(ctx.rng("post_comments", "user_id", "global"), ncm, 1, nu)
+    c_time = _ts_since(ctx.rng("post_comments", "created_at", "global"),
+                       np.maximum(pub[cmt_post - 1], reg[c_uid - 1]), ctx.as_of_end, 2.0)
+    # 回复：约 28% 的评论是回复，父评论必须在**同一帖子**下、且**更早**。按 (帖子, 时间)
+    # 排好序后，回复指向同帖里排在它前面的某一条（最近 50 条内）。原来是「本块内 id 往前
+    # 1~50」，99.999% 跨了帖子、一半还早于父评论。
+    order = np.lexsort((c_time, cmt_post))
+    sp = cmt_post[order]
+    first_in_post = np.r_[True, sp[1:] != sp[:-1]]
+    grp_start = np.maximum.accumulate(np.where(first_in_post, np.arange(ncm), 0))
+    rr = ctx.rng("post_comments", "parent", "global")
+    want_reply = (rr.random(ncm) < 0.28) & ~first_in_post
+    back = np.minimum(rr.integers(1, 51, ncm), np.arange(ncm) - grp_start)
+    parent_pos = np.where(want_reply & (back >= 1), np.arange(ncm) - back, -1)
+    parent = np.full(ncm, None, dtype=object)
+    has = parent_pos >= 0
+    parent[order[has]] = (order[parent_pos[has]] + 1).astype(object)   # comment_id = 行号 + 1
+    ctx.cache["post_comments"] = {"user_id": c_uid, "created_at": c_time, "parent": parent}
+    # 分享：同样不早于发帖和本人注册
+    nsh = ctx.n("post_shares")
+    s_uid = F.fk_skewed(ctx.rng("post_shares", "user_id", "global"), nsh, 1, nu)
+    ctx.cache["post_shares"] = {"user_id": s_uid, "created_at": _ts_since(
+        ctx.rng("post_shares", "created_at", "global"),
+        np.maximum(pub[shr_post - 1], reg[s_uid - 1]), ctx.as_of_end, 2.4)}
     likes = np.bincount(like_post, minlength=npost + 1)[1:]
     r = ctx.rng("posts", "views")
     ctx.cache["post_comments_post_id"] = cmt_post
@@ -1665,12 +2209,13 @@ def prepare_pairs(ctx: Ctx) -> None:
                           sigma_b=SIGMA_FOLLOW_IN, recip=FOLLOW_RECIP)
     ctx.pairs["user_follows"] = (a, b)
 
-    segs = ctx.dim_ids["user_segments"]
-    a, b = F.unique_pairs(ctx.rng("user_segment_members", "pk"),
-                          ctx.n("user_segment_members"), 1, nu, 1, len(segs))
-    ctx.pairs["user_segment_members"] = (a, segs[b - 1])
+    # user_segment_members 不在这里抽：成员按规则从事实推导，见 _prep_segments。
 
-    tests = ctx.dim_ids["ab_tests"]
+    # 草稿实验没有开始，不该有分组（原来 1/3 的分组落在草稿实验上）。分组时间要读
+    # 注册时间和实验档期，在 _prep_ab_assignments 里定，并剔除「用户注册时实验已结束」的对。
+    per = ctx.dim_ids["_test_periods"]
+    tests = np.array([t for t in ctx.dim_ids["ab_tests"].tolist()
+                      if per[int(t)][2] != "draft" and per[int(t)][0] is not None], dtype=np.int64)
     a, b = F.unique_pairs(ctx.rng("ab_test_assignments", "pk"),
                           ctx.n("ab_test_assignments"), 1, nu, 1, len(tests))
     ctx.pairs["ab_test_assignments"] = (a, tests[b - 1])
@@ -1698,14 +2243,8 @@ def build_users(ctx: Ctx, off: int, n: int) -> dict:
         # 行数，F.enum 不要求归一化——这样每个数字都能在卡片里指回原处）。旧值
         # app / mini_program 和 banned 都来自 database/01_user_domain.sql 的行内注释，
         # 卡片明文写着数据里没有：封禁态是 suspended，注册来源那 8 个值里没有 app。
-        "registration_source": F.enum(
-            ctx.rng("users", "registration_source", off), n,
-            ["referral", "organic", "huawei_store", "web",
-             "ad_campaign", "wechat_mini", "app_store", "google_play"],
-            [73, 68, 65, 62, 61, 59, 57, 55]),
-        "status": F.enum(ctx.rng("users", "status", off), n,
-                         ["active", "inactive", "deleted", "suspended"],
-                         [376, 68, 30, 26]),
+        "registration_source": ctx.cache["users_reg_source"][sl],
+        "status": ctx.cache["users_status"][sl],
         "user_level": ctx.cache["users_level"][sl],
         "is_vip": ctx.cache["users_is_vip"][sl],
         "last_active_at": ctx.cache["users_last_active"][sl],
@@ -1716,9 +2255,7 @@ def build_users(ctx: Ctx, off: int, n: int) -> dict:
 
 def build_user_profiles(ctx: Ctx, off: int, n: int) -> dict:
     uid = F.pk(n, off + 1)
-    ci = ctx.rng("user_profiles", "city", off).choice(
-        len(CITIES), size=n, replace=True,
-        p=np.array([c[2] for c in CITIES], float) / sum(c[2] for c in CITIES))
+    ci = ctx.cache["user_profiles"]["city_idx"][off:off + n]
     cities = np.array([c[0] for c in CITIES], dtype=object)[ci]
     provs = np.array([c[1] for c in CITIES], dtype=object)[ci]
     # 四列画像从全局切片，不在这里抽（D-01）：_prep_orders 要在 prepare_globals 阶段
@@ -1745,10 +2282,10 @@ def build_user_profiles(ctx: Ctx, off: int, n: int) -> dict:
         "interests": interests,
         "occupation": prof["occupation"][sl],
         "income_level": prof["income_level"][sl],
-        "created_at": F.ts_window(ctx.rng("user_profiles", "created_at", off), n,
-                                  ctx.start, ctx.days),
-        "updated_at": F.ts_window(ctx.rng("user_profiles", "updated_at", off), n,
-                                  ctx.start, ctx.days),
+        # 画像随注册建档；更新时间在注册之后（原来两列都全窗独立抽，51% 早于注册）
+        "created_at": ctx.cache["users_registered_at"][sl].astype("datetime64[s]"),
+        "updated_at": _ts_since(ctx.rng("user_profiles", "updated_at", off),
+                                ctx.cache["users_registered_at"][sl], ctx.as_of_end, 2.0),
     }
 
 
@@ -1813,26 +2350,21 @@ def _device_identity(ctx: Ctx, off: int, n: int, dtype: np.ndarray) -> tuple:
 
 
 def build_user_devices(ctx: Ctx, off: int, n: int) -> dict:
-    # device_id 换成不透明十六进制（旧 `dev_N`）。**被编码的整数不变**，仍是行号，
-    # 所以与 sessions/events 的对应关系一字不差地保留（见 F.opaque_id 的 docstring）。
+    # device_id = opaque_id(行号)；sessions / events 用同一映射指向设备行。归属、主设备、
+    # 类型、首末出现时间来自 _prep_devices 的全局推导，builder 只切片。
+    sl = slice(off, off + n)
+    g = ctx.cache["user_devices"]
     did = F.opaque_id(F.pk(n, off + 1))
-    uid = F.fk_skewed(ctx.rng("user_devices", "user_id", off), n, 1, ctx.n("users"))
-    first = F.ts_window(ctx.rng("user_devices", "first_seen_at", off), n, ctx.start, ctx.days)
-    # mini_program 是补上的：卡片（knowledge/domains/user/user_devices.md）四个取值里
-    # 写着它，旧清单只有三个，于是「小程序端有多少设备」在生成的数据上恒为空集。
-    # 权重用现行库实测行数（744 行：android 372 / ios 245 / web 83 / mini_program 44）。
-    # 这一列的卡片没有实测行数表，所以数字的出处是库而不是卡片——与其他枚举列不同，
-    # 特此注明；F.enum 不要求归一化，原样贴进来便于回溯。
-    dtype = F.enum(ctx.rng("user_devices", "device_type", off), n,
-                   ["android", "ios", "web", "mini_program"], [372, 245, 83, 44])
+    dtype = g["device_type"][sl]
     brand, model, osv = _device_identity(ctx, off, n, dtype)
     # push_token 真实形态是一串 hex（v1 用的 fake.sha256()[:64]）；web 与小程序都没有
     # 推送令牌（实测这两类共 127 行，push_token 非空 0 行）
     ptok = F.rand_hex(ctx.rng("user_devices", "push_token", off), n, 64).astype(object)
     ptok[np.isin(dtype, ["web", "mini_program"])] = None
+    first = g["first_seen_at"][sl]
     return {
         "device_id": did,
-        "user_id": uid,
+        "user_id": g["user_id"][sl],
         "device_type": dtype,
         "os_version": osv,
         "device_model": model,
@@ -1840,24 +2372,23 @@ def build_user_devices(ctx: Ctx, off: int, n: int) -> dict:
         "app_version": F.enum(ctx.rng("user_devices", "app_version", off), n,
                               ["5.1.0", "5.2.0", "5.3.1", "6.0.0"], [10, 20, 40, 30]),
         "push_token": ptok,
-        "is_primary": F.bool_p(ctx.rng("user_devices", "is_primary", off), n, 0.62),
+        "is_primary": g["is_primary"][sl],
         "first_seen_at": first,
-        "last_seen_at": F.ts_offset(ctx.rng("user_devices", "last_seen_at", off), first,
-                                    60, 80 * 1440, cap=ctx.as_of_end),
+        "last_seen_at": g["last_seen_at"][sl],
         "created_at": first,
     }
 
 
 def build_user_segment_members(ctx: Ctx, off: int, n: int) -> dict:
+    # 成员关系、进入 / 退出时间全部来自 _prep_segments（按 rules_json 推导）
     a, b = ctx.pairs["user_segment_members"]
-    ent = F.ts_window(ctx.rng("user_segment_members", "entered_at", off), n,
-                      ctx.start, ctx.days)
+    sl = slice(off, off + n)
+    ex = ctx.cache["seg_exited_at"][sl]
     return {
-        "user_id": a[off:off + n],
-        "segment_id": b[off:off + n],
-        "entered_at": ent,
-        "exited_at": F.ts_offset(ctx.rng("user_segment_members", "exited_at", off), ent,
-                                 1440, 60 * 1440, cap=ctx.as_of_end, null_p=0.78),
+        "user_id": a[sl],
+        "segment_id": b[sl],
+        "entered_at": ctx.cache["seg_entered_at"][sl],
+        "exited_at": np.where(np.isnat(ex), None, ex).astype(object),
     }
 
 
@@ -1895,7 +2426,7 @@ def build_sessions(ctx: Ctx, off: int, n: int) -> dict:
     return {
         "session_id": sid,
         "user_id": uid,
-        "device_id": F.opaque_id(uid),          # 编码前的整数仍是 user_id，对应关系不变
+        "device_id": F.opaque_id(g["device_row"][sl] + 1),   # 本人的某台设备（_prep_devices）
         "start_time": st,
         "end_time": end,
         "duration_seconds": dur,
@@ -2020,13 +2551,18 @@ def build_events(ctx: Ctx, off: int, n: int) -> dict:
     g = ctx.cache["events"]
     names = ctx.dim_ids["event_definitions"]
     uid = g["user_id"][sl]
+    # 设备 = 所属会话的设备；不在会话内的服务端事件（purchase / use_coupon）记本人主设备
+    sess = g["session_id"][sl]
+    srow = ctx.cache["sessions"]["device_row"]
+    prow = ctx.cache["user_devices"]["primary_row"]
+    dev_row = np.where(sess > 0, srow[np.maximum(sess, 1) - 1], prow[uid - 1])
     ev_time = g["event_time"][sl]
     ev_name = names[g["name_idx"][sl]]
     return {
         "event_id": F.pk(n, off + 1),
         "user_id": uid,
-        "device_id": F.opaque_id(uid),          # 与 sessions 同一映射，两表必须一致
-        "session_id": g["session_id"][sl],
+        "device_id": F.opaque_id(dev_row + 1),
+        "session_id": np.where(sess > 0, sess, None).astype(object),
         "event_name": ev_name,
         "event_time": ev_time,
         "properties": _event_properties(ctx, off, n, ev_name),
@@ -2176,7 +2712,7 @@ def build_posts(ctx: Ctx, off: int, n: int) -> dict:
                    ["article", "short_video", "image", "review"], [20, 32, 28, 20])
     return {
         "post_id": pid,
-        "user_id": F.fk_skewed(ctx.rng("posts", "user_id", off), n, 1, ctx.n("users")),
+        "user_id": ctx.cache["posts_user_id"][sl],
         "content_type": ctype,
         "title": _t,
         "content": _c,
@@ -2213,28 +2749,23 @@ def build_post_comments(ctx: Ctx, off: int, n: int) -> dict:
         "comment_id": cid,
         # post_id 全局生成（posts.comment_count 要 bincount 它回填），builder 只切片
         "post_id": ctx.cache["post_comments_post_id"][off:off + n],
-        "user_id": F.fk_skewed(ctx.rng("post_comments", "user_id", off), n, 1,
-                               ctx.n("users")),
-        # 回复：指向本块内更早的评论，保证外键落在已存在的 id 上
-        "parent_comment_id": F.null_out(
-            ctx.rng("post_comments", "parent_comment_id", off),
-            np.maximum(off + 1, cid - F.int_uniform(
-                ctx.rng("post_comments", "parent_off", off), n, 1, 50)), 0.72),
+        # user / 时间 / 父评论全局定（_prep_social）：回复要找同帖里更早的评论，分块做不到
+        "user_id": ctx.cache["post_comments"]["user_id"][off:off + n],
+        "parent_comment_id": ctx.cache["post_comments"]["parent"][off:off + n],
         "content": F.combine(ctx.rng("post_comments", "content", off), n,
                              _pool(COMMENT_A), _pool(COMMENT_B), _pool(COMMENT_TAIL)),
         "like_count": F.int_weighted(ctx.rng("post_comments", "like_count", off), n,
                                      [0, 1, 3, 8, 25], [45, 25, 18, 9, 3]),
         "status": F.enum(ctx.rng("post_comments", "status", off), n,
                          ["visible", "hidden", "deleted"], [92, 5, 3]),
-        "created_at": F.ts_window(ctx.rng("post_comments", "created_at", off), n,
-                                  ctx.start, ctx.days, trend=0.40),
+        "created_at": ctx.cache["post_comments"]["created_at"][off:off + n],
     }
 
 
 def build_post_shares(ctx: Ctx, off: int, n: int) -> dict:
     return {
         "share_id": F.pk(n, off + 1),
-        "user_id": F.fk_skewed(ctx.rng("post_shares", "user_id", off), n, 1, ctx.n("users")),
+        "user_id": ctx.cache["post_shares"]["user_id"][off:off + n],
         # post_id 全局生成（posts.share_count 要 bincount 它回填），builder 只切片
         "post_id": ctx.cache["post_shares_post_id"][off:off + n],
         # 卡片：6 个值。朋友圈是 wechat_moment**s**（旧值少个 s，按卡片筛恒为空集），
@@ -2243,8 +2774,7 @@ def build_post_shares(ctx: Ctx, off: int, n: int) -> dict:
                                 ["wechat_friend", "wechat_moments", "weibo",
                                  "copy_link", "qq", "other"],
                                 [2420, 1748, 1043, 725, 715, 349]),
-        "created_at": F.ts_window(ctx.rng("post_shares", "created_at", off), n,
-                                  ctx.start, ctx.days, trend=0.40),
+        "created_at": ctx.cache["post_shares"]["created_at"][off:off + n],
     }
 
 
@@ -2261,14 +2791,33 @@ def build_user_follows(ctx: Ctx, off: int, n: int) -> dict:
 def build_user_messages(ctx: Ctx, off: int, n: int) -> dict:
     mid = F.pk(n, off + 1)
     sent = F.ts_window(ctx.rng("user_messages", "sent_at", off), n, ctx.start, ctx.days)
+    # 收发双方都按发送日挑「当天已注册」的用户（原来全库均匀抽，68% 早于某一方注册），
+    # 再把发送时间同日后移到两人都注册之后；收件人与发件人相同时顺延一位。
+    d = _day_of(ctx, sent)
+    snd = _pick_registered_user(ctx, ctx.rng("user_messages", "sender_id", off), d)
+    rcv = _pick_registered_user(ctx, ctx.rng("user_messages", "receiver_id", off), d)
+    same = rcv == snd
+    rcv[same] = _pick_registered_user(ctx, ctx.rng("user_messages", "receiver_retry", off), d[same])
+    rcv[rcv == snd] = np.where(snd[rcv == snd] > 1, snd[rcv == snd] - 1, snd[rcv == snd] + 1)
+    sent = np.maximum(_after_reg(ctx, sent, snd), _after_reg(ctx, sent, rcv))
     read = F.ts_offset(ctx.rng("user_messages", "read_at", off), sent, 1, 4320,
                        cap=ctx.as_of_end, null_p=0.32)
+    # 引用的帖子必须在发送时已发布：在「按发布时间排好序的已发布帖子」里取发送时刻之前的前缀
+    if "_pub_posts_by_time" not in ctx.cache:
+        pid = ctx.cache["posts_published_ids"]
+        pt = ctx.cache["posts_created_at"][pid - 1].astype("datetime64[s]")
+        o = np.argsort(pt, kind="stable")
+        ctx.cache["_pub_posts_by_time"] = (pid[o], pt[o])
+    pp, ptime = ctx.cache["_pub_posts_by_time"]
+    k = np.searchsorted(ptime, sent.astype("datetime64[s]"), side="right")
+    rp_pick = pp[np.minimum((ctx.rng("user_messages", "rp", off).random(n) * k).astype(np.int64),
+                            np.maximum(k - 1, 0))]
+    rp_keep = (ctx.rng("user_messages", "related_post_id", off).random(n) >= 0.85) & (k > 0)
+    related_post = np.where(rp_keep, rp_pick, None).astype(object)
     return {
         "message_id": mid,
-        "sender_id": F.fk_skewed(ctx.rng("user_messages", "sender_id", off), n, 1,
-                                 ctx.n("users")),
-        "receiver_id": F.fk_uniform(ctx.rng("user_messages", "receiver_id", off), n, 1,
-                                    ctx.n("users")),
+        "sender_id": snd,
+        "receiver_id": rcv,
         "content": F.combine(ctx.rng("user_messages", "content", off), n,
                              _pool(DM_A), _pool(["，", "，", "，", " "]), _pool(DM_B),
                              _pool(DM_TAIL)),
@@ -2276,9 +2825,7 @@ def build_user_messages(ctx: Ctx, off: int, n: int) -> dict:
         # （旧值 product 以及 post_share / system 数据里都不存在）。
         "message_type": F.enum(ctx.rng("user_messages", "message_type", off), n,
                                ["text", "image", "link"], [7868, 907, 478]),
-        "related_post_id": F.null_out(ctx.rng("user_messages", "related_post_id", off),
-                                      F.fk_uniform(ctx.rng("user_messages", "rp", off), n,
-                                                   1, ctx.n("posts")), 0.85),
+        "related_post_id": related_post,
         "related_product_id": F.null_out(
             ctx.rng("user_messages", "related_product_id", off),
             F.from_pool(ctx.rng("user_messages", "rprod", off), n,
@@ -2336,6 +2883,7 @@ def build_orders(ctx: Ctx, off: int, n: int) -> dict:
     deliv_m = status == "delivered"
     canc_m = status == "cancelled"
     refund_m = status == "refunded"
+    life = ctx.cache["orders_life"]
     return {
         "order_id": oid,
         "order_no": F.serial_text("NO", oid, width=12),
@@ -2358,21 +2906,16 @@ def build_orders(ctx: Ctx, off: int, n: int) -> dict:
                              F.enum(ctx.rng("orders", "remark_text", off), n,
                                     ORDER_REMARKS, ORDER_REMARKS_W), 0.9),
         "placed_at": placed,
-        "paid_at": _cond_ts(ctx.rng("orders", "paid_at", off), placed, paid_m, 1, 240,
-                            ctx.as_of_end),
-        "shipped_at": _cond_ts(ctx.rng("orders", "shipped_at", off), placed, ship_m,
-                               240, 2880, ctx.as_of_end),
-        "delivered_at": _cond_ts(ctx.rng("orders", "delivered_at", off), placed, deliv_m,
-                                 2880, 10080, ctx.as_of_end),
-        "cancelled_at": _cond_ts(ctx.rng("orders", "cancelled_at", off), placed, canc_m,
-                                 5, 1440, ctx.as_of_end),
+        "paid_at": life["paid_at"][sl],
+        "shipped_at": life["shipped_at"][sl],
+        "delivered_at": life["delivered_at"][sl],
+        "cancelled_at": life["cancelled_at"][sl],
         # 哪些行非空一行没动（还是 canc_m / refund_m），变的只是非空行的取值不再是同一句话。
         "cancel_reason": np.where(canc_m,
                                   F.enum(ctx.rng("orders", "cancel_reason", off), n,
                                          ORDER_CANCEL_REASONS, ORDER_CANCEL_REASONS_W),
                                   None),
-        "refunded_at": _cond_ts(ctx.rng("orders", "refunded_at", off), placed, refund_m,
-                                1440, 20160, ctx.as_of_end),
+        "refunded_at": life["refunded_at"][sl],
         "refund_reason": np.where(refund_m,
                                   F.enum(ctx.rng("orders", "refund_reason", off), n,
                                          ORDER_REFUND_REASONS, ORDER_REFUND_REASONS_W),
@@ -2435,12 +2978,10 @@ def build_payments(ctx: Ctx, off: int, n: int) -> dict:
                                   ["app", "h5", "mini_program"], [58, 22, 20]),
         "status": np.where(refunded, "refunded", "success"),
         "transaction_id": F.serial_text("TXN", pid, width=16),
-        "paid_at": _cond_ts(ctx.rng("payments", "paid_at", off), base, always,
-                            1, 240, ctx.as_of_end),
+        "paid_at": ctx.cache["orders_life"]["paid_at"][idx],      # 与订单同一时刻
         "failure_reason": F.const(n, None),
         "refund_amount": np.where(refunded, amt, 0.0),
-        "refunded_at": _cond_ts(ctx.rng("payments", "refunded_at", off), base, refunded,
-                                1440, 20160, ctx.as_of_end),
+        "refunded_at": ctx.cache["orders_life"]["refunded_at"][idx],
         "created_at": base,
     }
 
@@ -2453,34 +2994,52 @@ def build_subscriptions(ctx: Ctx, off: int, n: int) -> dict:
                   ["月度会员", "季度会员", "年度会员"], [29, 12, 9])
     price = np.where(plan == "月度会员", 19.9, np.where(plan == "季度会员", 49.9, 168.0))
     days = np.where(plan == "月度会员", 30, np.where(plan == "季度会员", 90, 365))
-    start = F.ts_window(ctx.rng("subscriptions", "start_date", off), n, ctx.start,
-                        ctx.days).astype("datetime64[D]")
+    start_ts = F.ts_window(ctx.rng("subscriptions", "start_date", off), n, ctx.start, ctx.days)
+    # 订阅人按开通日挑当天已注册的用户（原来 fk_skewed，51% 早于注册）
+    s_uid = _pick_registered_user(ctx, ctx.rng("subscriptions", "user_id", off),
+                                  _day_of(ctx, start_ts))
+    start_ts = _after_reg(ctx, start_ts, s_uid)
+    start = start_ts.astype("datetime64[D]")
     # 卡片：种子数据只有 active 36 / expired 14。`cancelled` 在业务上成立，但这份数据里
     # 没有——卡片连带把「cancel_reason 整列 NULL」和一条恒返回空集的示例查询都写成了
     # 教学点。所以这里不产 cancelled，下面 cancelled_at / cancel_reason 的掩码恒为假，
     # 那两列跟着整列 NULL，与卡片一致。要造有取消的数据集，改这一行的取值即可，
     # 但卡片得同步改，否则枚举断言会红。
-    st = F.enum(ctx.rng("subscriptions", "status", off), n,
-                ["active", "expired"], [36, 14])
+    # 状态由到期日推出（原来独立抽，26% 标 active 却已过期）
+    end = start + days.astype("timedelta64[D]")
+    st = np.where(end >= np.datetime64(ctx.as_of_end, "D"), "active", "expired")
+    # 支付关联：本人在开通时刻或之前的最近一笔支付（原来全库均匀抽，100% 是别人的支付）。
+    # 约 15% 没有关联（与原来的空值率一致）；本人此前没有支付的也留空。
+    if "_pay_by_user" not in ctx.cache:
+        pidx = ctx.cache["payments_order_idx"]
+        pu = ctx.cache["orders_user_id"][pidx]
+        pt = ctx.cache["orders_life"]["paid_at"][pidx].astype("datetime64[s]").astype(np.int64)
+        key = pu.astype(np.int64) * 10**11 + pt
+        o = np.argsort(key, kind="stable")
+        ctx.cache["_pay_by_user"] = (key[o], (o + 1).astype(np.int64))   # payment_id = 行号 + 1
+    pkey, pid_sorted = ctx.cache["_pay_by_user"]
+    # 截止到开通时刻（不是开通当天日末）：关联的支付必须先于订阅记录（原来 21% 晚于 created_at）
+    q = s_uid.astype(np.int64) * 10**11 + start_ts.astype("datetime64[s]").astype(np.int64)
+    j = np.searchsorted(pkey, q, side="right") - 1
+    ok = (j >= 0) & (pkey[np.maximum(j, 0)] // 10**11 == s_uid)
+    keep = ctx.rng("subscriptions", "payment_id", off).random(n) >= 0.15
+    pay = np.where(ok & keep, pid_sorted[np.maximum(j, 0)], None).astype(object)
     return {
         "subscription_id": sid,
-        "user_id": F.fk_skewed(ctx.rng("subscriptions", "user_id", off), n, 1,
-                               ctx.n("users")),
+        "user_id": s_uid,
         "plan_name": plan,
         "plan_price": price,
         "start_date": start,
-        "end_date": start + days.astype("timedelta64[D]"),
+        "end_date": end,
         "auto_renew": F.bool_p(ctx.rng("subscriptions", "auto_renew", off), n, 0.68),
         "status": st,
-        "payment_id": F.null_out(ctx.rng("subscriptions", "payment_id", off),
-                                 F.fk_uniform(ctx.rng("subscriptions", "pay", off), n, 1,
-                                              ctx.n("payments")), 0.15),
+        "payment_id": pay,
         "cancelled_at": _cond_ts(ctx.rng("subscriptions", "cancelled_at", off),
                                  start.astype("datetime64[s]"), st == "cancelled",
                                  1440, 60 * 1440, ctx.as_of_end),
         "cancel_reason": np.where(st == "cancelled", "不再需要", None),
-        "created_at": start.astype("datetime64[s]"),
-        "updated_at": start.astype("datetime64[s]"),
+        "created_at": start_ts,
+        "updated_at": start_ts,
     }
 
 
@@ -2498,16 +3057,16 @@ def build_user_attributions(ctx: Ctx, off: int, n: int) -> dict:
     d2i = ctx.cache["attr_d2i"][s]
     return {
         "attribution_id": F.pk(n, off + 1),
-        "user_id": ctx.cache["attributed_users"][s],
+        "user_id": ctx.cache["attr_user"][s],
         "channel_id": ctx.cache["attr_channel"][s],
         "ad_campaign_id": ctx.cache["attr_acid"][s],
         "creative_id": ctx.cache["attr_crid"][s],
-        # 卡片：只有 first_touch / last_touch 两种，各占一半，**没有** linear
-        # （按 linear 筛是空集）。两种归因分给的是**不同的用户**，不是同一用户的两个视角。
+        # 只有 first_touch / last_touch 两种，**没有** linear。被归因的用户两种各一行
+        # （同一用户的两个视角，见 _prep_attributions）。
         "attribution_type": ctx.cache["attr_type"][s],
         "click_time": click,
-        "install_time": click.astype("datetime64[s]") + (d2i * 86400).astype("timedelta64[s]"),
-        "attributed_at": click,
+        "install_time": ctx.cache["attr_install"][s],
+        "attributed_at": ctx.cache["attr_at"][s],
         "days_to_install": d2i,
         # utm_source 取本行渠道自己的 platform（channels.csv 的那一列），不是常量。
         # 原来这里是 F.const(n, {"utm_source": "douyin"})：App Store、直接访问这些行
@@ -2519,63 +3078,105 @@ def build_user_attributions(ctx: Ctx, off: int, n: int) -> dict:
 
 
 def _prep_attributions(ctx: Ctx) -> None:
-    """归因表全量落地。规模上限：scale=427 时 14.9 万行，几 MB，可以整表持有。
+    """归因表：被归因的用户各有一条 first_touch + 一条 last_touch（2026-11 数据普查）。
 
-    user_attributions 刻意只覆盖部分用户。mart LEFT JOIN 后形成知识库写明的
-    「约六成 GMV 落在未归因」——这个缺口是治理发现的素材，不是缺陷。
+    原来每个用户恰好一行、类型随机二选一（first_touch 与 last_touch 分给不同的人），
+    点击时间全窗随机、与注册无关（51% 晚于注册），广告活动在点击时 27% 尚未开始。
+
+    现在的时序：点击广告 → 安装 → 注册。
+      last_touch  click = install − days_to_install 天 − 1~60 分钟；install = 注册前 1~120 分钟
+      first_touch 45% 的用户只有一次触点（两行渠道 / 活动 / 点击相同）；其余在 last_touch
+                  之前 1 小时 ~ 14 天另有一次点击，渠道独立抽（可能与 last_touch 相同）
+      attributed_at = 注册时刻（归因在转化时落定），两行相同
+    广告活动只挑本渠道**点击当天在档期内**的活动，没有就 NULL（渠道级投放）；
+    自然量渠道（organic / referral / direct）恒为 NULL。
+
+    行数 = 2 × 被归因用户数，与 budget 持平；被 last_touch 覆盖的用户数也与旧版相当
+    （旧版 last_touch 占一半行），所以 mart 里「(未归因)」的 GMV 桶量级不变。
     """
     nu = ctx.n("users")
+    natt = min(ctx.n("user_attributions") // 2, nu)
     ar = ctx.rng("user_attributions", "user_pick")
-    natt = min(ctx.n("user_attributions"), nu)
-    ctx.cache["attributed_users"] = np.sort(
-        ar.choice(np.arange(1, nu + 1), size=natt, replace=False))
-    ctx.rows["user_attributions"] = natt
-
+    users = np.sort(ar.choice(np.arange(1, nu + 1), size=natt, replace=False))
+    reg = ctx.cache["users_registered_at"][users - 1].astype("datetime64[s]")
     chans = ctx.dim_ids["channels"]
-    ch = F.from_pool(ctx.rng("user_attributions", "channel_id", 0), natt, chans)
-    ctx.cache["attr_channel"] = ch
-    ctx.cache["attr_type"] = F.enum(
-        ctx.rng("user_attributions", "attribution_type", 0), natt,
-        ["first_touch", "last_touch"], [175, 175])
-    ctx.cache["attr_click"] = F.ts_window(
-        ctx.rng("user_attributions", "click_time", 0), natt, ctx.start, ctx.days)
-    ctx.cache["attr_d2i"] = F.int_weighted(
-        ctx.rng("user_attributions", "days_to_install", 0), natt,
-        [0, 1, 2, 5], [62, 22, 10, 6])
+    r = ctx.rng("user_attributions", "touches", "global")
 
-    # ad_campaign_id / creative_id 必须落在**本渠道**的活动上。
-    # 旧版从全部 50 个活动里均匀抽再按 35% / 40% 随机置空，于是「归因到抖音信息流的
-    # 用户挂着一个百度搜索的广告活动」大量存在——「按活动看花费」和「按渠道看花费」
-    # 两条口径会互相矛盾，而两边单看都自洽，没有任何一步会报错。
-    #
-    # 现在改成：organic / referral / direct 渠道**必然为 NULL**（自然流量没有广告活动，
-    # 这是语义而不是概率），paid / kol 渠道从本渠道的活动里抽。旧版随机置空率 35%，
-    # 新规则下 5/14 个渠道为空约 36%——量级上没动，但从"随机"变成"有据"。
+    d2i = F.int_weighted(ctx.rng("user_attributions", "days_to_install", 0), natt,
+                         [0, 1, 2, 5], [62, 22, 10, 6])
+    install = reg - r.integers(60, 7200, natt).astype("timedelta64[s]")
+    click_l = (install - (d2i * 86400).astype("timedelta64[s]")
+               - r.integers(60, 3600, natt).astype("timedelta64[s]"))
+    # last_touch 渠道均衡分配（打乱后轮转）：各渠道新客数相同，CAC 的排序就只由
+    # CHANNEL_CPI_MULT 决定，小规模（selftest 的 scale=1，每渠道十来个人）也不翻
+    chans_arr = np.asarray(chans)
+    ch_l = chans_arr[ctx.rng("user_attributions", "channel_id", 0).permutation(natt) % len(chans_arr)]
+    single = r.random(natt) < 0.45
+    ch_f = np.where(single, ch_l, F.from_pool(ctx.rng("user_attributions", "channel_first", 0),
+                                              natt, chans))
+    click_f = np.where(single, click_l,
+                       click_l - r.integers(3600, 14 * 86400, natt).astype("timedelta64[s]"))
+
+    # 行布局：每用户相邻两行，先 first_touch 后 last_touch
+    uid = np.repeat(users, 2)
+    ch = np.empty(2 * natt, dtype=ch_l.dtype)
+    ch[0::2], ch[1::2] = ch_f, ch_l
+    click = np.empty(2 * natt, dtype="datetime64[s]")
+    click[0::2], click[1::2] = click_f, click_l
+    typ = np.tile(np.array(["first_touch", "last_touch"], dtype=object), natt)
+    ctx.rows["user_attributions"] = 2 * natt
+    ctx.cache["attr_user"] = uid
+    ctx.cache["attr_channel"] = ch
+    ctx.cache["attr_type"] = typ
+    ctx.cache["attr_click"] = click
+    ctx.cache["attr_install"] = np.repeat(install, 2)
+    ctx.cache["attr_at"] = np.repeat(reg, 2)
+    # 每行自己的「点击到安装」天数（first_touch 多触点那行的点击更早，天数也更大）
+    ctx.cache["attr_d2i"] = ((ctx.cache["attr_install"] - click).astype("timedelta64[s]")
+                             .astype(np.int64) // 86400)
+
+    # ad_campaign_id：本渠道、点击当天在档期内的活动；素材：该活动的素材，约 20% 追不到
     camps = ctx.dim_ids["_campaigns_by_channel"]
     creas = ctx.dim_ids["_creatives_by_campaign"]
+    spans = ctx.dim_ids["_campaign_spans"]
+    cday = ((click.astype("datetime64[D]") - ctx.start.astype("datetime64[D]"))
+            .astype(np.int64))
     r_ac = ctx.rng("user_attributions", "acid", 0)
     r_cr = ctx.rng("user_attributions", "crid", 0)
-    acid = np.empty(natt, dtype=object)
-    crid = np.empty(natt, dtype=object)
+    u_ac = r_ac.random(2 * natt)
+    u_cr = r_cr.random(2 * natt)
+    drop = r_cr.random(2 * natt) < 0.20
+    acid = np.full(2 * natt, None, dtype=object)
+    crid = np.full(2 * natt, None, dtype=object)
     for cid, pool in camps.items():
-        m = ch == cid
-        k = int(m.sum())
-        if k == 0:
+        m = np.flatnonzero(ch == cid)
+        if len(m) == 0:
             continue
-        picked = np.asarray(pool, dtype=np.int64)[r_ac.integers(0, len(pool), size=k)]
-        acid[m] = picked.tolist()
-        # 素材：有活动才可能有素材，且不是每次归因都能追到素材（约 20% 追不到）。
-        cr = [None if not creas.get(int(p)) else
-              creas[int(p)][int(r_cr.integers(0, len(creas[int(p)])))] for p in picked]
-        drop = r_cr.random(k) < 0.20
-        crid[m] = [None if d else v for v, d in zip(cr, drop)]
+        pool = np.asarray(sorted(pool), np.int64)
+        lo = np.array([spans[int(a)][0] for a in pool])
+        hi = np.array([spans[int(a)][1] for a in pool])
+        live = (lo[None, :] <= cday[m, None]) & (cday[m, None] <= hi[None, :])
+        nlive = live.sum(axis=1)
+        has = nlive > 0
+        kth = np.floor(u_ac[m] * np.maximum(nlive, 1)).astype(np.int64)
+        # 第 kth 个在档的活动
+        csum = np.cumsum(live, axis=1)
+        pick = np.argmax(csum > kth[:, None], axis=1)
+        for j in np.flatnonzero(has):
+            row = m[j]
+            a = int(pool[pick[j]])
+            acid[row] = a
+            cr = creas.get(a)
+            if cr and not drop[row]:
+                crid[row] = cr[int(u_cr[row] * len(cr))]
+    # 单触点用户的两行必须一模一样（同一次点击）
+    first_rows = np.flatnonzero(np.repeat(single, 2) & (typ == "first_touch"))
+    acid[first_rows] = acid[first_rows + 1]
+    crid[first_rows] = crid[first_rows + 1]
     ctx.cache["attr_acid"] = acid
     ctx.cache["attr_crid"] = crid
 
-    # tracking_params：utm_source = 本行渠道的 platform。逐行按 channel_id 查表，
-    # 所以这一列和 channel_id JOIN channels 得到的 platform 永远一致——这是它唯一
-    # 该满足的性质。14 个渠道落在 11 个 platform 上（douyin / xiaohongshu / weixin
-    # 各占 2 个渠道），所以这一列的基数是 11，不是 14。
+    # tracking_params：utm_source = 本行渠道的 platform
     plat = ctx.dim_ids["_channel_platforms"]
     missing = sorted({int(c) for c in np.unique(ch)} - set(plat))
     if missing:
@@ -2674,7 +3275,7 @@ def _prep_channel_costs(ctx: Ctx) -> None:
     # —— 分母：last_touch 归因到各投放渠道的用户，按其**注册日**归集 ——
     # 用 registered_at 而不是 attributed_at：口径由 mart 那边定，这里只能跟。
     last = ctx.cache["attr_type"] == "last_touch"
-    uid = ctx.cache["attributed_users"][last]
+    uid = ctx.cache["attr_user"][last]
     cid = ctx.cache["attr_channel"][last]
     reg_day = ctx.cache["users_reg_day"][uid - 1]
     if reg_day.size and (reg_day.min() < 0 or reg_day.max() >= win):
@@ -2769,78 +3370,104 @@ def build_channel_daily_costs(ctx: Ctx, off: int, n: int) -> dict:
 
 def build_user_coupons(ctx: Ctx, off: int, n: int) -> dict:
     """前 uc_n_used 行是核销闭环行：与用券订单一一对应，(user, coupon, order) 三元
-    对齐、used_at = 下单时刻、received_at 落在 [注册, 下单] 且距下单 ≤30 天。
-    其余行只有 unused / expired，expired 由 expire_at 是否已过窗末决定。
-
-    旧版 status 以 50% 概率抽 used、order_id 均匀乱指，与 orders.coupon_id 各说
-    各话，核销数是订单数的 5.7 倍（审计 L4.7）。
-    """
-    cid = F.pk(n, off + 1)
+    对齐、used_at = 下单时刻。领券 / 到期 / 状态全部来自 _prep_coupon_times。"""
+    sl = slice(off, off + n)
     gidx = np.arange(off, off + n, dtype=np.int64)
     n_used = ctx.cache["uc_n_used"]
     used_m = gidx < n_used
-
-    og = ctx.cache["orders"]
-    reg_all = ctx.cache["users_registered_at"].astype("datetime64[s]")
-    win_end = (ctx.start.astype("datetime64[s]")
-               + np.timedelta64(ctx.days * 86400, "s"))
-    r = ctx.rng("user_coupons", "recv", off)
-
-    # (user, coupon) 两列整表在 _prep_user_coupons 里定好：per_user_limit 是**全表**
-    # 性质（一个 (user, coupon) 上有几张），分块抽拼不出来（P1-11）。
-    uid = ctx.cache["uc_user_id"][off:off + n]
-    picked = ctx.cache["uc_coupon_id"][off:off + n]
-    reg = reg_all[uid - 1]
-
-    # —— 核销段（未用行按 0 号占位算，最后 where 合并，保持向量化）——
+    picked = ctx.cache["uc_coupon_id"][sl]
     safe = np.minimum(gidx, max(n_used - 1, 0))
     o = ctx.cache["orders_coupon_rows"][safe] if n_used else np.zeros(n, np.int64)
-    placed = og["placed_at"][o].astype("datetime64[s]")
-    span = np.minimum(np.maximum(
-        (placed - reg).astype("timedelta64[s]").astype(np.int64), 120), 30 * 86400)
-    recv_u = np.maximum(placed - (60 + r.random(n) * (span - 60))
-                        .astype("timedelta64[s]"), reg)
-
-    # —— 未用段：领券时刻落在 [本人注册, 窗末) ——
-    room = np.maximum(
-        (win_end - reg).astype("timedelta64[s]").astype(np.int64) - 60, 60)
-    recv_g = reg + (r.random(n) * room).astype("timedelta64[s]")
-
-    recv = np.where(used_m, recv_u, recv_g).astype("datetime64[s]")
-    expire = recv + np.timedelta64(30 * 86400, "s")
-    # 枚举取 'unused' 而非 DDL 注释里的 'available'：卡片、示例 SQL、eval 金标、
-    # 以及 v1 已提交的 CSV 四方都用 unused，只有 DDL 注释是孤例。跟注释走会让
-    # agent 照卡片写 status='unused' 查出 0 行（我们在 eval 里踩过这一刀）。
-    st = np.where(used_m, "used",
-                  np.where(expire < ctx.as_of_end, "expired", "unused"))
+    placed = ctx.cache["orders"]["placed_at"][o].astype("datetime64[s]")
     used_at = np.array(placed.astype(object), dtype=object)
     used_at[~used_m] = None
-    # 未使用的券不该带订单号：必须是 NULL 而不是 0（0 不是合法 order_id，
-    # 会让「用券订单数」这类统计凭空多出一批）
+    # 未使用的券不该带订单号：必须是 NULL 而不是 0
     order_id = (o + 1).astype(object)
     order_id[~used_m] = None
     return {
-        "id": cid,
-        "user_id": uid,
+        "id": F.pk(n, off + 1),
+        "user_id": ctx.cache["uc_user_id"][sl],
         "coupon_id": picked,
         "coupon_code": np.char.add("CP", np.char.zfill(picked.astype("U10"), 6)),
-        "received_at": recv,
-        "expire_at": expire,
+        "received_at": ctx.cache["uc_received_at"][sl],
+        "expire_at": ctx.cache["uc_expire_at"][sl],
         "used_at": used_at,
         "order_id": order_id,
-        "status": st,
-        # 卡片：主动领取是 claim（占 60%）、赠送是 gift。旧四档 campaign / new_user /
-        # share / purchase 在 22,735 行里一个都不存在。
+        # 枚举取 'unused' 而非 DDL 注释里的 'available'（卡片、金标、v1 CSV 都用 unused）
+        "status": ctx.cache["uc_status"][sl],
+        # 卡片：主动领取是 claim（占 60%）、赠送是 gift。
         "source": F.enum(ctx.rng("user_coupons", "source", off), n,
                          ["claim", "gift", "reward", "system"],
                          [13649, 3466, 3327, 2293]),
     }
 
 
+def build_coupons(ctx: Ctx, off: int, n: int) -> dict:
+    """券维表：模板来自 data/csv/coupons.csv（dims_coherence.py 已自洽化），
+    total_quota 与 status 按实际发放回填（2026-11）。
+
+    原来这张表直通 CSV：150 张券的实际发放量全部超过 total_quota（发放 6.5 万张、
+    配额 1~10000），status 与有效期也互相矛盾。现在：
+      status = expired（券结束早于快照） / inactive（模板下架，保留） /
+               depleted（模板已领完：配额 = 实发量） / active
+      total_quota：depleted 等于实发量；其余 = 实发量向上取到整百后再留 10%~100% 余量
+    """
+    import csv as _csv
+    from pathlib import Path as _P
+    rows = list(_csv.DictReader((_P(__file__).resolve().parents[2] / "data" / "csv" / "coupons.csv")
+                                .open(encoding="utf-8")))
+    rows.sort(key=lambda r: int(r["coupon_id"]))
+    rows = rows[off:off + n]
+    ca = _coupon_arrays(ctx)
+    pos = {int(c): i for i, c in enumerate(ca["id"])}
+    issued = ctx.cache["coupons_issued"]
+    anchor = ctx.as_of_end.astype("datetime64[s]")
+    rr = ctx.rng("coupons", "quota", off)
+    status, quota = [], []
+    for r_ in rows:
+        i = pos[int(r_["coupon_id"])]
+        iss = int(issued[i])
+        if ca["end"][i] < anchor:
+            st = "expired"
+        elif r_["status"] in ("inactive", "depleted"):
+            st = r_["status"]
+        else:
+            st = "active"
+        q = iss if st == "depleted" else int(np.ceil(iss * (1.1 + 0.9 * rr.random()) / 100.0) * 100)
+        status.append(st)
+        quota.append(max(q, 1))
+
+    def ts(k):
+        return np.array([np.datetime64(r_[k].replace(" ", "T"), "us") for r_ in rows])
+
+    def num(k):
+        return np.array([float(r_[k]) if r_[k] != "" else None for r_ in rows], dtype=object)
+    return {
+        "coupon_id": np.array([int(r_["coupon_id"]) for r_ in rows], np.int64),
+        "coupon_code": np.array([r_["coupon_code"] for r_ in rows], dtype=object),
+        "coupon_name": np.array([r_["coupon_name"] for r_ in rows], dtype=object),
+        "coupon_type": np.array([r_["coupon_type"] for r_ in rows], dtype=object),
+        "discount_value": np.array([float(r_["discount_value"]) for r_ in rows]),
+        "min_purchase": np.array([float(r_["min_purchase"] or 0) for r_ in rows]),
+        "max_discount": num("max_discount"),
+        "valid_days": np.array([int(r_["valid_days"]) for r_ in rows], np.int64),
+        "start_date": ts("start_date"),
+        "end_date": ts("end_date"),
+        "total_quota": np.array(quota, np.int64),
+        "per_user_limit": np.array([int(r_["per_user_limit"]) for r_ in rows], np.int64),
+        "applicable_products": np.full(len(rows), None, dtype=object),
+        "status": np.array(status, dtype=object),
+        "created_at": ts("created_at"),
+    }
+
 def build_push_notifications(ctx: Ctx, off: int, n: int) -> dict:
     pid = F.pk(n, off + 1)
     sched = F.ts_window(ctx.rng("push_notifications", "scheduled_at", off), n, ctx.start,
                         ctx.days)
+    # 收件人按推送日挑当天已注册的用户，时间同日后移到注册之后（原来 51% 早于注册）
+    p_uid = _pick_registered_user(ctx, ctx.rng("push_notifications", "user_id", off),
+                                  _day_of(ctx, sched))
+    sched = _after_reg(ctx, sched, p_uid)
     delivered = F.bool_p(ctx.rng("push_notifications", "is_delivered", off), n, 0.88)
     # D-04：旧版 推送_N / 推送内容 N。文案按 push_type 分池——真实 APP 的提醒、社交、
     # 营销、交易、系统五类风格差得很远，混着发最显眼，所以 push_type 要先算出来。
@@ -2879,13 +3506,28 @@ def build_push_notifications(ctx: Ctx, off: int, n: int) -> dict:
     delivered_at[~delivered] = None
     # 只有营销型推送挂 campaign_id（见 MARKETING_PUSH_TYPES）。
     is_mk = np.isin(ptype, MARKETING_PUSH_TYPES)
-    campaign = np.array(F.from_pool(ctx.rng("push_notifications", "cid", off), n,
-                                    ctx.dim_ids["campaigns"]).astype(object), dtype=object)
-    campaign[~is_mk] = None
+    # 活动推送只挂「推送当时在档期内」的活动（原来 94% 落在档期外）；当时没有在档期的
+    # 活动就不挂（campaign_id 为空）。草稿 / 已取消 / 待开始的活动不发推送。
+    per = ctx.dim_ids["_campaign_periods"]
+    cids = np.array([c for c, (a, b, st) in per.items()
+                     if st not in ("draft", "cancelled", "scheduled") and a is not None], dtype=np.int64)
+    c_lo = np.array([per[c][0] for c in cids], dtype="datetime64[s]")
+    c_hi = np.array([per[c][1] for c in cids], dtype="datetime64[s]")
+    st_s = sched.astype("datetime64[s]")
+    u = ctx.rng("push_notifications", "cid", off).random(n)
+    chosen = np.zeros(n, dtype=np.int64)
+    B = 200_000                                     # 分块：行 × 活动的布尔矩阵控制在几十 MB
+    for a in range(0, n, B):
+        t = st_s[a:a + B, None]
+        live = (c_lo[None, :] <= t) & (t <= c_hi[None, :])
+        cnt = live.sum(1)
+        pick = (u[a:a + B] * cnt).astype(np.int64)
+        rank = np.cumsum(live, axis=1) - 1
+        chosen[a:a + B] = np.where(live & (rank == pick[:, None]), cids[None, :], 0).max(axis=1)
+    campaign = np.where(is_mk & (chosen > 0), chosen, None).astype(object)
     return {
         "push_id": pid,
-        "user_id": F.fk_skewed(ctx.rng("push_notifications", "user_id", off), n, 1,
-                               ctx.n("users")),
+        "user_id": p_uid,
         "campaign_id": campaign,
         "push_type": ptype,
         "title": title,
@@ -2908,6 +3550,28 @@ def build_push_notifications(ctx: Ctx, off: int, n: int) -> dict:
 
 # ---------------------------------------------------------------- 实验域
 
+def _prep_ab_assignments(ctx: Ctx) -> None:
+    """分组时间落在 [max(实验开始, 用户注册), min(实验结束, 窗末)]（2026-11 数据普查：原来全窗
+    独立抽，51% 早于注册、27% 落在实验档期外）。区间为空的对（用户注册时实验已结束）剔除，
+    行数因此回写（main.ROWS_WRITEBACK 登记了容差）。"""
+    a, b = ctx.pairs["ab_test_assignments"]
+    per = ctx.dim_ids["_test_periods"]
+    reg = ctx.cache["users_registered_at"][a - 1].astype("datetime64[s]")
+    t_lo = np.array([per[int(t)][0] for t in b], dtype="datetime64[s]")
+    t_hi = np.array([per[int(t)][1] if per[int(t)][1] is not None else ctx.as_of_end
+                     for t in b], dtype="datetime64[s]")
+    # 实验开始时刻带微秒，截到秒会早于开始——向上取整到下一秒
+    lo = np.maximum(reg + np.timedelta64(60, "s"), t_lo + np.timedelta64(1, "s"))
+    hi = np.minimum(t_hi, ctx.as_of_end)
+    keep = lo < hi
+    a, b, lo, hi = a[keep], b[keep], lo[keep], hi[keep]
+    room = (hi - lo).astype("timedelta64[s]").astype(np.int64)
+    r = ctx.rng("ab_test_assignments", "assigned_at", "global")
+    ctx.pairs["ab_test_assignments"] = (a, b)
+    ctx.cache["ab_assigned_at"] = lo + (r.random(len(a)) ** 1.6 * room).astype("timedelta64[s]")
+    ctx.rows["ab_test_assignments"] = len(a)
+
+
 def build_ab_test_assignments(ctx: Ctx, off: int, n: int) -> dict:
     a, b = ctx.pairs["ab_test_assignments"]
     uid, tid = a[off:off + n], b[off:off + n]
@@ -2916,8 +3580,7 @@ def build_ab_test_assignments(ctx: Ctx, off: int, n: int) -> dict:
     r = ctx.rng("ab_test_assignments", "variant_id", off)
     variant = np.array([vs[r.integers(0, len(vs))] for vs in (v_by_test[t] for t in tid)],
                        dtype=np.int64)
-    assigned = F.ts_window(ctx.rng("ab_test_assignments", "assigned_at", off), n,
-                           ctx.start, ctx.days)
+    assigned = ctx.cache["ab_assigned_at"][off:off + n]
     return {
         "id": F.pk(n, off + 1),
         "user_id": uid,
@@ -2955,6 +3618,7 @@ BUILDERS = {
     "user_attributions": build_user_attributions,
     "channel_daily_costs": build_channel_daily_costs,
     "user_coupons": build_user_coupons,
+    "coupons": build_coupons,
     "push_notifications": build_push_notifications,
     "ab_test_assignments": build_ab_test_assignments,
 }
@@ -2972,7 +3636,8 @@ LOAD_ORDER = [
     # channel_daily_costs 依赖 user_attributions（成本从归因新客反推），
     # 也依赖 ad_campaigns 那张透传维表（挂活动 id），所以排在归因之后。
     "user_attributions", "channel_daily_costs",
-    "user_coupons", "push_notifications",
+    # coupons 的配额 / 状态从 user_coupons 的实际发放回填（2026-11 移出直通维表）
+    "user_coupons", "coupons", "push_notifications",
     "ab_test_assignments",
     "subscriptions",          # 依赖 payments
 ]

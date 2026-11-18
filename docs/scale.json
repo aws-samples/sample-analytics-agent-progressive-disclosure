@@ -109,6 +109,50 @@
         "user_segments": 10,
         "users": 213535
       }
+    },
+    "full_202611": {
+      "desc": "2026-11 生成器数据层修复后的全量重灌批次（设备归属、分群按规则、券规则、成交价=标价、归因双触点等）。本仓库开发账号 2026-11-06 装的是这一批",
+      "source": "genFULL_parquet_202611 / genFULL_csv_202611（scripts/gen/ 生成器，seed 42）",
+      "scale": 427.07,
+      "measured_at": "2026-11-06",
+      "rows_total": 80017470,
+      "rows": {
+        "ab_test_assignments": 662966,
+        "ab_test_variants": 30,
+        "ab_tests": 12,
+        "ad_campaigns": 50,
+        "ad_creatives": 144,
+        "banners": 119,
+        "campaigns": 50,
+        "categories": 166,
+        "channel_daily_costs": 2799,
+        "channels": 14,
+        "coupons": 150,
+        "event_definitions": 25,
+        "events": 8541400,
+        "order_items": 1804371,
+        "orders": 854140,
+        "page_views": 12895806,
+        "payments": 689390,
+        "post_comments": 5978980,
+        "post_likes": 15232733,
+        "post_shares": 2989490,
+        "posts": 427070,
+        "product_tags": 10659,
+        "products": 4133,
+        "push_notifications": 4270700,
+        "sessions": 2135350,
+        "subscriptions": 21354,
+        "user_attributions": 149474,
+        "user_coupons": 9709436,
+        "user_devices": 317740,
+        "user_follows": 8184797,
+        "user_messages": 3951679,
+        "user_profiles": 213535,
+        "user_segment_members": 755163,
+        "user_segments": 10,
+        "users": 213535
+      }
     }
   },
 
@@ -116,11 +160,14 @@
 
   "groups": {
     "scaled": [
-      "ab_test_assignments", "events", "order_items", "orders", "page_views",
+      "events", "order_items", "orders", "page_views",
       "post_comments", "post_likes", "post_shares", "posts", "push_notifications",
       "sessions", "subscriptions", "user_attributions", "user_coupons",
       "user_devices", "user_follows", "user_messages", "user_profiles",
-      "user_segment_members", "users"
+      "users"
+    ],
+    "rule_derived": [
+      "ab_test_assignments", "user_segment_members"
     ],
     "sublinear": [
       "channel_daily_costs", "payments", "product_tags", "products"
@@ -134,6 +181,7 @@
 
   "group_notes": {
     "scaled": "容差 ±0.2%：生成器按比例取整，subscriptions 实测 ×427.080 而基准 ×427.070",
+    "rule_derived": "行数由业务规则推导、不再按 scale 等比（2026-11）：ab_test_assignments 剔除「用户注册时实验已结束」的对且草稿实验无分组；user_segment_members 按 user_segments.rules_json 从事实推导成员。只钉方向：count > seed（随规模增长），倍数没有闭式。",
     "sublinear": [
       "channel_daily_costs ×3.08（投放日历按渠道×天数长，天数固定所以几乎不涨）、",
       "products ×20.7 / product_tags ×20.8（商品目录按 sqrt 量级长）、",

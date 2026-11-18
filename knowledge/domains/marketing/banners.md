@@ -34,7 +34,7 @@
 | category_top | 分类页顶部 | 11 |
 
 > 共 7 个位置、119 行。旧文档只写了后 4 个，漏掉的 `cart_bottom` / `splash` /
-> `search_top` 恰好是行数最多的三个——按旧列表做 GROUP BY 会漏掉 57% 的 banner。
+> `search_top` 恰好是行数最多的三个——按旧列表做 GROUP BY 会漏掉 56% 的 banner。
 
 ### target_type 跳转类型
 | 值 | 说明 | 实测行数 |
@@ -64,9 +64,10 @@ SELECT
     click_count,
     ROUND(click_count * 100.0 / NULLIF(impression_count, 0), 2) AS ctr_percent
 FROM banners
+-- 「当前在投」相对业务锚点日判定（静态快照），不用 CURRENT_TIMESTAMP（真实今天早已超出样本窗口，会查空）
 WHERE is_active = true
-  AND start_date <= CURRENT_TIMESTAMP
-  AND end_date >= CURRENT_TIMESTAMP
+  AND start_date < (SELECT max(as_of_date) FROM meta_snapshot) + interval '1' day
+  AND end_date >= (SELECT max(as_of_date) FROM meta_snapshot)
 ORDER BY position, ctr_percent DESC;
 ```
 

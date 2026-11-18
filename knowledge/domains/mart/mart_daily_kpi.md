@@ -14,7 +14,7 @@
 | orders | int | 当日有效订单数 |
 | paying_users | int | 当日付费用户数（有效订单去重 user） |
 | gmv | numeric | 当日 GMV，实付口径 |
-| refund_amt | numeric | 当日退款额（status='refunded'，按 refunded_at）。⚠️ **合计不等于全量退款**，见「口径」 |
+| refund_amt | numeric | 当日退款额（status='refunded'，按 refunded_at）。⚠️ **合计不保证等于全量退款**，见「口径」 |
 | new_subscriptions | int | 当日新增订阅（`start_date`） |
 
 ## 口径
@@ -26,9 +26,10 @@
   同为 mart 层的 `mart_channel_daily` 轴铺到 2026-09-01，同样的写法在那张表上会算出
   渠道 GMV = 0。锚点统一到一处，跨表的「最近 7 天」才是同一段日期。
 - dau 是「日」活，跨多天看活跃要用 `avg(dau)`，不要把每天的 dau 相加。
-- ⚠️ **`sum(refund_amt)` 不是全量退款，别用它回答「退款总额」。** 本表的日期轴由
+- ⚠️ **`sum(refund_amt)` 不保证是全量退款，别用它回答「退款总额」。** 本表的日期轴由
   GMV 侧（`placed_at`）决定，不含 `refunded_at`；轴末之后才发生的退款在 LEFT JOIN
-  时被丢掉，所以本表退款合计**偏低**。
+  时被丢掉，所以本表退款合计**可能偏低**。当前数据上退款全部落在轴内（`refunded_at` 止于 2026-01-24），
+  实测两表合计恰好相等（9,897,495.82）——这是本批数据的巧合，不是缺陷消失了。
   - 问「退款总额」「累计退款」「一共退了多少」→ 用 `fin_daily_revenue.refund_amount`，
     那张表按 `refunded_at` 建轴，是全量。
   - 本表的 `refund_amt` 只能回答「**某一天**退了多少」。

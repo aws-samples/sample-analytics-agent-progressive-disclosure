@@ -70,7 +70,7 @@ SELECT
     COUNT(*) AS post_count
 FROM posts
 WHERE status = 'published'
-    AND published_at >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '30' day
+    AND published_at >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '29' day AND published_at < (SELECT max(as_of_date) FROM meta_snapshot) + interval '1' day
 GROUP BY DATE(published_at), content_type
 ORDER BY pub_date DESC, post_count DESC;
 ```
@@ -87,7 +87,7 @@ SELECT
     ROUND(AVG((like_count + comment_count + share_count) * 100.0 / NULLIF(view_count, 0)), 2) AS avg_engagement_rate
 FROM posts
 WHERE status = 'published'
-    AND published_at >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '30' day
+    AND published_at >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '29' day AND published_at < (SELECT max(as_of_date) FROM meta_snapshot) + interval '1' day
 GROUP BY content_type
 ORDER BY avg_engagement_rate DESC;
 ```
@@ -105,7 +105,7 @@ FROM posts po
 CROSS JOIN UNNEST(po.product_ids) AS p(product_id)
 JOIN products pr ON p.product_id = pr.product_id
 WHERE po.status = 'published'
-    AND po.published_at >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '30' day
+    AND po.published_at >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '29' day AND po.published_at < (SELECT max(as_of_date) FROM meta_snapshot) + interval '1' day
 GROUP BY p.product_id, pr.product_name
 HAVING COUNT(DISTINCT po.post_id) >= 5
 ORDER BY total_exposure DESC

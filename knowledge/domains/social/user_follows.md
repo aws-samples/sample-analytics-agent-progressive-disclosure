@@ -14,6 +14,7 @@
 - `following_id`: 被关注的用户（博主/KOL）
 - 双向关注 = A关注B 且 B关注A（互相关注）
 
+
 ## 索引
 
 - PRIMARY KEY: (`follower_id`, `following_id`)
@@ -59,7 +60,7 @@ SELECT
     COUNT(*) AS new_follows
 FROM user_follows
 WHERE following_id = :target_user_id
-    AND created_at >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '30' day
+    AND created_at >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '29' day AND created_at < (SELECT max(as_of_date) FROM meta_snapshot) + interval '1' day
 GROUP BY DATE(created_at)
 ORDER BY follow_date;
 ```

@@ -73,7 +73,8 @@ SELECT
     status,
     start_date,
     end_date,
-    EXTRACT(DAY FROM COALESCE(end_date, CURRENT_TIMESTAMP) - start_date) AS days_running
+    -- 未结束的实验算到业务锚点日（静态快照），不用 CURRENT_TIMESTAMP，否则天数会按真实今天越算越大
+    date_diff('day', start_date, COALESCE(end_date, CAST((SELECT max(as_of_date) FROM meta_snapshot) AS timestamp))) AS days_running
 FROM ab_tests
 WHERE start_date IS NOT NULL
 ORDER BY days_running DESC;

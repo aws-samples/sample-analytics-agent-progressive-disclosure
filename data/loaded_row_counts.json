@@ -1,8 +1,8 @@
 {
-  "source": "/Users/jtzhu/analytics-agent-data/genFULL_csv",
-  "source_note": "2026-09-01 从 /tmp/genFULL_csv 原地 mv 到这里（同一块盘，字节未变）。挪的理由是 /tmp 重启就清空，而这 7.3G 是三种架构对比测试的唯一数据源。Parquet 那一份在同级目录 genFULL_parquet（1.9G，24 张生成表由 main.py --format parquet 产、11 张透传维表由 dims_to_parquet.py 转），两份的 _expected.json 268 个预期值逐项相同。",
-  "parquet_source": "/Users/jtzhu/analytics-agent-data/genFULL_parquet",
-  "loaded_at": "2026-08-31",
+  "source": "/Users/jtzhu/analytics-agent-data/genFULL_csv_202611",
+  "source_note": "2026-11-06 生成器数据层修复后的全量重灌（设备归属 / 分群按规则 / 券规则 / 成交价=标价 / 归因双触点等，见 scripts/gen/tables.py）。Parquet（genFULL_parquet_202611，24+1 张生成表由 main.py 产、10 张透传维表由 dims_to_parquet.py 转）是装载用的那份：S3 Tables 走 load_parquet.py --apply --regen、Redshift 走 load_from_s3.py；CSV（genFULL_csv_202611）用同一 seed 重新生成，_expected.json 与 Parquet 那份逐项相同，作为 verify_load 的真源。上一次装载的快照见 genFULL_csv / genFULL_parquet（2026-08-31）。",
+  "parquet_source": "/Users/jtzhu/analytics-agent-data/genFULL_parquet_202611",
+  "loaded_at": "2026-11-06",
   "scale": 427.07,
   "seed": 42,
   "as_of": "2026-01-24",
@@ -10,6 +10,7 @@
   "generated_tables": [
     "ab_test_assignments",
     "channel_daily_costs",
+    "coupons",
     "events",
     "order_items",
     "orders",
@@ -42,12 +43,11 @@
     "campaigns",
     "categories",
     "channels",
-    "coupons",
     "event_definitions",
     "user_segments"
   ],
   "tables": {
-    "ab_test_assignments": 790080,
+    "ab_test_assignments": 662966,
     "ab_test_variants": 30,
     "ab_tests": 12,
     "ad_campaigns": 50,
@@ -79,7 +79,7 @@
     "user_follows": 8184797,
     "user_messages": 3951679,
     "user_profiles": 213535,
-    "user_segment_members": 554337,
+    "user_segment_members": 755163,
     "user_segments": 10,
     "users": 213535
   }

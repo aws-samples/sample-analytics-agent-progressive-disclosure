@@ -516,6 +516,15 @@ def main() -> int:
                     print(f"  [{i}/{len(stmts)}] skip {head}  （已容忍）")
                     continue
                 print(f"  [{i}/{len(stmts)}] FAIL {head}\n      {e}")
+                # 遇错即停，但必须说清还有哪些没跑：2026-11 集市层重建时第 24 条失败，
+                # 后面 5 张表的 15 条语句静默未执行，靠逐表比对才发现那 5 张还是旧数据。
+                rest = stmts[i:]
+                if rest:
+                    print(f"\n  ⚠️  以下 {len(rest)} 条**未执行**（修好第 {i} 条后从这里续跑，"
+                          f"别整文件重跑——前面的 DROP/CREATE 会再清一次授权）：")
+                    for k, r_ in enumerate(rest, i + 1):
+                        print(f"      [{k}/{len(stmts)}] {' '.join(r_.split())[:70]}")
+                print(f"\n{ok}/{len(stmts)} 条成功，第 {i} 条失败，{len(rest)} 条未执行 ❌")
                 return 1
         print(f"\n{ok}/{len(stmts)} 条成功 ✅")
         return 0

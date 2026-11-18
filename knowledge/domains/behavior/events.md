@@ -16,53 +16,56 @@
 | ip_address | VARCHAR(45) | IP地址 |
 | created_at | TIMESTAMP | 记录创建时间 |
 
-> ⚠️ **`session_id` 只对 22 种"泛化"事件成立；三种保底事件的 `session_id` 是错的。**
-> `purchase`（647,395）/ `use_coupon`（324,620）/ `register`（213,535）这 118.6 万行
-> 挂的是该用户的**首个会话**，而 `event_time` 取的是订单时刻或注册时刻，
-> 两者可以差到 **90 天**。实测（2026-09-01，全表 854.1 万行）：
-> **118.4 万行（13.9%）的 `event_time` 落在自己 `session_id` 的
-> `[start_time, start_time+duration]` 窗口外**，108.6 万行（12.7%）甚至不在同一天。
+> ⚠️ **`session_id` 可以为 NULL：`purchase` / `use_coupon` 是服务端事件，只在发生时刻恰好落在
+> 该用户某个会话窗口内时才挂会话。**
+> - `register`（213,535 行）：恰好挂本人的注册会话——每个用户的首个会话就从注册时刻开始，
+>   `event_time` = `users.registered_at`。
+> - `purchase`（647,395 行）：`event_time` = 该单 `orders.paid_at`；646,206 行（99.8%）`session_id` 为 NULL。
+> - `use_coupon`（324,482 行）：`event_time` = 该单 `orders.placed_at`；317,395 行（97.8%）为 NULL。
+> - 其余 22 种事件全部挂在本人会话上，且落在会话的 `[start_time, end_time]` 之内。
+> - `device_id`：有会话的事件 = 所属会话的设备；无会话的服务端事件 = 本人主设备
+>   （`user_devices.is_primary`）。所以 `events` / `sessions` 的 `device_id` 都能 JOIN 回 `user_devices`，
+>   且设备属于事件本人。
 >
 > 由此产生两条纪律：
-> - **不要按 `session_id` 归因这三种事件**（"哪个渠道的会话促成了下单"这类问题，
->   走 `orders` / `user_attributions`，别走 `events.session_id`）。会话级的
->   `event_count` 本身是从这份归属回填的，所以计数对得上、时间对不上。
-> - **按天做行为分析时，`events` 的活跃天数比 `sessions` 多**：窗首那批用户人均
->   事件天数 14.5 天 vs 会话天数 5.1 天，因为订单铺满了整段在库时长。留存题受这条
->   影响最大，见 `analysis/retention_curve.md` 顶部那张两口径对照表。
+> - **不要用 `events.session_id` 做下单归因**（"哪个渠道的会话促成了下单"这类问题，
+>   走 `orders` / `user_attributions`）。`JOIN sessions USING(session_id)` 会把 99.8% 的
+>   purchase 丢掉，而且不报错。会话级的 `event_count` 只数挂在该会话上的事件。
+> - **按天做行为分析时，`events` 的活跃天数比 `sessions` 多**：人均事件天数 6.9 天 vs 会话天数
+>   4.4 天，因为支付 / 用券事件落在订单时刻、不一定在会话里。留存题受这条影响最大，见
+>   `analysis/retention_curve.md` 顶部那张两口径对照表。
 >
-> `page_views` 没有这个问题（全部挂在自己会话的窗口内，L5 `pv_in_session` 判据
-> 通过线是 0 行）。同一条性质在 `events` 侧**当前没有判据**——这是已登记的缺口，
-> 清除条件是下一次全量重灌。
+> （2026-11 之前三种保底事件一律挂在用户的首个会话上、时刻却是订单时刻，13.9% 的事件落在
+> 自己会话窗口之外。那段旧说明已作废。）
 
 ## 字段枚举值
 
 ### event_name 事件名称（全 25 种，实测）
 | 值 | 说明 | 所属分类 | 实测行数 | 占比 |
 |----|------|----------|------|------|
-| view_home | 浏览首页 | engagement | 1,393,869 | 16.32% |
-| view_product | 商品浏览 | engagement | 1,140,840 | 13.36% |
-| add_to_cart | 加入购物车 | conversion | 928,350 | 10.87% |
-| app_open | APP 打开 | retention | 857,348 | 10.04% |
-| begin_checkout | 发起结算 | conversion | 750,188 | 8.78% |
-| purchase | 完成购买 | conversion | 647,395 | 7.58% |
-| app_close | APP 关闭 | retention | 608,208 | 7.12% |
-| use_coupon | 使用优惠券 | conversion | 324,620 | 3.80% |
-| view_post | 查看帖子 | engagement | 285,779 | 3.35% |
-| login | 用户登录 | retention | 250,211 | 2.93% |
-| register | 用户注册 | acquisition | 213,535 | 2.50% |
-| search | 搜索 | engagement | 213,505 | 2.50% |
-| view_category | 浏览分类页 | engagement | 185,040 | 2.17% |
-| logout | 用户登出 | retention | 157,428 | 1.84% |
-| like_post | 点赞帖子 | social | 142,833 | 1.67% |
-| receive_push | 收到推送 | engagement | 113,872 | 1.33% |
-| add_favorite | 加收藏 | engagement | 71,004 | 0.83% |
-| click_banner | 点击 banner | engagement | 57,327 | 0.67% |
-| remove_from_cart | 移出购物车 | engagement | 49,700 | 0.58% |
+| view_home | 浏览首页 | engagement | 1,393,892 | 16.32% |
+| view_product | 商品浏览 | commerce | 1,140,874 | 13.36% |
+| add_to_cart | 加入购物车 | commerce | 928,365 | 10.87% |
+| app_open | APP 打开 | engagement | 857,359 | 10.04% |
+| begin_checkout | 发起结算 | commerce | 750,202 | 8.78% |
+| purchase | 完成购买 | commerce | 647,395 | 7.58% |
+| app_close | APP 关闭 | engagement | 608,229 | 7.12% |
+| use_coupon | 使用优惠券 | commerce | 324,482 | 3.80% |
+| view_post | 查看帖子 | social | 285,781 | 3.35% |
+| login | 用户登录 | system | 250,212 | 2.93% |
+| register | 用户注册 | system | 213,535 | 2.50% |
+| search | 搜索 | engagement | 213,502 | 2.50% |
+| view_category | 浏览分类页 | commerce | 185,045 | 2.17% |
+| logout | 用户登出 | system | 157,434 | 1.84% |
+| like_post | 点赞帖子 | social | 142,836 | 1.67% |
+| receive_push | 收到推送 | system | 113,874 | 1.33% |
+| add_favorite | 加收藏 | commerce | 71,009 | 0.83% |
+| click_banner | 点击 banner | engagement | 57,326 | 0.67% |
+| remove_from_cart | 移出购物车 | commerce | 49,699 | 0.58% |
 | comment_post | 评论帖子 | social | 42,929 | 0.50% |
-| view_profile | 查看个人主页 | engagement | 35,742 | 0.42% |
-| share | 分享 | retention | 28,765 | 0.34% |
-| follow_user | 关注用户 | social | 21,610 | 0.25% |
+| view_profile | 查看个人主页 | engagement | 35,743 | 0.42% |
+| share | 分享 | social | 28,766 | 0.34% |
+| follow_user | 关注用户 | social | 21,609 | 0.25% |
 | click_push | 点击推送 | engagement | 14,248 | 0.17% |
 | edit_profile | 编辑资料 | engagement | 7,054 | 0.08% |
 
@@ -71,21 +74,21 @@
 > `registration`（真名 `register`）、`app_install`、`first_open`、`button_click`。
 >
 > 全表 8,541,400 行、25 种事件，**分布是漏斗形的**：头部 `view_home` 16.32%，
-> 尾部 `edit_profile` 0.08%，最高/最低 = 197.6 倍。上面的行数是 2026-09-01 那一版
+> 尾部 `edit_profile` 0.08%，最高/最低 = 197.6 倍。上面的行数是 2026-11 重灌后
 > 全量数据的实测值；重灌会等比例变化，**占比那一列才是稳定的**，写结论时优先引占比。
 >
 > 有三种事件的行数是**按定义等于另一张表的**，可以拿来做跨表自检：
 > `register` = `users` 行数（213,535，每个用户恰好一条）、
 > `purchase` = 有效订单数（647,395，`orders.status IN ('paid','shipped','delivered')`）、
-> `use_coupon` = `user_coupons` 里 `status = 'used'` 的行数（324,620）。
+> `use_coupon` = `user_coupons` 里 `status = 'used'` 的行数（324,482，= 用了券的订单数，含未支付 / 已取消的单）。
 > 这三条对不上就是装载漏了分区，不是业务波动。
 >
 > ⚠️ **上面这张是「每种事件各数一遍」的行数表，它不是漏斗，也不能用来判断漏斗衰不衰减。**
 > 漏斗要求第 i+1 步的用户集是第 i 步的**子集**（见下面「购买漏斗转化分析」的写法）。
-> 按「每步各数一遍」的去重人数排出来是 `92,800 / 87,737 / 82,447 / 98,745`（近 30 天），
+> 按「每步各数一遍」的去重人数排出来是 `89,869 / 85,176 / 80,256 / 98,735`（近 30 天），
 > 这种「购买人数比浏览人数还多」的东西只说明口径错了，**不说明数据没有漏斗形态**。
-> 同一个窗口按子集口径算是 `92,800 → 75,676 → 63,781 → 24,052`，逐层留存
-> 81.5%/84.3%/37.7%，单调递减、很正常。所以**不要**写「这份种子数据分布均匀，
+> 同一个窗口按子集口径算是 `89,869 → 73,785 → 62,419 → 23,340`，逐层留存
+> 82.1%/84.6%/37.4%，单调递减、很正常。所以**不要**写「这份种子数据分布均匀，
 > 所以转化率不衰减／别当业务结论」——这句话本身就是把自己的口径错误归因给了数据。
 
 ### properties 事件属性（实测形状）
@@ -93,7 +96,7 @@
 ⚠️ **25 种事件里只有 4 种带属性，其余 21 种全是 `{}`**（空 JSON，不是 NULL）。
 所以「按属性下钻」这条路在这份数据上只有下面 4 个事件走得通：
 
-**view_product 商品浏览事件**（1,140,840 行）
+**view_product 商品浏览事件**（1,140,874 行）
 ```json
 {"product_id": 1822, "product_name": "富安娜 毛巾 双人款"}
 ```
@@ -102,12 +105,12 @@
 所以「按属性里的名字分组」和「JOIN `products` 再分组」给出同一个答案，用哪个都行
 （属性里的那个省一次 JOIN）。
 
-**add_to_cart 加购事件**（928,350 行）
+**add_to_cart 加购事件**（928,365 行）
 ```json
 {"quantity": 2, "product_id": 3089}
 ```
 
-`quantity` 只有 1 / 2 / 3 三个值，分布基本均匀。`product_id` 同样接得回 `products`，
+`quantity` 只有 1 / 2 / 3 三个值（实测 324,619 / 330,761 / 272,985，3 略少）。`product_id` 同样接得回 `products`，
 但这里**没有** `product_name`——要商品名得自己 JOIN。
 
 **purchase 购买事件**（647,395 行）
@@ -115,14 +118,14 @@
 {"amount": 1236.58, "order_id": 2}
 ```
 
-**search 搜索事件**（213,505 行）
+**search 搜索事件**（213,502 行）
 ```json
 {"keyword": "海鲜"}
 ```
 
 只有 `keyword` 一个键，**没有** `result_count` / `filter_applied`（旧文档写过）——
 按它们取值会得到整列 NULL，`AVG()` 出来是 NULL 而不是 0。
-词池就是 `categories` 的 120 个叶子类目名（不是自由文本），213,505 次搜索把 120 个词
+词池就是 `categories` 的 120 个叶子类目名（不是自由文本），213,502 次搜索把 120 个词
 全都覆盖到了，热度是长尾：头部 `腮红` 3.84%、第十位 `燃气灶` 1.99%、头尾差约 13 倍。
 所以「搜索词 TOP N 里哪些类目缺货」这类问题可以直接把 `keyword` 和
 `categories.category_name` 对上，不会出现站内不存在的词。
@@ -183,8 +186,8 @@ SELECT (SELECT count(*) FROM s1) AS step1_view,
        (SELECT count(*) FROM s4) AS step4_purchase
 ```
 
-实测：全量 `177,644 → 151,924 → 131,677 → 77,681`（整体 43.7%），
-近 30 天 `92,800 → 75,676 → 63,781 → 24,052`（整体 25.9%）。
+实测：全量 `177,474 → 152,006 → 131,802 → 77,692`（整体 43.8%），
+近 30 天 `89,869 → 73,785 → 62,419 → 23,340`（整体 26.0%）。
 两个都是合法口径，**必须在 method 里写明算的是哪一个**。
 要按天/渠道切分，把维度带进 `w` 并**在每个维度内部**保持子集约束——
 不要先 `GROUP BY date` 再各步分别计数，那样又退回独立计数了。
@@ -197,7 +200,7 @@ SELECT
     COUNT(*) AS event_count,
     COUNT(DISTINCT user_id) AS unique_users
 FROM events
-WHERE event_time >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '7' day
+WHERE event_time >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '6' day AND event_time < (SELECT max(as_of_date) FROM meta_snapshot) + interval '1' day
     AND event_name IN ('view_product', 'add_to_cart', 'purchase')
 GROUP BY DATE(event_time), event_name
 ORDER BY date DESC, event_count DESC;
@@ -212,7 +215,7 @@ SELECT
     COUNT(DISTINCT user_id) AS unique_users
 FROM events
 WHERE event_name = 'search'
-    AND event_time >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '7' day
+    AND event_time >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '6' day AND event_time < (SELECT max(as_of_date) FROM meta_snapshot) + interval '1' day
     AND json_extract_scalar(properties, '$.keyword') IS NOT NULL
 GROUP BY json_extract_scalar(properties, '$.keyword')
 ORDER BY search_count DESC

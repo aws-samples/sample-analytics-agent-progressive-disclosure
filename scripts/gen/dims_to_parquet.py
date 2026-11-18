@@ -41,8 +41,10 @@ CSV_DIR = ROOT / "data" / "csv"
 # build_channel_daily_costs 生成（P0-5）。留在这里的话，v1 那 910 行会覆盖生成器产的
 # 2799 行网格——v1 的 installs 是 244,774 而全库只有 500 个用户（490 倍），
 # CAC ¥2,900/人，凡是碰 CAC / ROI 的题全错。
+# coupons **也已移出**（2026-11）：它由 tables.build_coupons 生成——模板仍是 data/csv 的
+# 150 行，但 total_quota / status 要按 user_coupons 的实际发放回填，CSV 里写不出这两列。
 DIMS = ["categories", "channels", "event_definitions",
-        "user_segments", "campaigns", "coupons", "banners", "ab_tests",
+        "user_segments", "campaigns", "banners", "ab_tests",
         "ab_test_variants", "ad_campaigns", "ad_creatives"]
 
 

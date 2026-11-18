@@ -58,6 +58,8 @@
 | users | posts | user_id | 1:N 用户发布的内容 |
 | users | page_views | user_id | 1:N 用户页面浏览 |
 | users | events | user_id | 1:N 用户事件 |
+| user_devices | sessions | device_id | 1:N 设备上的会话（设备属于会话用户） |
+| user_devices | events | device_id | 1:N 设备上的事件（无会话的服务端事件记在本人主设备） |
 
 - ❌ `user_tags`：不存在。用户侧的分群走 `user_segments` / `user_segment_members`；
   `product_tags` 是**商品**标签，别误用。
@@ -75,7 +77,7 @@
 
 - ❌ `product_categories`：不存在，分类表叫 `categories`（自关联 `parent_id`）。
 - ❌ `product_skus`：不存在。SKU 只以 `order_items.sku_id` / `order_items.sku_name`
-  的形态存在，**没有 SKU 维表**；而且 `sku_name` 当前整列 NULL，拿它做展示会全空。
+  的形态存在，**没有 SKU 维表**；`sku_name` 当前全量有值（1,804,371 行，2026-11 重灌前整列 NULL，已作废）。
 
 ### 交易域关联
 
@@ -85,7 +87,7 @@
 | orders | payments | order_id | 1:N 支付记录 |
 | orders | coupons | coupon_id | N:1 订单用掉的券 |
 | order_items | products | product_id | N:1 商品信息 |
-| subscriptions | payments | payment_id | N:1 订阅支付（该列整列 NULL，join 不出东西） |
+| subscriptions | payments | payment_id | N:1 订阅支付（`payment_id` 非空 14,635 / 21,354 行 = 68.5%，非空的都 join 得回 `payments`） |
 
 ### 社交域关联
 
@@ -107,7 +109,7 @@
 |------|--------|----------|------|
 | user_attributions | users | user_id | N:1 归因用户 |
 | user_attributions | channels | channel_id | N:1 渠道（渠道名要 join 才有） |
-| user_attributions | ad_campaigns | ad_campaign_id | N:1 广告计划（该列整列 NULL） |
+| user_attributions | ad_campaigns | ad_campaign_id | N:1 广告计划（只挂本渠道、点击当天在档期内的活动；自然量渠道为 NULL） |
 | ad_campaigns | channels | channel_id | N:1 计划所属渠道 |
 | ad_campaigns | ad_creatives | ad_campaign_id | 1:N 广告素材 |
 | channel_daily_costs | channels | channel_id | N:1 渠道日成本 |
@@ -146,8 +148,8 @@
 
 - ❌ `experiment_users` → 用 `ab_test_assignments`；❌ `experiments` → 用 `ab_tests`；
   ❌ `experiment_results` → **不存在这张表**，实验结论在 `ab_tests.conclusion` 与
-  `ab_tests.winner_variant_id`，而这两列当前整列 NULL——「实验结果如何」这类问题
-  在本库答不出来，要如实说没有数据，不要拿分组指标硬凑一个结论。
+  `ab_tests.winner_variant_id`，只有 4 个 `completed` 实验有值，其余 8 个为 NULL——
+  问「实验结果如何」时以这两列为准，不要拿分组指标硬凑一个结论。
 
 ## 常用 JOIN 模式
 
@@ -167,7 +169,7 @@ WHERE u.user_id = 1001;
 
 ### 订单完整信息
 ```sql
--- 没有 SKU 维表：sku_id / sku_name 就在 order_items 上（sku_name 当前整列 NULL）。
+-- 没有 SKU 维表：sku_id / sku_name 就在 order_items 上。
 SELECT o.order_id, o.order_no, o.status, o.total_amount, o.actual_amount, o.placed_at,
        oi.item_id, oi.quantity, oi.unit_price, oi.actual_amount AS item_amount,
        oi.sku_id, p.product_name
@@ -202,13 +204,15 @@ SELECT
     ch.channel_name,
     ua.ad_campaign_id,
     COUNT(DISTINCT o.order_id) AS orders,
-    SUM(o.total_amount) AS total_gmv
+    SUM(o.actual_amount) AS total_gmv          -- GMV = 有效订单实付金额，不是 total_amount
 FROM users u
 JOIN user_attributions ua ON u.user_id = ua.user_id
 JOIN channels ch ON ch.channel_id = ua.channel_id
 LEFT JOIN orders o ON u.user_id = o.user_id
--- 一个用户有多条归因记录（first_touch / last_touch 各一条），不过滤会把订单算重
-WHERE ua.attribution_type = 'first_touch'
+    AND o.status IN ('paid', 'shipped', 'delivered')
+-- 被归因的用户每人一条 first_touch + 一条 last_touch，不按类型过滤会把每人数两遍；
+-- 要和集市层口径一致，按 last_touch 过滤（不漏人）
+WHERE ua.attribution_type = 'last_touch'
 GROUP BY u.user_id, ch.channel_name, ua.ad_campaign_id;
 ```
 
@@ -225,9 +229,11 @@ GROUP BY u.user_id, ch.channel_name, ua.ad_campaign_id;
 
 2. **软删除**: 部分表有 `status` 字段，查询时注意过滤。本库**没有** `is_deleted` 列。
 
-3. **时间字段**: `created_at` **不是每张表都有**（48 张里 18 张没有，包括 `orders` /
-   `events` / `payments` / `posts` 这些主表以及全部派生层表）。而且即使有，它也多半是
-   **灌数那一瞬**，不是业务时间——按时间筛选要用各表的业务时间列：`orders.placed_at`、
+3. **时间字段**: `created_at` **不是每张表都有**（48 张里 18 张没有：`user_attributions` /
+   `ab_test_assignments` / `user_coupons` / `user_messages` / `user_segment_members` 以及全部派生层表）。
+   而且即使有，它也不一定是业务时间（如 `channels.created_at` 全是同一个灌数时刻、`payments.created_at`
+   与 `paid_at` 不相等；`orders` / `events` / `page_views` / `users` / `sessions` 里它恰好等于业务时间列）
+   ——按时间筛选要用各表的业务时间列：`orders.placed_at`、
    `events.event_time`、`page_views.view_time`、`payments.paid_at`、`posts.published_at`、
    `users.registered_at`、`sessions.start_time`。具体到表看它自己的卡片。
 

@@ -51,7 +51,7 @@
 
 ### properties_schema 事件属性定义
 
-> ⚠️ **这一列在种子数据里 25 行全为 NULL**，没有属性契约可查。想知道某个事件带哪些
+> ⚠️ **这一列实测 25 行全为 NULL**，没有属性契约可查。想知道某个事件带哪些
 > 属性，只能直接看 `events.properties`（JSON 字符串，用
 > `json_extract_scalar(properties, '$.keyword')` 这类写法取值）。
 > `description` 列 25 行都有值，是这张表唯一能用的说明来源。

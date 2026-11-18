@@ -96,6 +96,7 @@
  *
  *        v1 那批：channel_daily_costs 合计 1449872.13 → 本表 1758934.34（1.21 倍）
  *        2026-09-17：             合计 4351988.47 → 本表 524993074.37（120.6 倍）
+ *        2026-11 重灌：           合计 4369314.80 → 本表 533713187.46（122.1 倍）
  *
  *    虚高的倍数 = 每条成本行平均匹配到几条归因，所以它跟着归因表的规模走：归因行数
  *    涨 100 倍，虚高就涨 100 倍。这一条在任何非空归因表上都显现。
@@ -546,7 +547,7 @@ CREATE TABLE dws_channel_weekly (
     cost        decimal(14,2) COMMENT '本周花费。⚠️ 虚高：归因表在聚合前 LEFT JOIN，一条成本行匹配 N 条归因就被数 N 遍。虚高的倍数 = 每条成本行平均匹配到几条归因，所以它随数据规模变（2026-09-17 实测 120.6 倍，v1 那批 1.21 倍）——记机制不要记数字。要准确花费请查 channel_daily_costs 或 mart_channel_daily',
     installs    bigint        COMMENT '本周激活。⚠️ 同 cost，被 join 扇出重复计数',
     new_users   bigint        COMMENT '本周 last_touch 归因新客（按 attributed_at 落在 [week_start, week_start+7) 判定）。这一列用了 count(DISTINCT)，不受扇出影响',
-    weekly_cac  decimal(12,2) COMMENT '周 CAC = cost / nullif(new_users, 0)；无归因新客时为 NULL 而不是 0。⚠️ 两件事：① 分子 cost 虚高，此列同样偏高；② NULL 集中在业务日历之外——成本轴铺到 2026-09-01 而归因止于 2026-01-24，那些周有花费零新客，NULL 是正确答案（2026-09-17 实测 414 行里 288 行 NULL，全部 week_start 大于 2026-01-24；日历内 126 行全部有值）。要干净的序列加 week_start <= (SELECT max(as_of_date) FROM meta_snapshot)'
+    weekly_cac  decimal(12,2) COMMENT '周 CAC = cost / nullif(new_users, 0)；无归因新客时为 NULL 而不是 0。⚠️ 两件事：① 分子 cost 虚高，此列同样偏高；② NULL 集中在业务日历之外——成本轴铺到 2026-09-01 而归因止于 2026-01-24，那些周有花费零新客，NULL 是正确答案。要干净的序列加 week_start <= (SELECT max(as_of_date) FROM meta_snapshot)'
 );
 
 INSERT INTO dws_channel_weekly (
@@ -575,9 +576,9 @@ DROP TABLE IF EXISTS fin_daily_revenue;
 
 CREATE TABLE fin_daily_revenue (
     dt            date          COMMENT '自然日；收入侧按 paid_at 归日、退款侧按 refunded_at 归日，两侧 FULL OUTER JOIN',
-    gross_revenue decimal(14,2) COMMENT '毛收入 = sum(actual_amount - shipping_fee) WHERE status IN (paid, shipped, delivered) AND paid_at IS NOT NULL。**扣掉运费**，所以不等于 GMV',
+    gross_revenue decimal(14,2) COMMENT '毛收入 = sum(actual_amount - shipping_fee) WHERE status IN (paid, shipped, delivered, refunded) AND paid_at IS NOT NULL，按 paid_at 归日（之后退款的订单也在付款日入账）。**扣掉运费**，所以不等于 GMV',
     refund_amount decimal(14,2) COMMENT '退款额 = sum(actual_amount) WHERE status = refunded AND refunded_at IS NOT NULL',
-    net_revenue   decimal(14,2) COMMENT '净收入 = gross_revenue - refund_amount'
+    net_revenue   decimal(14,2) COMMENT '净收入 = gross_revenue - 当日冲回的收入（退款订单的 actual_amount - shipping_fee，按 refunded_at 归日）。全量上恰等于未退款有效订单的收入；refund_amount 含运费，不能直接拿来减'
 );
 
 INSERT INTO fin_daily_revenue (dt, gross_revenue, refund_amount, net_revenue)
@@ -585,18 +586,22 @@ WITH paid AS (
     SELECT CAST(paid_at AS date) AS dt,
            sum(actual_amount - shipping_fee) AS gross_revenue
     FROM orders
-    WHERE status IN ('paid','shipped','delivered') AND paid_at IS NOT NULL
+    WHERE status IN ('paid','shipped','delivered','refunded') AND paid_at IS NOT NULL   -- 含之后退款的订单：它们付款当天确实入账了
     GROUP BY 1
 ),
 refunds AS (
-    SELECT CAST(refunded_at AS date) AS dt, sum(actual_amount) AS refund_amount
+    /* refund_amount = 退款现金额（含运费），供退款指标用；
+     * refund_revenue = 冲回的收入（不含运费），与 gross_revenue 同口径，用来算净收入。
+     * 以前 gross 只含未退款订单、又减一次退款，同一笔退款扣了两次。 */
+    SELECT CAST(refunded_at AS date) AS dt, sum(actual_amount) AS refund_amount,
+           sum(actual_amount - shipping_fee) AS refund_revenue
     FROM orders WHERE status = 'refunded' AND refunded_at IS NOT NULL
     GROUP BY 1
 )
 SELECT COALESCE(p.dt, r.dt),
        CAST(COALESCE(p.gross_revenue, 0) AS decimal(14,2)),
        CAST(COALESCE(r.refund_amount, 0) AS decimal(14,2)),
-       CAST(COALESCE(p.gross_revenue, 0) - COALESCE(r.refund_amount, 0)
+       CAST(COALESCE(p.gross_revenue, 0) - COALESCE(r.refund_revenue, 0)
             AS decimal(14,2))
 FROM paid p FULL OUTER JOIN refunds r ON p.dt = r.dt;
 

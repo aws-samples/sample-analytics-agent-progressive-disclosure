@@ -11,7 +11,7 @@ SELECT
     DATE(last_active_at) AS date,
     COUNT(DISTINCT user_id) AS dau
 FROM users
-WHERE last_active_at >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '30' day
+WHERE last_active_at >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '29' day AND last_active_at < (SELECT max(as_of_date) FROM meta_snapshot) + interval '1' day
 GROUP BY DATE(last_active_at)
 ORDER BY date;
 ```
@@ -22,7 +22,7 @@ SELECT
     DATE(event_time) AS date,
     COUNT(DISTINCT user_id) AS dau
 FROM events
-WHERE event_time >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '30' day
+WHERE event_time >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '29' day AND event_time < (SELECT max(as_of_date) FROM meta_snapshot) + interval '1' day
 GROUP BY DATE(event_time)
 ORDER BY date;
 ```
@@ -33,7 +33,7 @@ SELECT
     DATE_TRUNC('week', event_time) AS week,
     COUNT(DISTINCT user_id) AS wau
 FROM events
-WHERE event_time >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '84' day
+WHERE event_time >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '83' day AND event_time < (SELECT max(as_of_date) FROM meta_snapshot) + interval '1' day
 GROUP BY DATE_TRUNC('week', event_time)
 ORDER BY week;
 ```
@@ -44,7 +44,7 @@ SELECT
     DATE_TRUNC('month', event_time) AS month,
     COUNT(DISTINCT user_id) AS mau
 FROM events
-WHERE event_time >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '12' month
+WHERE event_time >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '12' month + interval '1' day AND event_time < (SELECT max(as_of_date) FROM meta_snapshot) + interval '1' day
 GROUP BY DATE_TRUNC('month', event_time)
 ORDER BY month;
 ```
@@ -56,13 +56,13 @@ WITH daily AS (
         DATE(event_time) AS date,
         COUNT(DISTINCT user_id) AS dau
     FROM events
-    WHERE event_time >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '30' day
+    WHERE event_time >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '29' day AND event_time < (SELECT max(as_of_date) FROM meta_snapshot) + interval '1' day
     GROUP BY DATE(event_time)
 ),
 monthly AS (
     SELECT COUNT(DISTINCT user_id) AS mau
     FROM events
-    WHERE event_time >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '30' day
+    WHERE event_time >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '29' day AND event_time < (SELECT max(as_of_date) FROM meta_snapshot) + interval '1' day
 )
 SELECT
     d.date,
@@ -77,8 +77,8 @@ ORDER BY d.date;
 
 ### 新用户留存率
 ```sql
--- cohort 时间列是 registered_at，不是 created_at（两列都存在且 500/500 行不等，
--- 写错了 EXPLAIN 照样过）。时间锚用 meta_snapshot，不用 CURRENT_DATE。
+-- cohort 时间列是 registered_at，不是 created_at（两列都存在；当前数据 213,535 行两列全相等，
+-- 但列语义不同，写错了 EXPLAIN 照样过）。时间锚用 meta_snapshot，不用 CURRENT_DATE。
 -- 分子里数的是 c.user_id（cohort 成员），不是 a.user_id——这是硬约束。
 WITH a AS (SELECT max(as_of_date) AS d FROM meta_snapshot),
 cohort AS (
@@ -107,7 +107,7 @@ ORDER BY c.cohort_date
 
 ⚠️ **按天分 cohort 的样本量取决于湖里装的是哪一批**：种子样本只有 500 个用户，摊到 30 天
 每天 2–12 人，实测某天 3/5 = **60% 次日留存**、隔一天又是 0%，全是分母噪声；全量批次是
-`users` 213,535 行摊在 91 天上，每天 **1,865–3,437 人**，日粒度可以直接报。你**不知道**
+`users` 213,535 行摊在 91 天上，每天 **1,599–3,518 人**，日粒度可以直接报。你**不知道**
 当前装的是哪一批，所以规矩按小的那一批定：优先用下面的**按周** cohort，并且**总是把
 `cohort_size` 一起给出来**，让分母自己说话。全量批次上分母噪声换成了另一个问题：
 **两头的 cohort 系统性偏高**，见下面那条。
@@ -124,15 +124,15 @@ ORDER BY c.cohort_date
 > 是**某一批**数据的性质，不是永远成立的结论：v1 种子样本的活跃度与注册生命周期独立抽样，
 > 观测窗完整的 cohort 第 0→4 周是 `45.0% / 43.0% / 42.1% / 41.1% / 43.0%`，近乎水平且末周
 > 回升——那时**平坦不等于"留得住"**，数字可以给但必须同时说明这份数据算不出留存；
-> 全量重灌批次给用户配了活跃半衰期，同口径实测 `71.6 → 51.9 → 42.3 → 37.2`，是正常衰减，
+> 全量重灌批次给用户配了活跃半衰期，同口径实测（2025-11-24 那周）`69.0 → 52.2 → 43.7 → 37.3`，是正常衰减，
 > 这时照常报结论、别再照抄那句警告。判据：**W4/W1 ≥ 0.8 视为不衰减**。完整口径与两种
 > 落笔方式见 `analysis/retention_curve.md`——**答留存题请连它一起读**，哪怕只是取数。
 >
 > ⚠️ **另一条独立的约束：这份数据的 cohort 之间不可比。** 全量批次的 cohort 全部出自
-> 同一个活跃度模型，实测满窗那几周 D1 只差 0.9pp、D7 只差 2.0pp（腹地 D1 58.6–59.5% /
-> D7 21.3–23.3%），**"哪批用户留得最好"没有可读的答案，不要排名**。数据窗两头偏高是
-> 窗口边缘（右端会话被压进更少天数、左端是 `events` 的保底事件挂错会话），不是用户质量。
-> 曲线**形状**是可用的（D0 100% → D1 59.4% → D7 22.3% → D14 14.7%，单调衰减、断崖在 D1）
+> 同一个活跃度模型，实测满窗那几周 D1 只差 1.0pp、D7 只差 2.3pp（腹地 D1 52.8–53.8% /
+> D7 19.4–21.7%），**"哪批用户留得最好"没有可读的答案，不要排名**。数据窗两头偏高是
+> 窗口边缘（右端会话被压进更少天数、左端是 `events` 里 `purchase` / `use_coupon` 服务端事件落在订单时刻、不在会话里），不是用户质量。
+> 曲线**形状**是可用的（D0 100% → D1 53.3% → D7 20.4% → D14 13.7%，单调衰减、断崖在 D1）
 > ——「不可比」说的是 cohort **之间**，不是这条曲线本身。
 
 ```sql
@@ -170,11 +170,11 @@ ORDER BY c.cohort_week
 但右删失只解释边缘的 0，**不解释中间那片为什么是平的**，两条都要说。
 
 ⚠️ **上面这段的第一行是残周，不要当成一个 cohort 报。** `> a.d - interval '56' day` 是按天
-切的，切点落在周中间，所以最早那一周只收进了它的一个尾巴：实测 **n = 2,630、W1 89.6%**，
-而后面四个满窗周是 n = 15,843 / 16,545 / 17,106 / 17,606、W1 = 72.9 / 71.6 / 71.0 / 70.0%。
-**残周的 W1 高出近 17pp 纯粹是它自己样本小又偏晚注册**，照它写"最早那批留得最好"是把
+切的，切点落在周中间，所以最早那一周只收进了它的一个尾巴：实测 **n = 2,630、W1 83.4%**，
+而后面四个满窗周是 n = 15,843 / 16,545 / 17,106 / 17,606、W1 = 68.3 / 66.7 / 66.0 / 64.9%。
+**残周的 W1 高出约 15pp 纯粹是它自己样本小又偏晚注册**，照它写"最早那批留得最好"是把
 切窗的产物当成了业务发现。要么在结论里剔掉第一行，要么把过滤改成按周对齐
-（`>= DATE_TRUNC('week', a.d - interval '56' day)`，注意这会多收进一整周、矩阵变 9 行）。
+（`>= DATE_TRUNC('week', a.d - interval '56' day)`，注意这会把首周补齐、多收 6 天，矩阵仍是 9 行）。
 
 ## 转化指标
 
@@ -190,7 +190,7 @@ WITH funnel AS (
         COUNT(DISTINCT CASE WHEN event_name = 'app_open' THEN user_id END) AS app_opens,
         COUNT(DISTINCT CASE WHEN event_name = 'register' THEN user_id END) AS registers
     FROM events
-    WHERE event_time >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '7' day
+    WHERE event_time >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '6' day AND event_time < (SELECT max(as_of_date) FROM meta_snapshot) + interval '1' day
 )
 SELECT
     app_opens,
@@ -207,15 +207,15 @@ FROM funnel;
 >
 > ⚠️ **口径硬约束**：第 i+1 步只保留「也做过第 i 步」的用户（`AND user_id IN (上一步)`）。
 > 每步各 `count(DISTINCT user_id)` 一遍**不是漏斗**——那样会得到
-> `394/385/396/373`（结算 > 浏览），然后被误读成「这份种子数据的转化率不衰减」。
-> 事件量近似均匀（736–866）说的是**每种事件各自的行数**，跟漏斗形态是两件事：
-> 同一份数据按子集口径算是 `394 → 314 → 258 → 199`，逐层流失 20%/18%/23%，
+> `89,869/85,176/80,256/98,735`（近 30 天，购买 > 浏览），然后被误读成「这份数据的转化率不衰减」。
+> 每种事件各自的行数（7,054–1,393,892）跟漏斗形态是两件事：
+> 同一窗口按子集口径算是 `89,869 → 73,785 → 62,419 → 23,340`，逐层流失 18%/15%/63%，
 > 单调递减。完整方法见 `analysis/funnel_analysis.md`。
 >
 > ⚠️ **绝对值不具参考性**（口径对了也一样）：本数据集的转化率显著高于真实业务——
-> 全量 `199/394 = 50.5%`、近 30 天 `32/197 = 16.2%`，真实电商同口径通常在
-> 个位数百分比。分母缺的是"看过就走"那一侧：浏览过商品的 394 人里只有 80 人
-> （20.3%）一次都没加购。**形态可以用**（定位瓶颈环节、比较人群差异），
+> 全量 `77,692/177,474 = 43.8%`、近 30 天 `23,340/89,869 = 26.0%`，真实电商同口径通常在
+> 个位数百分比。分母缺的是"看过就走"那一侧：浏览过商品的 177,474 人里只有 25,468 人
+> （14.4%）一次都没加购。**形态可以用**（定位瓶颈环节、比较人群差异），
 > **绝对值不要写成业务结论**。但这条只针对绝对值——单调性不成立依然只能是
 > 上面那条约束没做到，不许拿它去解释。详见 `analysis/funnel_analysis.md`
 > 的「口径声明」。
@@ -280,7 +280,7 @@ SELECT
     ROUND(CAST(COUNT(*) AS decimal(38,6)) / COUNT(DISTINCT user_id), 2) AS posts_per_creator
 FROM posts
 WHERE status = 'published'
-  AND created_at >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '84' day
+  AND created_at >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '83' day AND created_at < (SELECT max(as_of_date) FROM meta_snapshot) + interval '1' day
 GROUP BY DATE_TRUNC('week', created_at)
 ORDER BY week;
 ```
@@ -291,8 +291,7 @@ ORDER BY week;
    2026-01-24，所以问"最近 N 天"时统一用 `(SELECT max(as_of_date) FROM meta_snapshot)`
    作锚点——本文件里的例子已经全部这么写了，`CURRENT_DATE` / `NOW()` 在 Trino 里语法合法，
    写了不报错，只会安静地返回 0 行。
-   **别用各表自己的 `max(dt)`**：`fin_daily_revenue` 到 2026-02-02、
-   `channel_daily_costs`（时间列叫 `date` 不叫 `dt`）和 `mart_channel_daily` 到 2026-09-01，
+   **别用各表自己的 `max(dt)`**：`channel_daily_costs`（时间列叫 `date` 不叫 `dt`）和 `mart_channel_daily` 到 2026-09-01，
    按各自的 max 取"最近 30 天"会得到互相错位的窗口，跨表一对账就是对不上。见 connection.md
 2. **性能优化**: 引擎是 Athena（Trino）查 Iceberg 表，**没有索引**这回事。省钱省时间靠
    两点：只 SELECT 用到的列（列式存储按列计费），以及在时间列上加范围条件让 Iceberg

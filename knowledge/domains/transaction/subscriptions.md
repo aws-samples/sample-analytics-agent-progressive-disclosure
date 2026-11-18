@@ -24,24 +24,24 @@
 
 | 值 | 说明 | 实测行数 |
 |----|------|------|
-| active | 生效中 | 36 |
-| expired | 已过期（到期未续费） | 14 |
+| active | 生效中 | 13,719 |
+| expired | 已过期（到期未续费） | 7,635 |
 
-> 全表 50 行，只有这两个值；`cancelled` 在业务上存在，但种子数据里没有。
+> 全表 21,354 行，只有这两个值；`cancelled` 在业务上存在，但当前数据里没有。
 
 ### plan_name 订阅计划
 
 | 值 | 说明 | 实测行数 |
 |----|------|------|
-| 月度会员 | 按月订阅 | 29 |
-| 季度会员 | 按季订阅 | 12 |
-| 年度会员 | 按年订阅 | 9 |
+| 月度会员 | 按月订阅 | 12,356 |
+| 季度会员 | 按季订阅 | 5,160 |
+| 年度会员 | 按年订阅 | 3,838 |
 
 > **是中文值**，不是 `monthly_basic` 那套英文枚举（旧文档写过）。价格看 `plan_price` 列。
 
 ### cancel_reason 取消原因
 
-> ⚠️ **这一列在种子数据里整列为 NULL**（50 行全空，因为没有 `cancelled` 状态的订阅）。
+> ⚠️ **这一列在当前数据里整列为 NULL**（21,354 行全空，因为没有 `cancelled` 状态的订阅；`cancelled_at` 同样全空）。
 > 做流失原因分析在这份数据上无素材。
 
 ## 索引
@@ -80,7 +80,7 @@ ORDER BY start_month DESC;
 
 ### 取消原因分析
 ```sql
--- ⚠️ 在种子数据上这条查询返回空集：没有 cancelled 状态的订阅，cancel_reason 整列 NULL。
+-- ⚠️ 在当前数据上这条查询返回空集：没有 cancelled 状态的订阅，cancel_reason 整列 NULL。
 -- 保留它是为了说明写法，别把空结果解读成「没人取消订阅」。
 SELECT
     plan_name,
@@ -89,7 +89,7 @@ SELECT
     ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER(PARTITION BY plan_name), 2) AS pct
 FROM subscriptions
 WHERE status = 'cancelled'
-  AND cancelled_at >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '90' day
+  AND cancelled_at >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '89' day AND cancelled_at < (SELECT max(as_of_date) FROM meta_snapshot) + interval '1' day
 GROUP BY plan_name, cancel_reason
 ORDER BY plan_name, cancel_count DESC;
 ```
