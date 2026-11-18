@@ -15,21 +15,25 @@
 ## 字段枚举值
 
 ### channel_type 渠道类型
-| 值 | 说明 |
-|----|------|
-| paid | 付费广告渠道（Google Ads, Facebook Ads, TikTok Ads） |
-| organic | 自然流量（ASO、SEO） |
-| social | 社交媒体（自然社交传播） |
-| referral | 用户推荐（邀请好友） |
+| 值 | 说明 | 实测行数 |
+|----|------|------|
+| paid | 付费广告渠道 | 6 |
+| kol | 达人/KOL 合作 | 3 |
+| organic | 自然流量（ASO、SEO） | 3 |
+| referral | 用户推荐（邀请好友） | 1 |
+| direct | 直接访问 | 1 |
+
+> 全表 14 行。旧文档写的 `social` 不存在——社交类渠道被归到 `kol`（小红书种草、
+> B站UP主之类）；另外多了 `direct`。**只有 `paid` 和 `kol` 的渠道有投放成本**
+> （`channel_daily_costs`），所以 CAC / ROI 只在这些渠道上算得出来。
 
 ### platform 投放平台
-| 值 | 说明 |
-|----|------|
-| google | Google Ads（搜索、展示、YouTube） |
-| facebook | Facebook/Instagram Ads |
-| tiktok | TikTok/抖音广告 |
-| apple | Apple Search Ads |
-| organic | 自然流量（无广告平台） |
+
+> 14 行 11 种取值，这一列区分度接近主键，**当维度用而不是当枚举筛**：
+> `xiaohongshu`(2)、`douyin`(2)、`weixin`(2)，以及 `baidu` / `tencent` / `bilibili` /
+> `kuaishou` / `apple` / `weibo` / `app` / `direct`（各 1）。
+> **是国内平台**，不是 `google` / `facebook` / `tiktok` 那套（旧文档写过）。
+> 分渠道分析用 `channel_id` 或 `channel_name`。
 
 ## 索引
 

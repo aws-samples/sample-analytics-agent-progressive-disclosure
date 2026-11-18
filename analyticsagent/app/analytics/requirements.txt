@@ -1,4 +1,6 @@
 claude-agent-sdk>=0.2.88
-psycopg[binary]>=3.1
+# 数据层是 Athena（HTTPS + IAM，见 db.py / athena.py），不再需要数据库驱动。
+# psycopg 曾经在这里：那时候云上这份 db.py 是纯 psycopg 的 Aurora 直连。
+# db.py 里 `import psycopg` 只在 DB_BACKEND=postgres 时才走，Runtime 不设它。
 boto3>=1.34
 bedrock-agentcore>=0.1

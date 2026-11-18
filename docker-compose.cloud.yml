@@ -39,7 +39,9 @@ services:
       AWS_REGION: us-east-1
       ANTHROPIC_MODEL: global.anthropic.claude-opus-4-8
       # 显式钉住 postgres：这套 compose 自带 db 容器，走的是 v1 路径。
-      # db.py 的默认值已改成 redshift（Aurora 已退役），不钉住这里会连错后端。
+      # db.py 的默认值现在是 athena（Aurora / Redshift 都已退役），不钉住这里
+      # 会绕过自带的 db 容器去查湖仓——起得来、也查得出数，只是**查的不是这套
+      # compose 灌的那份库**，而两边数还不一样（19 万行 ⟷ 48 表 22 万行）。
       DB_BACKEND: postgres
       PGHOST: db
       PGPORT: "5432"

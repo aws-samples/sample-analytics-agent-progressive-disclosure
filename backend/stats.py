@@ -128,11 +128,25 @@ def pareto(values, labels=None) -> dict:
 
 
 def funnel(values, labels=None) -> dict:
-    """漏斗分步转化：步间转化率、整体转化率（连乘）、最大流失环节。"""
+    """漏斗分步转化：步间转化率、整体转化率（连乘）、最大流失环节。
+
+    **单调不增是漏斗的前提，这里核一遍并报出来。** 漏斗每一步必须是上一步的子集
+    （`knowledge/analysis/funnel_analysis.md` 的约束 A），所以人数必然单调不增。
+    传进来的序列若有某步比上一步大，那不是"数据不衰减"，是取数 SQL 把四个互不相干
+    的集合排在了一起——典型写法是每步各 `count(DISTINCT user_id)` 一遍。
+
+    这种输入下本函数**照样算得出东西**，而且看不出问题：实测 `394/385/396/373`
+    会给出 `conv_from_prev=102.9%`、`loss_from_prev` 为负、"瓶颈环节"指向一个
+    与业务无关的位置，整体转化 94.7%。这就是它危险的地方——没有任何一处会响。
+
+    不抛 StatsError：调用方是 agent 的一次工具调用，抛了整个回答就断，而这里
+    并不是"参数非法"，是**口径可疑**。改成把 `monotonic=False` 和逐处 `violations`
+    报出去，由 `_stats_summary` 显式写进模型看得见的摘要里，让它回去改 SQL。
+    """
     v = _nums(values)
     n = len(v)
     if n == 0:
-        return {"n": 0, "steps": []}
+        return {"n": 0, "steps": [], "monotonic": True, "violations": []}
     labels = labels or [f"步骤{i + 1}" for i in range(n)]
     steps = []
     for i in range(n):
@@ -145,11 +159,16 @@ def funnel(values, labels=None) -> dict:
     overall = (v[-1] / v[0] * 100) if v[0] else None
     losses = [(i, steps[i].get("loss_from_prev", 0.0)) for i in range(1, n)]
     bottleneck = max(losses, key=lambda t: t[1]) if losses else None
+    violations = [{"at": i, "label": steps[i]["label"], "count": v[i],
+                   "prev_label": steps[i - 1]["label"], "prev_count": v[i - 1]}
+                  for i in range(1, n) if v[i] > v[i - 1]]
     return {
         "n": n, "overall_conv": overall,
         "bottleneck_step": steps[bottleneck[0]]["label"] if bottleneck else None,
         "bottleneck_loss": bottleneck[1] if bottleneck else None,
         "steps": steps,
+        "monotonic": not violations,
+        "violations": violations,
     }
 
 

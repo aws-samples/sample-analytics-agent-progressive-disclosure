@@ -13,8 +13,12 @@
   并跨调用复用（CLI + MCP 保持热）。按 session_id 绑定，session 变了/到 turn 上限就重建，
   防跨会话上下文串味、并给上下文增长封顶。坏客户端下次请求重建。
 
-输出契约（被 /ask Lambda 消费，逐条转成 SSE data: 帧发给前端）：
+输出契约（被 /ask 中继消费，逐条转成 SSE data: 帧发给前端）：
   yield {"type": "stage"|"sql"|"rows"|"text"|"metric"|"stats"|"result"|"done"|"error", ...}
+
+另有一条**不进模型**的旁路：payload `{"op": "health"}` 只回一帧 `{"type": "health", ...}`，
+里面带 `identity` / `governance`，给中继的 /health 做「云上治理接上了没有」的外部证据。
+见 `_health()`。
 """
 import asyncio
 import logging
@@ -69,9 +73,46 @@ async def _get_client(session_id: str) -> ClaudeSDKClient:
     return _client
 
 
+def _health() -> dict:
+    """`{"op": "health"}` 的答复：**不进模型**，只回后端身份。
+
+    存在的理由是 `identity` 这个字段：它是从外面唯一能看见「列级边界接上了没有」的地方
+    （`db.py` 的 `backend_info()`）。原来它只在本地 FastAPI 的 `/health` 上露出来，
+    所以 docs/test-plan.md 的 L4 那条断言实际验的是**本地进程**，云上那半边没有任何
+    外部证据——`runtime_config._require_governance()` 会让配错的容器起不来，但
+    「起不来」在外面看是 5xx，看不出是治理还是别的。
+
+    `identity` 里带账号 ID，而中继的 `/health` 是不带认证的（ALB 探活要用）。所以这里
+    回**两个**字段：`governance.wired`（布尔，给探活和断言用）和 `governance.role`
+    （只有角色名，不含账号）。完整 ARN 留在 `identity` 里，由中继决定露不露——
+    它默认不露，见 functions/ask-relay/server.mjs。
+
+    不进模型是关键：这条路径会被 ALB 的探活间接触发，走一次 Bedrock 就成了一笔
+    按分钟计的账单。
+    """
+    import db
+    info = db.backend_info()
+    who = info.get("identity", "")
+    return {
+        "type": "health",
+        "engine": info.get("engine", ""),
+        "workgroup": info.get("workgroup", ""),
+        "region": info.get("region", ""),
+        "identity": who,
+        "governance": {
+            "wired": bool(who),
+            # `arn:aws:sts::<账号>:assumed-role/<角色名>/<会话名>` → `<角色名>`
+            "role": (who.split("/")[1] if len(who.split("/")) > 1 else ""),
+        },
+    }
+
+
 @app.entrypoint
 async def agent_invocation(payload, context):
     # /ask Lambda 发 {question, session_id?, deep?}；`agentcore invoke` 发 {prompt}。都接。
+    if payload.get("op") == "health":
+        yield _health()
+        return
     question = (payload.get("question") or payload.get("prompt") or "").strip()
     session_id = payload.get("session_id") or getattr(context, "session_id", None) or "default"
     deep = bool(payload.get("deep"))
