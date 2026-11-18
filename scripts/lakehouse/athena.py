@@ -259,6 +259,7 @@ class Client:
         """取结果并按列类型还原 Python 值。第一页首行是表头，跳掉（见 docstring 第 5 点）。"""
         cols: list[str] = []
         types: list[str] = []
+        full_types: list[str] = []
         rows: list[list] = []
         tok = None
         first_page = True
@@ -278,6 +279,9 @@ class Client:
             if not cols and meta:
                 cols = [c["Name"] for c in meta]
                 types = [str(c.get("Type", "")).lower() for c in meta]
+                # 完整列类型（DECIMAL 带精度 / 小数位），给评测判断引擎原值的表示精度用
+                full_types = [f"decimal({c.get('Precision')},{c.get('Scale')})" if t == "decimal" else t
+                              for c, t in zip(meta, types)]
             page = r["ResultSet"].get("Rows", [])
             if first_page and page and cols:
                 # 只有第一页的首行是表头。判一下确实等于列名再跳，避免误删数据行：
@@ -295,7 +299,7 @@ class Client:
             if not tok:
                 break
         return {"columns": cols, "rows": rows, "rowcount": len(rows),
-                "column_types": types}
+                "column_types": types, "column_full_types": full_types}
 
 
 # ---------------------------------------------------------------- 类型还原

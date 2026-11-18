@@ -35,7 +35,7 @@ SELECT
     v.is_control,
     COUNT(a.user_id) AS sample_size,
     v.traffic_percentage AS expected_pct,
-    ROUND(COUNT(a.user_id) * 100.0 / SUM(COUNT(a.user_id)) OVER (PARTITION BY t.test_id), 2) AS actual_pct
+    COUNT(a.user_id) * 100.0 / SUM(COUNT(a.user_id)) OVER (PARTITION BY t.test_id) AS actual_pct
 FROM ab_tests t
 JOIN ab_test_variants v ON t.test_id = v.test_id
 LEFT JOIN ab_test_assignments a ON v.variant_id = a.variant_id

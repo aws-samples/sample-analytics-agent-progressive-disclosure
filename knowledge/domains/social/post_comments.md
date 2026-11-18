@@ -84,7 +84,7 @@ SELECT
     cs.total_comments,
     cs.top_level_comments,
     cs.replies,
-    ROUND(cs.replies * 100.0 / NULLIF(cs.top_level_comments, 0), 2) AS reply_rate
+    cs.replies * 100.0 / NULLIF(cs.top_level_comments, 0) AS reply_rate
 FROM comment_stats cs
 JOIN posts p ON cs.post_id = p.post_id
 WHERE p.status = 'published'

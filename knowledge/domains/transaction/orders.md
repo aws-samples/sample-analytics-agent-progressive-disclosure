@@ -169,8 +169,8 @@ SELECT
     SUM(CASE WHEN status IN ('paid', 'shipped', 'delivered')
         THEN actual_amount ELSE 0 END) AS gmv,
     SUM(discount_amount) AS total_discount,
-    ROUND(AVG(CASE WHEN status IN ('paid', 'shipped', 'delivered')
-        THEN actual_amount END), 2) AS avg_order_value
+    AVG(CASE WHEN status IN ('paid', 'shipped', 'delivered')
+        THEN actual_amount END) AS avg_order_value
 FROM orders
 WHERE placed_at >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '29' day AND placed_at < (SELECT max(as_of_date) FROM meta_snapshot) + interval '1' day
 GROUP BY DATE(placed_at)
@@ -182,7 +182,7 @@ ORDER BY order_date DESC;
 SELECT
     status,
     COUNT(*) AS order_count,
-    ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER(), 2) AS pct,
+    COUNT(*) * 100.0 / SUM(COUNT(*)) OVER() AS pct,
     SUM(actual_amount) AS total_amount
 FROM orders
 WHERE placed_at >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '29' day AND placed_at < (SELECT max(as_of_date) FROM meta_snapshot) + interval '1' day
@@ -197,8 +197,8 @@ SELECT
     COUNT(*) AS total_orders,
     COUNT(CASE WHEN status = 'cancelled' THEN 1 END) AS cancelled,
     COUNT(CASE WHEN status = 'refunded' THEN 1 END) AS refunded,
-    ROUND(COUNT(CASE WHEN status = 'cancelled' THEN 1 END) * 100.0 / COUNT(*), 2) AS cancel_rate,
-    ROUND(COUNT(CASE WHEN status = 'refunded' THEN 1 END) * 100.0 / COUNT(*), 2) AS refund_rate
+    COUNT(CASE WHEN status = 'cancelled' THEN 1 END) * 100.0 / COUNT(*) AS cancel_rate,
+    COUNT(CASE WHEN status = 'refunded' THEN 1 END) * 100.0 / COUNT(*) AS refund_rate
 FROM orders
 WHERE placed_at >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '29' day AND placed_at < (SELECT max(as_of_date) FROM meta_snapshot) + interval '1' day
 GROUP BY DATE(placed_at)

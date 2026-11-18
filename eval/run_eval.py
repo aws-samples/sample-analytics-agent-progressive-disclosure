@@ -158,6 +158,7 @@ async def run_agent_on(question: str) -> dict:
     ev_sql: list[str] = []
     ev_rows: list[dict] = []        # 每次 run_sql 的 {columns, rows}
     result: dict = {}
+    answer: dict = {}
     errors: list[str] = []
     docs: list[str] = []            # 读过的卡片路径（判红时要知道它到底读了没）
     t0 = time.perf_counter()
@@ -174,12 +175,15 @@ async def run_agent_on(question: str) -> dict:
             docs.append(str(ev.get("detail") or ""))
         elif t == "result":
             result = ev
+        elif t == "answer":                      # answer 字段（被引用查询的原样结果，评测用）
+            answer = ev
         elif t == "error":
             errors.append(ev.get("message", ""))
     return {
         "sqls": ev_sql,
         "rowsets": ev_rows,
         "result": result,
+        "answer": answer,
         "errors": errors,
         "docs": docs,
         "n_docs": len(docs),

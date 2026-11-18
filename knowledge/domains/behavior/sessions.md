@@ -183,7 +183,7 @@ SELECT
     DATE(start_time) AS date,
     COUNT(*) AS total_sessions,
     SUM(CASE WHEN is_bounce THEN 1 ELSE 0 END) AS bounce_sessions,
-    ROUND(SUM(CASE WHEN is_bounce THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 2) AS bounce_rate
+    SUM(CASE WHEN is_bounce THEN 1 ELSE 0 END) * 100.0 / COUNT(*) AS bounce_rate
 FROM sessions
 WHERE start_time >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '29' day AND start_time < (SELECT max(as_of_date) FROM meta_snapshot) + interval '1' day
 GROUP BY DATE(start_time)

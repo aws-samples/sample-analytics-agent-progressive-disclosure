@@ -418,6 +418,7 @@ def _run_query_athena(sql: str) -> dict:
     rows = res.get("rows", [])
     truncated = len(rows) > MAX_ROWS
     return {"columns": res.get("columns", []),
+            "column_types": res.get("column_full_types") or res.get("column_types") or [],   # 评测用：引擎返回的列类型
             "rows": [[_jsonable(c) for c in r] for r in rows[:MAX_ROWS]],
             "rowcount": min(len(rows), MAX_ROWS),
             "truncated": truncated,

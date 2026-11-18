@@ -337,6 +337,11 @@ async def ask(req: Request):
                     ev = task.result()
                 except StopAsyncIteration:
                     break
+                if ev.get("type") == "answer":         # answer 只给评测用，不发给浏览器
+                    continue
+                if ev.get("type") == "result":         # is_answer 标记同样只给评测用
+                    ev = dict(ev, kpis=[{k: v for k, v in x.items() if k != "is_answer"} if isinstance(x, dict) else x
+                                        for x in ev.get("kpis") or []])
                 yield _sse(ev)
                 if await req.is_disconnected():
                     break

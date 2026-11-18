@@ -77,7 +77,7 @@ SELECT
     COUNT(*) AS total_attempts,
     COUNT(CASE WHEN status = 'success' THEN 1 END) AS success_count,
     COUNT(CASE WHEN status = 'failed' THEN 1 END) AS failed_count,
-    ROUND(COUNT(CASE WHEN status = 'success' THEN 1 END) * 100.0 / COUNT(*), 2) AS success_rate,
+    COUNT(CASE WHEN status = 'success' THEN 1 END) * 100.0 / COUNT(*) AS success_rate,
     SUM(CASE WHEN status = 'success' THEN amount ELSE 0 END) AS total_amount
 FROM payments
 WHERE paid_at >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '29' day AND paid_at < (SELECT max(as_of_date) FROM meta_snapshot) + interval '1' day
@@ -93,7 +93,7 @@ SELECT
     payment_channel,
     COUNT(*) AS payment_count,
     SUM(CASE WHEN status = 'success' THEN amount ELSE 0 END) AS total_amount,
-    ROUND(COUNT(CASE WHEN status = 'success' THEN 1 END) * 100.0 / COUNT(*), 2) AS success_rate
+    COUNT(CASE WHEN status = 'success' THEN 1 END) * 100.0 / COUNT(*) AS success_rate
 FROM payments
 WHERE paid_at >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '29' day AND paid_at < (SELECT max(as_of_date) FROM meta_snapshot) + interval '1' day
 GROUP BY payment_method, payment_channel
@@ -106,7 +106,7 @@ SELECT
     payment_method,
     failure_reason,
     COUNT(*) AS fail_count,
-    ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER(PARTITION BY payment_method), 2) AS pct
+    COUNT(*) * 100.0 / SUM(COUNT(*)) OVER(PARTITION BY payment_method) AS pct
 FROM payments
 WHERE status = 'failed'
   AND paid_at IS NULL

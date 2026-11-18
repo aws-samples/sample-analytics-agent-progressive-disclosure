@@ -49,7 +49,7 @@ period_users AS (
 SELECT
     pr.total_revenue,
     pu.active_users,
-    ROUND(pr.total_revenue / pu.active_users, 2) AS arpu
+    pr.total_revenue / pu.active_users AS arpu
 FROM period_revenue pr, period_users pu;
 ```
 
@@ -59,7 +59,7 @@ SELECT
     DATE_TRUNC('month', placed_at) AS month,
     SUM(actual_amount) AS revenue,
     COUNT(DISTINCT user_id) AS paying_users,
-    ROUND(SUM(actual_amount) / COUNT(DISTINCT user_id), 2) AS arppu
+    SUM(actual_amount) / COUNT(DISTINCT user_id) AS arppu
 FROM orders
 WHERE status IN ('paid', 'shipped', 'delivered')
 GROUP BY DATE_TRUNC('month', placed_at)
@@ -95,8 +95,8 @@ SELECT
     END AS cohort,
     COUNT(*) AS users,
     COUNT(CASE WHEN order_count > 0 THEN 1 END) AS paying_users,
-    ROUND(AVG(total_spend), 2) AS avg_ltv,
-    ROUND(AVG(CASE WHEN order_count > 0 THEN total_spend END), 2) AS avg_paying_ltv
+    AVG(total_spend) AS avg_ltv,
+    AVG(CASE WHEN order_count > 0 THEN total_spend END) AS avg_paying_ltv
 FROM user_value
 GROUP BY 1
 ORDER BY 1;
@@ -118,7 +118,7 @@ SELECT
     cohort_month,
     total_users,
     paying_users,
-    ROUND(CAST(paying_users AS decimal(38,6)) / total_users * 100, 2) AS pay_rate_pct
+    CAST(paying_users AS decimal(38,6)) / total_users * 100 AS pay_rate_pct
 FROM monthly_stats
 ORDER BY cohort_month;
 ```
@@ -147,7 +147,7 @@ SELECT
     ch.channel_name,
     cs.total_spend,
     cu.acquired_users,
-    ROUND(cs.total_spend / NULLIF(cu.acquired_users, 0), 2) AS cac
+    cs.total_spend / NULLIF(cu.acquired_users, 0) AS cac
 FROM channel_users cu
 JOIN channels ch       ON ch.channel_id = cu.channel_id
 LEFT JOIN channel_spend cs ON cs.channel_id = cu.channel_id
@@ -175,7 +175,7 @@ SELECT
     ac.campaign_name,
     ac.budget_total AS spend,
     COALESCE(cr.revenue, 0) AS revenue,
-    ROUND((COALESCE(cr.revenue, 0) - ac.budget_total) / NULLIF(ac.budget_total, 0) * 100, 2) AS roi_pct
+    (COALESCE(cr.revenue, 0) - ac.budget_total) / NULLIF(ac.budget_total, 0) * 100 AS roi_pct
 FROM ad_campaigns ac
 LEFT JOIN campaign_revenue cr ON cr.ad_campaign_id = ac.ad_campaign_id
 WHERE ac.status = 'ended'      -- ad_campaigns 只有 active / ended / paused，没有 completed
@@ -213,7 +213,7 @@ SELECT
     COUNT(*) AS total_issued,
     COUNT(CASE WHEN uc.status = 'used' THEN 1 END) AS used,
     COUNT(CASE WHEN uc.status = 'expired' THEN 1 END) AS expired,
-    ROUND(CAST(COUNT(CASE WHEN uc.status = 'used' THEN 1 END) AS decimal(38,6)) / COUNT(*) * 100, 2) AS redemption_rate
+    CAST(COUNT(CASE WHEN uc.status = 'used' THEN 1 END) AS decimal(38,6)) / COUNT(*) * 100 AS redemption_rate
 FROM user_coupons uc
 JOIN coupons c ON c.coupon_id = uc.coupon_id
 GROUP BY c.coupon_type
@@ -242,9 +242,9 @@ SELECT
     variant_id,
     users,
     orders,
-    ROUND(CAST(orders AS decimal(38,6)) / users * 100, 2) AS conversion_rate,
+    CAST(orders AS decimal(38,6)) / users * 100 AS conversion_rate,
     revenue,
-    ROUND(revenue / NULLIF(users, 0), 2) AS revenue_per_user
+    revenue / NULLIF(users, 0) AS revenue_per_user
 FROM experiment_metrics
 ORDER BY variant_id;
 ```
@@ -287,7 +287,7 @@ WITH category_sales AS (
 SELECT
     category_name,
     revenue,
-    ROUND(revenue / SUM(revenue) OVER() * 100, 2) AS revenue_pct
+    revenue / SUM(revenue) OVER() * 100 AS revenue_pct
 FROM category_sales
 ORDER BY revenue DESC;
 ```

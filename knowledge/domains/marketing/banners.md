@@ -62,7 +62,7 @@ SELECT
     banner_name,
     impression_count,
     click_count,
-    ROUND(click_count * 100.0 / NULLIF(impression_count, 0), 2) AS ctr_percent
+    click_count * 100.0 / NULLIF(impression_count, 0) AS ctr_percent
 FROM banners
 -- 「当前在投」相对业务锚点日判定（静态快照），不用 CURRENT_TIMESTAMP（真实今天早已超出样本窗口，会查空）
 WHERE is_active = true
@@ -80,7 +80,7 @@ SELECT
     target_type,
     impression_count,
     click_count,
-    ROUND(click_count * 100.0 / NULLIF(impression_count, 0), 2) AS ctr_percent
+    click_count * 100.0 / NULLIF(impression_count, 0) AS ctr_percent
 FROM banners
 WHERE impression_count >= 1000
 ORDER BY ctr_percent DESC
@@ -94,7 +94,7 @@ SELECT
     COUNT(*) AS banner_count,
     SUM(impression_count) AS total_impressions,
     SUM(click_count) AS total_clicks,
-    ROUND(SUM(click_count) * 100.0 / NULLIF(SUM(impression_count), 0), 2) AS avg_ctr
+    SUM(click_count) * 100.0 / NULLIF(SUM(impression_count), 0) AS avg_ctr
 FROM banners
 WHERE start_date >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '30' day
 GROUP BY position

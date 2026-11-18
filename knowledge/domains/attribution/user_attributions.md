@@ -113,7 +113,7 @@ SELECT
     COUNT(CASE WHEN ua.days_to_install = 0 THEN 1 END) AS same_day_installs,
     COUNT(CASE WHEN ua.days_to_install BETWEEN 1 AND 3 THEN 1 END) AS installs_1_3_days,
     COUNT(CASE WHEN ua.days_to_install > 3 THEN 1 END) AS installs_over_3_days,
-    ROUND(COUNT(CASE WHEN ua.days_to_install = 0 THEN 1 END) * 100.0 / COUNT(*), 2) AS same_day_rate
+    COUNT(CASE WHEN ua.days_to_install = 0 THEN 1 END) * 100.0 / COUNT(*) AS same_day_rate
 FROM user_attributions ua
 JOIN channels ch ON ua.channel_id = ch.channel_id
 WHERE ua.attribution_type = 'last_touch'      -- first_touch 的点击更早、天数更大，两种模型别混在一起

@@ -74,7 +74,7 @@ SELECT
     COUNT(*) AS total_messages,
     COUNT(DISTINCT sender_id) AS unique_senders,
     COUNT(DISTINCT receiver_id) AS unique_receivers,
-    ROUND(AVG(CASE WHEN is_read THEN 1 ELSE 0 END) * 100, 2) AS read_rate
+    AVG(CASE WHEN is_read THEN 1 ELSE 0 END) * 100 AS read_rate
 FROM user_messages
 WHERE sent_at >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '29' day AND sent_at < (SELECT max(as_of_date) FROM meta_snapshot) + interval '1' day
 GROUP BY DATE(sent_at)
@@ -86,8 +86,8 @@ ORDER BY msg_date;
 SELECT
     message_type,
     COUNT(*) AS message_count,
-    ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER(), 2) AS pct,
-    ROUND(AVG(CASE WHEN is_read THEN 1 ELSE 0 END) * 100, 2) AS read_rate
+    COUNT(*) * 100.0 / SUM(COUNT(*)) OVER() AS pct,
+    AVG(CASE WHEN is_read THEN 1 ELSE 0 END) * 100 AS read_rate
 FROM user_messages
 WHERE sent_at >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '29' day AND sent_at < (SELECT max(as_of_date) FROM meta_snapshot) + interval '1' day
 GROUP BY message_type

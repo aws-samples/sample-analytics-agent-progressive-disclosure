@@ -90,10 +90,10 @@ SELECT
     COUNT(p.push_id) AS total_sent,
     COUNT(CASE WHEN p.is_delivered THEN 1 END) AS delivered_count,
     COUNT(CASE WHEN p.is_opened THEN 1 END) AS opened_count,
-    ROUND(COUNT(CASE WHEN p.is_delivered THEN 1 END) * 100.0 /
-          NULLIF(COUNT(p.push_id), 0), 2) AS delivery_rate,
-    ROUND(COUNT(CASE WHEN p.is_opened THEN 1 END) * 100.0 /
-          NULLIF(COUNT(CASE WHEN p.is_delivered THEN 1 END), 0), 2) AS open_rate
+    COUNT(CASE WHEN p.is_delivered THEN 1 END) * 100.0 /
+          NULLIF(COUNT(p.push_id), 0) AS delivery_rate,
+    COUNT(CASE WHEN p.is_opened THEN 1 END) * 100.0 /
+          NULLIF(COUNT(CASE WHEN p.is_delivered THEN 1 END), 0) AS open_rate
 FROM campaigns c
 JOIN push_notifications p ON c.campaign_id = p.campaign_id
 WHERE c.status = 'completed'
@@ -108,10 +108,10 @@ SELECT
     COUNT(*) AS total_sent,
     COUNT(CASE WHEN is_delivered THEN 1 END) AS delivered,
     COUNT(CASE WHEN is_opened THEN 1 END) AS opened,
-    ROUND(COUNT(CASE WHEN is_delivered THEN 1 END) * 100.0 /
-          NULLIF(COUNT(*), 0), 2) AS delivery_rate,
-    ROUND(COUNT(CASE WHEN is_opened THEN 1 END) * 100.0 /
-          NULLIF(COUNT(CASE WHEN is_delivered THEN 1 END), 0), 2) AS open_rate
+    COUNT(CASE WHEN is_delivered THEN 1 END) * 100.0 /
+          NULLIF(COUNT(*), 0) AS delivery_rate,
+    COUNT(CASE WHEN is_opened THEN 1 END) * 100.0 /
+          NULLIF(COUNT(CASE WHEN is_delivered THEN 1 END), 0) AS open_rate
 FROM push_notifications
 WHERE sent_at >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '29' day AND sent_at < (SELECT max(as_of_date) FROM meta_snapshot) + interval '1' day
 GROUP BY push_type
@@ -123,7 +123,7 @@ ORDER BY total_sent DESC;
 SELECT
     failure_reason,
     COUNT(*) AS failure_count,
-    ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER(), 2) AS pct
+    COUNT(*) * 100.0 / SUM(COUNT(*)) OVER() AS pct
 FROM push_notifications
 WHERE failure_reason IS NOT NULL
   AND sent_at >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '6' day AND sent_at < (SELECT max(as_of_date) FROM meta_snapshot) + interval '1' day

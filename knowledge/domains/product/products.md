@@ -107,7 +107,7 @@ SELECT
     c.category_name,
     p.stock,
     p.sold_count,
-    ROUND(p.stock * 1.0 / NULLIF(p.sold_count / 30.0, 0), 1) AS days_of_stock
+    p.stock * 1.0 / NULLIF(p.sold_count / 30.0, 0) AS days_of_stock
 FROM products p
 JOIN categories c ON p.category_id = c.category_id
 WHERE p.status = 'on_sale'

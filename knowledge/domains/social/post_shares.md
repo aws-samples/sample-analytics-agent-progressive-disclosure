@@ -43,7 +43,7 @@
 SELECT
     share_channel,
     COUNT(*) AS share_count,
-    ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER(), 2) AS pct
+    COUNT(*) * 100.0 / SUM(COUNT(*)) OVER() AS pct
 FROM post_shares
 WHERE created_at >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '29' day AND created_at < (SELECT max(as_of_date) FROM meta_snapshot) + interval '1' day
 GROUP BY share_channel

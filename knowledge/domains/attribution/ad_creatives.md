@@ -90,7 +90,7 @@ ORDER BY creative_count DESC;
 SELECT
     call_to_action,
     COUNT(*) AS usage_count,
-    ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER(), 2) AS pct
+    COUNT(*) * 100.0 / SUM(COUNT(*)) OVER() AS pct
 FROM ad_creatives
 WHERE status = 'active'          -- 当前数据里 144 个素材全是 active
 GROUP BY call_to_action

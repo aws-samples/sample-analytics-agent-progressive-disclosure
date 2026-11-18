@@ -121,7 +121,7 @@ ORDER BY 1;
 SELECT
     gender,
     COUNT(*) AS user_count,
-    ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER(), 2) AS pct
+    COUNT(*) * 100.0 / SUM(COUNT(*)) OVER() AS pct
 FROM user_profiles
 GROUP BY gender;
 ```

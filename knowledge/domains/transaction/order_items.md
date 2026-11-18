@@ -88,7 +88,7 @@ SELECT
         ELSE '5件以上'
     END AS item_count_group,
     COUNT(*) AS order_count,
-    ROUND(AVG(actual_amount), 2) AS avg_order_value
+    AVG(actual_amount) AS avg_order_value
 FROM orders
 WHERE status IN ('paid', 'shipped', 'delivered')
   AND placed_at >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '29' day AND placed_at < (SELECT max(as_of_date) FROM meta_snapshot) + interval '1' day

@@ -84,7 +84,7 @@ SELECT
     AVG(like_count) AS avg_likes,
     AVG(comment_count) AS avg_comments,
     AVG(share_count) AS avg_shares,
-    ROUND(AVG((like_count + comment_count + share_count) * 100.0 / NULLIF(view_count, 0)), 2) AS avg_engagement_rate
+    AVG((like_count + comment_count + share_count) * 100.0 / NULLIF(view_count, 0)) AS avg_engagement_rate
 FROM posts
 WHERE status = 'published'
     AND published_at >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '29' day AND published_at < (SELECT max(as_of_date) FROM meta_snapshot) + interval '1' day

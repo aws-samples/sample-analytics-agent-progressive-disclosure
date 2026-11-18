@@ -75,7 +75,7 @@ SELECT
     device_type,
     COUNT(DISTINCT user_id) AS user_count,
     COUNT(*) AS device_count,
-    ROUND(100.0 * COUNT(DISTINCT user_id) / SUM(COUNT(DISTINCT user_id)) OVER(), 2) AS percentage
+    100.0 * COUNT(DISTINCT user_id) / SUM(COUNT(DISTINCT user_id)) OVER() AS percentage
 FROM user_devices
 GROUP BY device_type
 ORDER BY user_count DESC;

@@ -78,9 +78,9 @@ SELECT
     ch.channel_type,
     cc.total_cost,
     cc.total_installs,
-    ROUND(cc.total_cost / NULLIF(cc.total_installs, 0), 2) AS cpi,
+    cc.total_cost / NULLIF(cc.total_installs, 0) AS cpi,
     cr.gmv_attributed,
-    ROUND(cr.gmv_attributed / NULLIF(cc.total_cost, 0), 2) AS roi
+    cr.gmv_attributed / NULLIF(cc.total_cost, 0) AS roi
 FROM channels ch
 JOIN channel_costs cc ON ch.channel_id = cc.channel_id
 LEFT JOIN channel_revenue cr ON ch.channel_id = cr.channel_id
@@ -98,9 +98,9 @@ SELECT
     SUM(cdc.impressions) AS total_impressions,
     SUM(cdc.clicks) AS total_clicks,
     SUM(cdc.installs) AS total_installs,
-    ROUND(SUM(cdc.clicks) * 100.0 / NULLIF(SUM(cdc.impressions), 0), 2) AS ctr_percent,
-    ROUND(SUM(cdc.installs) * 100.0 / NULLIF(SUM(cdc.clicks), 0), 2) AS cvr_percent,
-    ROUND(CAST(SUM(cdc.cost) AS DECIMAL(38,6)) / NULLIF(SUM(cdc.installs), 0), 2) AS cpi
+    SUM(cdc.clicks) * 100.0 / NULLIF(SUM(cdc.impressions), 0) AS ctr_percent,
+    SUM(cdc.installs) * 100.0 / NULLIF(SUM(cdc.clicks), 0) AS cvr_percent,
+    CAST(SUM(cdc.cost) AS DECIMAL(38,6)) / NULLIF(SUM(cdc.installs), 0) AS cpi
 FROM channel_daily_costs cdc
 JOIN ad_campaigns ac ON ac.ad_campaign_id = cdc.ad_campaign_id
 JOIN channels ch ON ch.channel_id = cdc.channel_id
@@ -119,7 +119,7 @@ SELECT
     SUM(clicks) AS daily_clicks,
     SUM(installs) AS daily_installs,
     SUM(cost) AS daily_cost,
-    ROUND(CAST(SUM(cost) AS DECIMAL(38,6)) / NULLIF(SUM(installs), 0), 2) AS daily_cpi
+    CAST(SUM(cost) AS DECIMAL(38,6)) / NULLIF(SUM(installs), 0) AS daily_cpi
 FROM channel_daily_costs
 WHERE date >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '30' day
 GROUP BY date

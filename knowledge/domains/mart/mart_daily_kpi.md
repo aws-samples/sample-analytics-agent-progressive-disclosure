@@ -46,10 +46,10 @@ SELECT dt, gmv, dau, orders FROM mart_daily_kpi ORDER BY dt;
 ```sql
 WITH a AS (SELECT max(as_of_date) AS d FROM meta_snapshot)
 SELECT CASE WHEN k.dt > a.d - interval '7' day THEN '近7天' ELSE '前7天' END AS period,
-       round(avg(k.dau))      AS avg_dau,
+       avg(k.dau)      AS avg_dau,
        sum(k.new_users)       AS new_users,
        sum(k.orders)          AS orders,
-       CAST(sum(k.gmv) AS integer)        AS gmv,
+       sum(k.gmv)        AS gmv,
        sum(k.new_subscriptions) AS new_subs
 FROM mart_daily_kpi k, a
 WHERE k.dt > a.d - interval '14' day
@@ -59,7 +59,7 @@ GROUP BY 1 ORDER BY 1 DESC;
 ### 整月对比（残月别直接比）
 ```sql
 SELECT date_format(dt, '%Y-%m') AS mon,
-       round(avg(dau)) avg_dau, sum(new_users) new_users,
-       sum(orders) orders, CAST(sum(gmv) AS integer) gmv
+       avg(dau) avg_dau, sum(new_users) new_users,
+       sum(orders) orders, sum(gmv) gmv
 FROM mart_daily_kpi GROUP BY 1 ORDER BY 1;
 ```

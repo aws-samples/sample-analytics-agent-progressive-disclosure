@@ -85,6 +85,9 @@ SYSTEM = """你是「App Analytics」的资深数据分析师 Agent，面向一�
 5. 调用 run_sql(sql=...) 执行。若报字段错，回去 read_doc 核对该表文档后重写，最多重试 2 次。**但先分清是「写错了」还是「不让你看」**——治理边界那几列/那张表重试多少次都是同一个错，见「数据治理边界」一节，那种情况**重试 0 次**。
 6. **最后必须调用一次 present_result**，交付：interpreted（一句话复述你怎么理解这个问题）、kpis（2-4 个关键数字）、chart（图表 spec，见下）、insight（1-3 句大白话洞察，用 **加粗** 点重点）、followups（3 个建议追问短句，引导用户继续往下挖）。
 7. 聊天里只说 1-2 句话，别长篇大论；详细结论放进 present_result。
+7.1 **answer（答案来源）**：每次 run_sql / call_metric 的返回里都有 `query_index`（本轮第几次查询）。调用 present_result 时，用 `answer` 列出**直接回答本题**的那几次查询，例如 `answer=[{"query_index": 3}]`；一句话问了几件事、分几次查的，就各列一项并加 `part` 标签（如 `[{"query_index": 2, "part": "本期"}, {"query_index": 3, "part": "上期"}]`）。只查过一次可以省略。不要列探索取值、核对用的查询。answer 只给系统记录，不展示给用户。
+    同时在 kpis 里给**直接回答问题的那个数**加 `"is_answer": true`（日均、占比、倍数这类附带的数不用标；答案本身是一张表或名单时可以不标）。标了 is_answer 的数必须能在 answer 引用的查询结果里原样找到——需要汇总、相加、相减时，请再写一条 SQL 直接算出来，不要自己心算。
+    answer 引用的查询**只算数、不做格式化**：保留引擎算出的原值，不要在 SQL 里 round、不要把金额 CAST 成整数、不要用小数位少于 6 位的 decimal 截位——题目要求「保留几位小数」也一样，四舍五入只在卡片和文字里做（比率照 connection.md 写 `CAST(... AS DECIMAL(38,6))`）。
 8. present_result 的 followups 字段**绝不能省略或留空**：必须给恰好 3 个具体、可点击的追问短句（基于本次结果自然延伸，如换维度/换口径/下钻）。
 
 ## 数据治理边界（「查不到」不等于「你写错了」）
@@ -465,20 +468,21 @@ async def _run_agent_once(question: str, session_id: str | None = None, deep: bo
 
     拆出来只为一件事：带 `resume` 起不来时要能重来一次，而生成器没跑完是没法"重头"的。
     """
-    from tools import build_server
+    from tools import build_server, QueryLog
+    qlog = QueryLog()        # 本次运行的查询记录：answer 字段从这里原样取引擎的真实返回
 
     # 普通题用轻量后缀(快、单图);第3组深度分析题用深度后缀(SOP+多图)。
     system_prompt = SYSTEM + (DEEP_SUFFIX if deep else LITE_SUFFIX) + _dialect()
     opts = ClaudeAgentOptions(
         system_prompt=system_prompt,
         model=MODEL,
-        mcp_servers={"analytics": build_server()},
+        mcp_servers={"analytics": build_server(qlog)},
         allowed_tools=ALLOWED,
         disallowed_tools=DENIED_BUILTINS,   # 砍暴露面，见 DENIED_BUILTINS 的注释
         setting_sources=[],            # 隔离：不加载宿主 ~/.claude 设置/技能
         permission_mode="bypassPermissions",
         include_partial_messages=True,
-        max_turns=14,
+        max_turns=18,                # present_result 被打回（is_answer 对不上 / 输出取整）后补查询 + 重交约多 2 轮，14 不够
         # 闸门走 PreToolUse hook，**不是** can_use_tool —— 后者被 bypassPermissions
         # 架空，一次都不会触发（详见 _make_gate 的 docstring）。
         hooks={"PreToolUse": [HookMatcher(hooks=[_make_gate()])]},
@@ -632,6 +636,14 @@ async def _run_agent_once(question: str, session_id: str | None = None, deep: bo
                                            "result": data.get("result", {})}
                             except Exception:  # nosec B110 —— 流式解析尽力而为,坏帧忽略
                                 pass
+                        elif name.endswith("present_result"):
+                            # present_result 校验通过（没被打回补 answer）后，推一帧 answer：
+                            # 内容是被引用的那几次查询的原样结果（列 / 行），只给评测用，server 不转发给前端
+                            is_err = b.get("is_error") if isinstance(b, dict) else getattr(b, "is_error", False)
+                            if not is_err and qlog.answer is not None:
+                                yield {"type": "answer", "parts": qlog.answer, "n_queries": len(qlog.queries),
+                                   "rejects": qlog.rejects, "unbacked": qlog.unbacked,
+                                   "dropped_mark": qlog.dropped_mark, "formatted": qlog.formatted}
                         elif name.endswith("read_doc"):
                             # 把 agent 实际读到的文档内容推给前端，做「正在读取哪个文件」的披露层
                             raw = b.get("content") if isinstance(b, dict) else getattr(b, "content", None)

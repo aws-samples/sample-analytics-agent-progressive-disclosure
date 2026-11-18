@@ -66,8 +66,8 @@ SELECT
     c.discount_value,
     COUNT(uc.id) AS received_count,
     COUNT(CASE WHEN uc.status = 'used' THEN 1 END) AS used_count,
-    ROUND(COUNT(CASE WHEN uc.status = 'used' THEN 1 END) * 100.0 /
-          NULLIF(COUNT(uc.id), 0), 2) AS usage_rate
+    COUNT(CASE WHEN uc.status = 'used' THEN 1 END) * 100.0 /
+          NULLIF(COUNT(uc.id), 0) AS usage_rate
 FROM coupons c
 LEFT JOIN user_coupons uc ON c.coupon_id = uc.coupon_id
 WHERE c.start_date >= date '2024-01-01'
@@ -82,8 +82,8 @@ SELECT
     COUNT(*) AS coupon_count,
     COUNT(DISTINCT user_id) AS user_count,
     COUNT(CASE WHEN status = 'used' THEN 1 END) AS used_count,
-    ROUND(COUNT(CASE WHEN status = 'used' THEN 1 END) * 100.0 /
-          NULLIF(COUNT(*), 0), 2) AS usage_rate
+    COUNT(CASE WHEN status = 'used' THEN 1 END) * 100.0 /
+          NULLIF(COUNT(*), 0) AS usage_rate
 FROM user_coupons
 WHERE received_at >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '29' day AND received_at < (SELECT max(as_of_date) FROM meta_snapshot) + interval '1' day
 GROUP BY source

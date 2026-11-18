@@ -27,8 +27,8 @@
 
 ### 复购率（官方口径）
 ```sql
-SELECT round(100.0 * count(*) FILTER (WHERE is_repurchaser_30d)
-            / nullif(count(*) FILTER (WHERE first_paid_date IS NOT NULL),0), 1)
+SELECT 100.0 * count(*) FILTER (WHERE is_repurchaser_30d)
+            / nullif(count(*) FILTER (WHERE first_paid_date IS NOT NULL),0)
        AS repurchase_rate_30d_pct
 FROM mart_user_summary;
 ```
@@ -37,9 +37,9 @@ FROM mart_user_summary;
 ```sql
 SELECT register_channel,
        count(*) FILTER (WHERE first_paid_date IS NOT NULL) AS buyers,
-       round(100.0 * count(*) FILTER (WHERE is_repurchaser_30d)
-             / nullif(count(*) FILTER (WHERE first_paid_date IS NOT NULL),0), 1) AS repurchase_pct,
-       round(avg(total_gmv) FILTER (WHERE first_paid_date IS NOT NULL), 0) AS arpu_buyer
+       100.0 * count(*) FILTER (WHERE is_repurchaser_30d)
+             / nullif(count(*) FILTER (WHERE first_paid_date IS NOT NULL),0) AS repurchase_pct,
+       avg(total_gmv) FILTER (WHERE first_paid_date IS NOT NULL) AS arpu_buyer
 FROM mart_user_summary
 GROUP BY 1 ORDER BY buyers DESC;
 ```
@@ -49,6 +49,6 @@ GROUP BY 1 ORDER BY buyers DESC;
 SELECT date_format(register_date, '%Y-%m') AS cohort,
        count(*) AS users,
        count(*) FILTER (WHERE first_paid_date IS NOT NULL) AS buyers,
-       round(100.0*count(*) FILTER (WHERE first_paid_date IS NOT NULL)/count(*),1) AS paid_conv_pct
+       100.0*count(*) FILTER (WHERE first_paid_date IS NOT NULL)/count(*) AS paid_conv_pct
 FROM mart_user_summary GROUP BY 1 ORDER BY 1;
 ```

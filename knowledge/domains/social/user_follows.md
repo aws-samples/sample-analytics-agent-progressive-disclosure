@@ -45,7 +45,7 @@ SELECT
     follower_count,
     post_count,
     total_likes,
-    ROUND((total_likes + total_comments) * 100.0 / NULLIF(total_views, 0), 2) AS engagement_rate
+    (total_likes + total_comments) * 100.0 / NULLIF(total_views, 0) AS engagement_rate
 FROM user_stats
 WHERE follower_count >= 1000
     AND post_count >= 10

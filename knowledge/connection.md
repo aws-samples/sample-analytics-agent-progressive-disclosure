@@ -169,9 +169,11 @@ decimal 相除同样会丢精度：**两个 decimal 直接相除，结果的小�
 `decimal(14,2)`，所以 `sum(gmv_attributed)/sum(cost)` 只剩 2 位小数（实测 `CAST(1 AS decimal(14,2))/CAST(3 AS decimal(14,2))`
 = 0.33）。单看比率差别不大，但**在比率上再算增长率、占比、比率之比**时误差会放大（日 ROI 环比 −0.87% 会算成 −1.00%）。
 两个 decimal（或 decimal 与整数）相除算比率时，先把分子转成高精度 decimal：`CAST(sum(x) AS DECIMAL(38,6)) / nullif(sum(y), 0)`。
-外面再套 `round(..., 2)` 也能跑：Athena / Redshift / DuckDB 实测通过（Athena 保留 6 位小数、Redshift 保留 4 位，算增长率足够），PostgreSQL 原生支持 `round(numeric, integer)`。
-**不要转 `DOUBLE PRECISION` 再 `round(..., n)`**：原生 PostgreSQL 没有 `round(double precision, integer)` 这个函数签名，走 PostgreSQL 解析的 arm（Aurora / 本地 Postgres）会报错。
 只转比率的分子，金额合计本身保持 decimal。
+
+**SQL 只算数，不做格式化。** 查询结果保留引擎算出的原值：不要在 SQL 里 `round(...)`、不要 `CAST(... AS integer)` 把金额截到整数、
+不要用小数位少于 6 位的 `CAST(... AS decimal(p, s))` 截位——即使题目要求「保留两位小数」也一样。四舍五入、单位换算（万 / 亿）
+只在交付的卡片和文字里做。
 带小数字面量的写法不受影响：`count(x) * 100.0 / count(y)` 里的 `100.0` 在 Athena 上就是双精度（`2*100.0/3` = 66.666…）。
 
 转换工具：`scripts/gen/pg_to_trino.py`（带自测，`--selftest`）。

@@ -68,7 +68,7 @@ SELECT
     d.date,
     d.dau,
     m.mau,
-    ROUND(CAST(d.dau AS decimal(38,6)) / m.mau * 100, 2) AS stickiness_pct
+    CAST(d.dau AS decimal(38,6)) / m.mau * 100 AS stickiness_pct
 FROM daily d, monthly m
 ORDER BY d.date;
 ```
@@ -96,9 +96,9 @@ SELECT
     COUNT(DISTINCT CASE WHEN date_diff('day', c.cohort_date, act.activity_date) = 1 THEN c.user_id END) AS day1_retained,
     COUNT(DISTINCT CASE WHEN date_diff('day', c.cohort_date, act.activity_date) = 7 THEN c.user_id END) AS day7_retained,
     COUNT(DISTINCT CASE WHEN date_diff('day', c.cohort_date, act.activity_date) = 30 THEN c.user_id END) AS day30_retained,
-    ROUND(CAST(COUNT(DISTINCT CASE WHEN date_diff('day', c.cohort_date, act.activity_date) = 1
+    CAST(COUNT(DISTINCT CASE WHEN date_diff('day', c.cohort_date, act.activity_date) = 1
                                    THEN c.user_id END) AS decimal(38,6)) /
-          COUNT(DISTINCT c.user_id) * 100, 2) AS day1_retention_pct
+          COUNT(DISTINCT c.user_id) * 100 AS day1_retention_pct
 FROM cohort c
 LEFT JOIN activity act ON act.user_id = c.user_id
 GROUP BY c.cohort_date
@@ -195,7 +195,7 @@ WITH funnel AS (
 SELECT
     app_opens,
     registers,
-    ROUND(CAST(registers AS decimal(38,6)) / NULLIF(app_opens, 0) * 100, 2) AS register_rate
+    CAST(registers AS decimal(38,6)) / NULLIF(app_opens, 0) * 100 AS register_rate
 FROM funnel;
 ```
 
@@ -242,14 +242,14 @@ SELECT (SELECT count(*) FROM s1) AS viewers,
        (SELECT count(*) FROM s2) AS cart_adds,
        (SELECT count(*) FROM s3) AS checkout_starts,
        (SELECT count(*) FROM s4) AS purchasers,
-       ROUND(CAST((SELECT count(*) FROM s2) AS decimal(38,6))
-             / NULLIF((SELECT count(*) FROM s1), 0) * 100, 2) AS view_to_cart_pct,
-       ROUND(CAST((SELECT count(*) FROM s3) AS decimal(38,6))
-             / NULLIF((SELECT count(*) FROM s2), 0) * 100, 2) AS cart_to_checkout_pct,
-       ROUND(CAST((SELECT count(*) FROM s4) AS decimal(38,6))
-             / NULLIF((SELECT count(*) FROM s3), 0) * 100, 2) AS checkout_to_purchase_pct,
-       ROUND(CAST((SELECT count(*) FROM s4) AS decimal(38,6))
-             / NULLIF((SELECT count(*) FROM s1), 0) * 100, 2) AS overall_conversion_pct
+       CAST((SELECT count(*) FROM s2) AS decimal(38,6))
+             / NULLIF((SELECT count(*) FROM s1), 0) * 100 AS view_to_cart_pct,
+       CAST((SELECT count(*) FROM s3) AS decimal(38,6))
+             / NULLIF((SELECT count(*) FROM s2), 0) * 100 AS cart_to_checkout_pct,
+       CAST((SELECT count(*) FROM s4) AS decimal(38,6))
+             / NULLIF((SELECT count(*) FROM s3), 0) * 100 AS checkout_to_purchase_pct,
+       CAST((SELECT count(*) FROM s4) AS decimal(38,6))
+             / NULLIF((SELECT count(*) FROM s1), 0) * 100 AS overall_conversion_pct
 ```
 
 ## 内容指标
@@ -263,8 +263,8 @@ SELECT
     AVG(p.like_count) AS avg_likes,
     AVG(p.comment_count) AS avg_comments,
     AVG(p.share_count) AS avg_shares,
-    ROUND(CAST(AVG(p.like_count) AS decimal(38,6)) / NULLIF(AVG(p.view_count), 0) * 100, 2) AS like_rate,
-    ROUND(CAST(AVG(p.comment_count) AS decimal(38,6)) / NULLIF(AVG(p.view_count), 0) * 100, 2) AS comment_rate
+    CAST(AVG(p.like_count) AS decimal(38,6)) / NULLIF(AVG(p.view_count), 0) * 100 AS like_rate,
+    CAST(AVG(p.comment_count) AS decimal(38,6)) / NULLIF(AVG(p.view_count), 0) * 100 AS comment_rate
 FROM posts p
 WHERE p.status = 'published'
 GROUP BY p.content_type
@@ -277,7 +277,7 @@ SELECT
     DATE_TRUNC('week', created_at) AS week,
     COUNT(DISTINCT user_id) AS active_creators,
     COUNT(*) AS total_posts,
-    ROUND(CAST(COUNT(*) AS decimal(38,6)) / COUNT(DISTINCT user_id), 2) AS posts_per_creator
+    CAST(COUNT(*) AS decimal(38,6)) / COUNT(DISTINCT user_id) AS posts_per_creator
 FROM posts
 WHERE status = 'published'
   AND created_at >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '83' day AND created_at < (SELECT max(as_of_date) FROM meta_snapshot) + interval '1' day

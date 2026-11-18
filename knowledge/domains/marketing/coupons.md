@@ -119,7 +119,7 @@ SELECT
     coupon_type,
     discount_value,
     min_purchase,
-    ROUND(CAST(discount_value AS DECIMAL(38,6)) / NULLIF(min_purchase, 0) * 100, 2) AS discount_rate_pct
+    CAST(discount_value AS DECIMAL(38,6)) / NULLIF(min_purchase, 0) * 100 AS discount_rate_pct
 FROM coupons
 WHERE status = 'active'
   AND min_purchase >= 100
