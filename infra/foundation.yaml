@@ -1,307 +1,181 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >
-  Analytics Agent (AgentCore-native) foundation: private VPC (no NAT/IGW),
-  VPC endpoints (S3 gateway + bedrock-runtime/secretsmanager/logs interface),
-  Aurora Serverless v2 PostgreSQL in private subnets, DB secret, and the
-  knowledge + static-site S3 buckets. The AgentCore Runtime attaches to the
-  private subnets via RuntimeSecurityGroup and reaches Aurora over 5432.
+  Analytics Agent foundation (lakehouse era): a minimal VPC that exists ONLY to
+  host the /ask relay (CloudFront VPC origin -> internal ALB -> Fargate), plus the
+  Cognito user pool, the relay's ECR repository, and the static-site bucket.
+  No database, no NAT, no VPC endpoints -- see the two notes below.
+
+# ============================================================================
+# 这个栈为什么这么小 —— 两处刻意的删减,别"顺手补回来"
+#
+# ① **没有数据库,也没有给 Runtime 用的 VPC**
+#    阶段七把数据层换成了 S3 Tables(Iceberg)+ Athena + Glue。它们都是 HTTPS + IAM
+#    的公共 API,AgentCore Runtime 的 `networkMode` 因此是 `PUBLIC`,**根本不进这个 VPC**。
+#    于是这些全部删掉了:Aurora Serverless v2 集群/实例/子网组、`analytics-agent/db`
+#    与 `analytics-agent/db-readonly` 两个口令 secret、灌数 Lambda 的 SeederSG、
+#    AuroraSG 及其 5432 入站规则、RuntimeSG,以及 bedrock-runtime / secretsmanager /
+#    logs / ecr.api / ecr.dkr 五个接口端点 + S3 网关端点 + EndpointSG。
+#    留着它们不只是多花钱,是**多一层"端点私有 DNS 没配好 → 超时"的故障面**,
+#    还把真实 subnet / SG / VPC ID 写进了仓库文件(那正是 agentcore.json 清掉的东西)。
+#
+# ② **没有 NAT 网关;两个子网都有 IGW 默认路由,Fargate 任务带公网 IP**
+#    ALB 必须跨 2 个 AZ,而 CloudFront VPC origin 要求 ALB 是 `internal`(只有私网 IP)。
+#    子网是不是"私有"对 ALB 无所谓。真正需要出网的是 Fargate 任务:拉 ECR 镜像、
+#    调 `bedrock-agentcore:InvokeAgentRuntime`、写 CloudWatch Logs。给它出网有两条路:
+#      - NAT 网关(任务无公网 IP):约 $0.045/小时 ≈ $33/月,外加流量费。
+#      - 任务带公网 IP 放在有 IGW 路由的子网里:约 $0.0050/小时 ≈ $3.6/月。
+#        (**不是 $0** —— AWS 2024-02 起对公网 IPv4 地址单独计费,一个任务一个地址。
+#         这一条早先写成 $0 是错的;差价仍有约 9 倍,结论不变,但别拿它当"免费"。
+#         数字是 us-west-2 的量级参考,以官方定价页为准。)
+#    两条路的**入站**安全性是一样的 —— 任务的 SG 只放行来自 ALB SG 的 8000,
+#    公网 IP 上没有任何入站规则;出站在两种方案里都是放开的。所以这里选后者。
+#    ⚠️ 要改回"任务零公网 IP",需要三处一起改:本文件加 NAT + 私有路由表、
+#    `relay.yaml` 的 `AssignPublicIp` 改回 `DISABLED`、并确认镜像拉取路径还通。
+#    只改其中一处会得到一个**卡在 PENDING 拉不到镜像的服务**。
+#
+# 知识树桶 `analytics-agent-knowledge` **不在这个栈里**:它由部署流程单独建/维护
+# (`agentcore deploy` 的前置条件,见 analyticsagent/README.md),而且已经存在于账号里。
+# 在这里再声明一遍只会让建栈时撞名失败。
+# ============================================================================
 
 Parameters:
   ProjectTag:
     Type: String
     Default: analytics-agent
-  DBName:
+
+  SiteBucketName:
     Type: String
-    Default: app_analytics
-  DBUsername:
-    Type: String
-    Default: analytics_admin
-  DBReadonlyUsername:
-    Type: String
-    Default: analytics_ro
+    Default: ""
     Description: >
-      Low-privilege role the agent uses at query time (SELECT on public only).
-      The seeder Lambda creates it; never point the runtime at the master user.
+      静态站点桶名。留空 = <ProjectTag>-site。S3 桶名是**全球唯一**的,短名字有被别人
+      占掉的可能(那时建栈会报 BucketAlreadyExists);撞了就在这里显式传一个别的名字,
+      并让 scripts/deploy/deploy_web.sh 的 SITE_BUCKET 跟着改成同一个值。
+
+Conditions:
+  AutoSiteBucketName: !Equals [!Ref SiteBucketName, ""]
 
 Resources:
 
-  # ----------------------------- VPC + subnets -----------------------------
+  # ------------------------------ VPC + 子网 --------------------------------
+  # 只为中继存在。两个 AZ 是 ALB 的硬性要求,不是冗余偏好。
   Vpc:
     Type: AWS::EC2::VPC
     Properties:
       CidrBlock: 10.42.0.0/16
-      EnableDnsSupport: true       # required for interface-endpoint private DNS
+      EnableDnsSupport: true
       EnableDnsHostnames: true
       Tags: [{ Key: Name, Value: !Sub "${ProjectTag}-vpc" }]
 
-  PrivateSubnetA:
-    Type: AWS::EC2::Subnet
-    Properties:
-      VpcId: !Ref Vpc
-      CidrBlock: 10.42.1.0/24
-      AvailabilityZone: !Select [0, !GetAZs ""]
-      Tags: [{ Key: Name, Value: !Sub "${ProjectTag}-private-a" }]
-
-  PrivateSubnetB:
-    Type: AWS::EC2::Subnet
-    Properties:
-      VpcId: !Ref Vpc
-      CidrBlock: 10.42.2.0/24
-      AvailabilityZone: !Select [1, !GetAZs ""]
-      Tags: [{ Key: Name, Value: !Sub "${ProjectTag}-private-b" }]
-
-  PrivateRouteTable:
-    Type: AWS::EC2::RouteTable
-    Properties:
-      VpcId: !Ref Vpc
-      Tags: [{ Key: Name, Value: !Sub "${ProjectTag}-private-rt" }]
-
-  RouteAssocA:
-    Type: AWS::EC2::SubnetRouteTableAssociation
-    Properties: { SubnetId: !Ref PrivateSubnetA, RouteTableId: !Ref PrivateRouteTable }
-  RouteAssocB:
-    Type: AWS::EC2::SubnetRouteTableAssociation
-    Properties: { SubnetId: !Ref PrivateSubnetB, RouteTableId: !Ref PrivateRouteTable }
-
-  # ---- 出网:IGW + 公有子网 + NAT。私有子网默认路由走 NAT，让 AgentCore 的容器构建
-  #      编排 Lambda(被放进本 VPC)能触达公网 AWS API(CodeBuild / 控制面)。仅出站,
-  #      无 0.0.0.0/0 入站规则。 ----
-  InternetGateway:
-    Type: AWS::EC2::InternetGateway
-    Properties:
-      Tags: [{ Key: Name, Value: !Sub "${ProjectTag}-igw" }]
-  IgwAttach:
-    Type: AWS::EC2::VPCGatewayAttachment
-    Properties: { VpcId: !Ref Vpc, InternetGatewayId: !Ref InternetGateway }
-
-  PublicSubnet:
+  SubnetA:
     Type: AWS::EC2::Subnet
     Properties:
       VpcId: !Ref Vpc
       CidrBlock: 10.42.0.0/24
       AvailabilityZone: !Select [0, !GetAZs ""]
-      Tags: [{ Key: Name, Value: !Sub "${ProjectTag}-public-a" }]
-  PublicRouteTable:
+      MapPublicIpOnLaunch: false   # Fargate 在 relay.yaml 里显式要公网 IP,不靠子网默认
+      Tags: [{ Key: Name, Value: !Sub "${ProjectTag}-a" }]
+
+  SubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: 10.42.1.0/24
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      MapPublicIpOnLaunch: false
+      Tags: [{ Key: Name, Value: !Sub "${ProjectTag}-b" }]
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags: [{ Key: Name, Value: !Sub "${ProjectTag}-igw" }]
+
+  IgwAttach:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties: { VpcId: !Ref Vpc, InternetGatewayId: !Ref InternetGateway }
+
+  RouteTable:
     Type: AWS::EC2::RouteTable
     Properties:
       VpcId: !Ref Vpc
-      Tags: [{ Key: Name, Value: !Sub "${ProjectTag}-public-rt" }]
-  PublicDefaultRoute:
+      Tags: [{ Key: Name, Value: !Sub "${ProjectTag}-rt" }]
+
+  DefaultRoute:
     Type: AWS::EC2::Route
     DependsOn: IgwAttach
     Properties:
-      RouteTableId: !Ref PublicRouteTable
+      RouteTableId: !Ref RouteTable
       DestinationCidrBlock: 0.0.0.0/0
       GatewayId: !Ref InternetGateway
-  PublicRouteAssoc:
+
+  RouteAssocA:
     Type: AWS::EC2::SubnetRouteTableAssociation
-    Properties: { SubnetId: !Ref PublicSubnet, RouteTableId: !Ref PublicRouteTable }
+    Properties: { SubnetId: !Ref SubnetA, RouteTableId: !Ref RouteTable }
+  RouteAssocB:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties: { SubnetId: !Ref SubnetB, RouteTableId: !Ref RouteTable }
 
-  NatEip:
-    Type: AWS::EC2::EIP
-    Properties: { Domain: vpc }
-  NatGateway:
-    Type: AWS::EC2::NatGateway
+  # -------------------------------- Cognito ---------------------------------
+  # 前端用 amazon-cognito-identity.min.js 走 SRP 登录(web/index.html),拿 idToken
+  # 塞进 X-Id-Token,中继侧用 aws-jwt-verify 验。所以客户端**不能有 secret**,
+  # 且必须放开 ALLOW_USER_SRP_AUTH。
+  UserPool:
+    Type: AWS::Cognito::UserPool
     Properties:
-      AllocationId: !GetAtt NatEip.AllocationId
-      SubnetId: !Ref PublicSubnet
-      Tags: [{ Key: Name, Value: !Sub "${ProjectTag}-nat" }]
-  PrivateDefaultRoute:
-    Type: AWS::EC2::Route
-    Properties:
-      RouteTableId: !Ref PrivateRouteTable
-      DestinationCidrBlock: 0.0.0.0/0
-      NatGatewayId: !Ref NatGateway
+      UserPoolName: !Ref ProjectTag
+      # 公开 demo 不开自助注册:只有管理员能建账号。少了这条,任何人都能自己注册
+      # 一个号进来问数(问的是真数据),而且 URL 是公开的 CloudFront 域名。
+      AdminCreateUserConfig:
+        AllowAdminCreateUserOnly: true
+      # 不设 UsernameAttributes:用普通用户名登录,与前端那个「用户名」输入框一致
+      # (设成 [email] 的话用户名必须是邮箱,且需要邮件投递配置)。
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 12
+          RequireLowercase: true
+          RequireUppercase: true
+          RequireNumbers: true
+          RequireSymbols: false
+      MfaConfiguration: "OFF"
+      UserPoolTags: { Project: !Ref ProjectTag }
 
-  # ------------------------- Security groups --------------------------------
-  EndpointSG:
-    Type: AWS::EC2::SecurityGroup
+  UserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
     Properties:
-      GroupDescription: HTTPS to interface VPC endpoints from within the VPC
-      VpcId: !Ref Vpc
-      SecurityGroupIngress:
-        - IpProtocol: tcp
-          FromPort: 443
-          ToPort: 443
-          CidrIp: 10.42.0.0/16
-          Description: HTTPS from VPC
-      Tags: [{ Key: Name, Value: !Sub "${ProjectTag}-endpoint-sg" }]
+      ClientName: web
+      UserPoolId: !Ref UserPool
+      GenerateSecret: false          # 浏览器里的客户端藏不住 secret
+      ExplicitAuthFlows:
+        - ALLOW_USER_SRP_AUTH        # authenticateUser() 走的就是这个
+        - ALLOW_REFRESH_TOKEN_AUTH
+      PreventUserExistenceErrors: ENABLED
+      IdTokenValidity: 8
+      AccessTokenValidity: 8
+      RefreshTokenValidity: 30
+      TokenValidityUnits:
+        IdToken: hours
+        AccessToken: hours
+        RefreshToken: days
 
-  RuntimeSG:
-    Type: AWS::EC2::SecurityGroup
+  # ------------------------------ 中继镜像仓库 -------------------------------
+  RelayRepository:
+    Type: AWS::ECR::Repository
     Properties:
-      GroupDescription: AgentCore Runtime ENIs (egress to endpoints + Aurora)
-      VpcId: !Ref Vpc
-      Tags: [{ Key: Name, Value: !Sub "${ProjectTag}-runtime-sg" }]
+      RepositoryName: !Sub "${ProjectTag}-ask-relay"
+      ImageScanningConfiguration: { ScanOnPush: true }
+      LifecyclePolicy:
+        # 只留最近 5 个镜像:中继镜像每次改都推一版,不清会一直涨。
+        LifecyclePolicyText: |
+          {"rules":[{"rulePriority":1,"description":"keep last 5",
+            "selection":{"tagStatus":"any","countType":"imageCountMoreThan","countNumber":5},
+            "action":{"type":"expire"}}]}
 
-  SeederSG:
-    Type: AWS::EC2::SecurityGroup
-    Properties:
-      GroupDescription: One-shot Aurora seeder Lambda ENIs
-      VpcId: !Ref Vpc
-      Tags: [{ Key: Name, Value: !Sub "${ProjectTag}-seeder-sg" }]
-
-  AuroraSG:
-    Type: AWS::EC2::SecurityGroup
-    Properties:
-      GroupDescription: Aurora PostgreSQL - 5432 from runtime + seeder only
-      VpcId: !Ref Vpc
-      Tags: [{ Key: Name, Value: !Sub "${ProjectTag}-aurora-sg" }]
-
-  AuroraIngressRuntime:
-    Type: AWS::EC2::SecurityGroupIngress
-    Properties:
-      GroupId: !Ref AuroraSG
-      IpProtocol: tcp
-      FromPort: 5432
-      ToPort: 5432
-      SourceSecurityGroupId: !Ref RuntimeSG
-      Description: PostgreSQL from AgentCore Runtime
-  AuroraIngressSeeder:
-    Type: AWS::EC2::SecurityGroupIngress
-    Properties:
-      GroupId: !Ref AuroraSG
-      IpProtocol: tcp
-      FromPort: 5432
-      ToPort: 5432
-      SourceSecurityGroupId: !Ref SeederSG
-      Description: PostgreSQL from seeder Lambda
-
-  # ----------------------------- VPC endpoints ------------------------------
-  S3GatewayEndpoint:
-    Type: AWS::EC2::VPCEndpoint
-    Properties:
-      VpcId: !Ref Vpc
-      ServiceName: !Sub "com.amazonaws.${AWS::Region}.s3"
-      VpcEndpointType: Gateway
-      RouteTableIds: [!Ref PrivateRouteTable]
-
-  BedrockEndpoint:
-    Type: AWS::EC2::VPCEndpoint
-    Properties:
-      VpcId: !Ref Vpc
-      ServiceName: !Sub "com.amazonaws.${AWS::Region}.bedrock-runtime"
-      VpcEndpointType: Interface
-      PrivateDnsEnabled: true
-      SubnetIds: [!Ref PrivateSubnetA, !Ref PrivateSubnetB]
-      SecurityGroupIds: [!Ref EndpointSG]
-
-  SecretsEndpoint:
-    Type: AWS::EC2::VPCEndpoint
-    Properties:
-      VpcId: !Ref Vpc
-      ServiceName: !Sub "com.amazonaws.${AWS::Region}.secretsmanager"
-      VpcEndpointType: Interface
-      PrivateDnsEnabled: true
-      SubnetIds: [!Ref PrivateSubnetA, !Ref PrivateSubnetB]
-      SecurityGroupIds: [!Ref EndpointSG]
-
-  LogsEndpoint:
-    Type: AWS::EC2::VPCEndpoint
-    Properties:
-      VpcId: !Ref Vpc
-      ServiceName: !Sub "com.amazonaws.${AWS::Region}.logs"
-      VpcEndpointType: Interface
-      PrivateDnsEnabled: true
-      SubnetIds: [!Ref PrivateSubnetA, !Ref PrivateSubnetB]
-      SecurityGroupIds: [!Ref EndpointSG]
-
-  # ECR 端点:VPC 模式下 AgentCore Runtime 从 ECR 拉镜像需要(镜像层 blob 走 S3 网关端点)。
-  EcrApiEndpoint:
-    Type: AWS::EC2::VPCEndpoint
-    Properties:
-      VpcId: !Ref Vpc
-      ServiceName: !Sub "com.amazonaws.${AWS::Region}.ecr.api"
-      VpcEndpointType: Interface
-      PrivateDnsEnabled: true
-      SubnetIds: [!Ref PrivateSubnetA, !Ref PrivateSubnetB]
-      SecurityGroupIds: [!Ref EndpointSG]
-
-  EcrDkrEndpoint:
-    Type: AWS::EC2::VPCEndpoint
-    Properties:
-      VpcId: !Ref Vpc
-      ServiceName: !Sub "com.amazonaws.${AWS::Region}.ecr.dkr"
-      VpcEndpointType: Interface
-      PrivateDnsEnabled: true
-      SubnetIds: [!Ref PrivateSubnetA, !Ref PrivateSubnetB]
-      SecurityGroupIds: [!Ref EndpointSG]
-
-  # ------------------------------- DB secret --------------------------------
-  DBSecret:
-    Type: AWS::SecretsManager::Secret
-    Properties:
-      Name: !Sub "${ProjectTag}/db"
-      Description: Aurora master credentials for the analytics agent
-      GenerateSecretString:
-        SecretStringTemplate: !Sub '{"username":"${DBUsername}"}'
-        GenerateStringKey: password
-        PasswordLength: 24
-        ExcludePunctuation: true
-
-  # agent 运行时用的只读角色口令。Aurora 只认 master 口令做初始化,这个角色由 seeder
-  # Lambda 在灌数后 CREATE ROLE 出来(见 infra/seeder/seed_handler.py::_grant_readonly)。
-  # 把 Runtime 的 PGUSER/PGPASSWORD 指到这里,而不是 DBSecret 的主用户。
-  DBReadonlySecret:
-    Type: AWS::SecretsManager::Secret
-    Properties:
-      Name: !Sub "${ProjectTag}/db-readonly"
-      Description: Low-privilege (SELECT-only) DB role for the analytics agent runtime
-      GenerateSecretString:
-        SecretStringTemplate: !Sub '{"username":"${DBReadonlyUsername}"}'
-        GenerateStringKey: password
-        PasswordLength: 24
-        ExcludePunctuation: true
-
-  # ------------------------------- Aurora -----------------------------------
-  DBSubnetGroup:
-    Type: AWS::RDS::DBSubnetGroup
-    Properties:
-      DBSubnetGroupDescription: Aurora private subnets
-      SubnetIds: [!Ref PrivateSubnetA, !Ref PrivateSubnetB]
-
-  AuroraCluster:
-    Type: AWS::RDS::DBCluster
-    Properties:
-      Engine: aurora-postgresql
-      EngineVersion: "16.13"
-      EngineMode: provisioned
-      DatabaseName: !Ref DBName
-      MasterUsername: !Ref DBUsername
-      MasterUserPassword: !Sub "{{resolve:secretsmanager:${DBSecret}:SecretString:password}}"
-      DBSubnetGroupName: !Ref DBSubnetGroup
-      VpcSecurityGroupIds: [!Ref AuroraSG]
-      StorageEncrypted: true
-      ServerlessV2ScalingConfiguration:
-        MinCapacity: 0.5
-        MaxCapacity: 2
-
-  AuroraInstance:
-    Type: AWS::RDS::DBInstance
-    Properties:
-      DBClusterIdentifier: !Ref AuroraCluster
-      DBInstanceClass: db.serverless
-      Engine: aurora-postgresql
-      PubliclyAccessible: false
-
-  # ------------------------------- S3 buckets -------------------------------
-  KnowledgeBucket:
-    Type: AWS::S3::Bucket
-    Properties:
-      BucketName: !Sub "${ProjectTag}-knowledge-${AWS::AccountId}-${AWS::Region}"
-      PublicAccessBlockConfiguration:
-        BlockPublicAcls: true
-        BlockPublicPolicy: true
-        IgnorePublicAcls: true
-        RestrictPublicBuckets: true
-      BucketEncryption:
-        ServerSideEncryptionConfiguration:
-          - ServerSideEncryptionByDefault: { SSEAlgorithm: AES256 }
-
+  # ------------------------------- 静态站点桶 --------------------------------
+  # 私有桶,只有 CloudFront 经 OAC 能读(桶策略在 edge.yaml —— 那条策略要引用分发 ARN,
+  # 所以必须和分发同栈)。
   SiteBucket:
     Type: AWS::S3::Bucket
     Properties:
-      BucketName: !Sub "${ProjectTag}-site-${AWS::AccountId}-${AWS::Region}"
+      BucketName: !If [AutoSiteBucketName, !Sub "${ProjectTag}-site", !Ref SiteBucketName]
       PublicAccessBlockConfiguration:
         BlockPublicAcls: true
         BlockPublicPolicy: true
@@ -312,16 +186,11 @@ Resources:
           - ServerSideEncryptionByDefault: { SSEAlgorithm: AES256 }
 
 Outputs:
-  VpcId: { Value: !Ref Vpc }
-  PrivateSubnetA: { Value: !Ref PrivateSubnetA }
-  PrivateSubnetB: { Value: !Ref PrivateSubnetB }
-  RuntimeSGId: { Value: !Ref RuntimeSG }
-  SeederSGId: { Value: !Ref SeederSG }
-  AuroraEndpoint: { Value: !GetAtt AuroraCluster.Endpoint.Address }
-  AuroraPort: { Value: !GetAtt AuroraCluster.Endpoint.Port }
-  DBName: { Value: !Ref DBName }
-  DBSecretArn: { Value: !Ref DBSecret }
-  # 灌数 Lambda 用 DBSecretArn(需建表权限);AgentCore Runtime 用下面这个只读的。
-  DBReadonlySecretArn: { Value: !Ref DBReadonlySecret }
-  KnowledgeBucket: { Value: !Ref KnowledgeBucket }
-  SiteBucket: { Value: !Ref SiteBucket }
+  VpcId:            { Value: !Ref Vpc }
+  SubnetA:          { Value: !Ref SubnetA }
+  SubnetB:          { Value: !Ref SubnetB }
+  SiteBucket:       { Value: !Ref SiteBucket }
+  UserPoolId:       { Value: !Ref UserPool }
+  UserPoolClientId: { Value: !Ref UserPoolClient }
+  RelayRepositoryUri:
+    Value: !GetAtt RelayRepository.RepositoryUri

@@ -23,15 +23,24 @@ COPY requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r /app/requirements.txt
 
 # 业务代码(app/analytics/ 的全部 .py):main.py / agent.py / tools.py / db.py /
-# metric_layer.py / metrics_def.py / stats.py / knowledge_store.py / runtime_config.py
+# athena.py / metric_layer.py / metrics_def.py / stats.py / knowledge_store.py /
+# runtime_config.py。其中 db.py / tools.py / athena.py / metric_layer.py /
+# metrics_def.py / stats.py 是**生成物**(scripts/deploy/sync_agent_code.py 从
+# backend/ 与 scripts/lakehouse/ 拷来),文件顶上有横幅;别在这个目录里改它们。
+#
+# 注意 athena.py 是**平铺**在这里的,不是 scripts/lakehouse/athena.py:
+# 构建上下文就是 app/analytics/(agentcore.json 的 codeLocation),COPY 不到上一级。
+# db.py::_athena() 先裸 import 一次(命中这里),失败才回退到仓库布局。
 COPY . /app/
 RUN rm -rf /app/.venv /app/__pycache__ /app/knowledge
 
-# 只烤非敏感指针 RUNTIME_SECRET_ID + 静态默认值。动态/敏感配置(Aurora 端点、DB 口令、
-# 知识桶名)全在 Secrets Manager 的 analytics-agent/runtime,由 runtime_config 冷启动时载入。
+# 只烤非敏感指针 RUNTIME_SECRET_ID + 静态默认值。会变的坐标(桶名、工作组、目录名、
+# 治理角色 ARN)在 Secrets Manager 的 analytics-agent/runtime,由 runtime_config 冷启动载入。
+# 数据层是 Athena:HTTPS + IAM,**镜像里没有任何数据库口令**,也不需要 VPC。
 ENV RUNTIME_SECRET_ID=analytics-agent/runtime \
     AWS_REGION=us-west-2 \
     KNOWLEDGE_DIR=/app/knowledge \
+    DB_BACKEND=athena \
     CLAUDE_CODE_USE_BEDROCK=1 \
     ANTHROPIC_MODEL=global.anthropic.claude-opus-4-8
 

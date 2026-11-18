@@ -25,12 +25,29 @@
 | expired | 已过期 |
 
 ### source 来源渠道
-| 值 | 说明 |
-|----|------|
-| campaign | 营销活动发放 |
-| manual | 客服手动发放 |
-| referral | 邀请好友获得 |
-| purchase | 购物赠送 |
+| 值 | 说明 | 实测行数 |
+|----|------|------|
+| claim | 用户主动领取（领券中心） | 5,830,129 |
+| gift | 赠送/客服发放 | 1,480,559 |
+| reward | 任务或活动奖励 | 1,420,241 |
+| system | 系统自动发放 | 978,507 |
+
+> 全表 9,709,436 行。旧文档写的 `campaign` / `manual` / `referral` / `purchase`
+> **一个都不存在**——主动领取是 `claim`（占 60%），赠送是 `gift`。
+
+### order_id 与 orders 的关联
+
+> ✅ **`status = 'used'` 的行与用券订单一一对应**：324,482 张已使用的券，`order_id` 逐个命中
+> `orders`，且 `(user_id, coupon_id)` 与那一单相同、`used_at` = 该单 `placed_at`。所以
+> 「用券订单的客单价比不用券高多少」可以走 `user_coupons JOIN orders`，也可以直接按
+> `orders.coupon_id IS NOT NULL` 分组，两者一致。用券单里含未支付 / 已取消的单
+> （有效单 246,005 张），算 GMV 时照常加有效订单状态过滤。
+>
+> 非核销行（`unused` / `expired`）的 `order_id` 为 NULL。领券时刻落在
+> `[max(注册, 券 start_date), min(券 end_date, 锚点)]` 内，`expire_at = received_at + coupons.valid_days 天`；
+> `expired` ⟺ `expire_at` 早于快照时刻（锚点日末），否则 `unused`。
+>
+> （2026-11 重灌前这一段写的是「接不上 orders」，那是 v1 数据的形态，已作废。）
 
 ## 索引
 
@@ -53,7 +70,7 @@ SELECT
           NULLIF(COUNT(uc.id), 0), 2) AS usage_rate
 FROM coupons c
 LEFT JOIN user_coupons uc ON c.coupon_id = uc.coupon_id
-WHERE c.start_date >= '2024-01-01'
+WHERE c.start_date >= date '2024-01-01'
 GROUP BY c.coupon_id, c.coupon_name, c.coupon_type, c.discount_value
 ORDER BY received_count DESC;
 ```
@@ -68,7 +85,7 @@ SELECT
     ROUND(COUNT(CASE WHEN status = 'used' THEN 1 END) * 100.0 /
           NULLIF(COUNT(*), 0), 2) AS usage_rate
 FROM user_coupons
-WHERE received_at >= CURRENT_DATE - INTERVAL '30 days'
+WHERE received_at >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '29' day AND received_at < (SELECT max(as_of_date) FROM meta_snapshot) + interval '1' day
 GROUP BY source
 ORDER BY coupon_count DESC;
 ```

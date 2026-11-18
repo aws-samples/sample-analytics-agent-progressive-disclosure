@@ -28,6 +28,7 @@
 - `parent_comment_id != NULL`: 二级评论（回复其他评论）
 - 支持评论被点赞，`like_count` 记录评论的点赞数
 
+
 ## 索引
 
 - PRIMARY KEY: `comment_id`
@@ -43,7 +44,7 @@ SELECT
     COUNT(DISTINCT user_id) AS commenter_count
 FROM post_comments
 WHERE status = 'visible'
-    AND created_at >= CURRENT_DATE - INTERVAL '30 days'
+    AND created_at >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '29' day AND created_at < (SELECT max(as_of_date) FROM meta_snapshot) + interval '1' day
 GROUP BY DATE(created_at)
 ORDER BY comment_date;
 ```
@@ -60,7 +61,7 @@ FROM post_comments c
 JOIN users u ON c.user_id = u.user_id
 JOIN posts p ON c.post_id = p.post_id
 WHERE c.status = 'visible'
-    AND c.created_at >= CURRENT_DATE - INTERVAL '7 days'
+    AND c.created_at >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '6' day AND c.created_at < (SELECT max(as_of_date) FROM meta_snapshot) + interval '1' day
 ORDER BY c.like_count DESC
 LIMIT 50;
 ```

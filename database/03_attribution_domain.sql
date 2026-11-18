@@ -25,7 +25,7 @@ CREATE TABLE ad_campaigns (
     start_date DATE,
     end_date DATE,
     target_audience JSONB,  -- 投放人群定向
-    status VARCHAR(20) DEFAULT 'draft',  -- 'draft', 'active', 'paused', 'ended'
+    status VARCHAR(20) DEFAULT 'draft',  -- 'active', 'paused', 'ended'（业务上还有 draft，本批数据没有）
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -35,7 +35,7 @@ CREATE TABLE ad_creatives (
     creative_id SERIAL PRIMARY KEY,
     ad_campaign_id INT REFERENCES ad_campaigns(ad_campaign_id),
     creative_name VARCHAR(200),
-    creative_type VARCHAR(50),  -- 'image', 'video', 'carousel', 'text'
+    creative_type VARCHAR(50),  -- 'image', 'video', 'carousel'（业务上还有 text，本批数据没有）
     creative_format VARCHAR(50),  -- '1080x1920', '750x1334', etc.
     content_url VARCHAR(500),
     headline VARCHAR(200),
@@ -52,7 +52,7 @@ CREATE TABLE user_attributions (
     channel_id INT REFERENCES channels(channel_id),
     ad_campaign_id INT REFERENCES ad_campaigns(ad_campaign_id),
     creative_id INT REFERENCES ad_creatives(creative_id),
-    attribution_type VARCHAR(50),  -- 'first_touch', 'last_touch', 'linear'
+    attribution_type VARCHAR(50),  -- 'first_touch', 'last_touch'（linear 等多触点模型业务上成立，本批数据只做了这两种）
     click_time TIMESTAMP,
     install_time TIMESTAMP,
     attributed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,

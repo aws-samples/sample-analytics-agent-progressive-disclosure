@@ -1,0 +1,726 @@
+{
+  "meta": {
+    "ts": "2026-08-19 17:58:49",
+    "model": "global.anthropic.claude-opus-4-8",
+    "avg_s": "-",
+    "avg_docs": "-",
+    "avg_sql": "-"
+  },
+  "records": [
+    {
+      "id": "L1-users-count",
+      "level": 1,
+      "question": "查一下目前有多少注册用户",
+      "goldens": [
+        {
+          "label": "all users",
+          "rows": [
+            [
+              500
+            ]
+          ]
+        }
+      ],
+      "status": "golden_ok"
+    },
+    {
+      "id": "L1-order-count",
+      "level": 1,
+      "question": "查一下总订单数",
+      "goldens": [
+        {
+          "label": "all orders",
+          "rows": [
+            [
+              2000
+            ]
+          ]
+        }
+      ],
+      "status": "golden_ok"
+    },
+    {
+      "id": "L1-post-count",
+      "level": 1,
+      "question": "平台上一共发过多少帖子",
+      "goldens": [
+        {
+          "label": "all posts",
+          "rows": [
+            [
+              1000
+            ]
+          ]
+        },
+        {
+          "label": "published only",
+          "rows": [
+            [
+              847
+            ]
+          ]
+        }
+      ],
+      "status": "golden_ok"
+    },
+    {
+      "id": "L1-campaign-count",
+      "level": 1,
+      "question": "目前有多少营销活动",
+      "goldens": [
+        {
+          "label": "all campaigns",
+          "rows": [
+            [
+              50
+            ]
+          ]
+        },
+        {
+          "label": "active only",
+          "rows": [
+            [
+              11
+            ]
+          ]
+        }
+      ],
+      "status": "golden_ok"
+    },
+    {
+      "id": "L1-dau-latest",
+      "level": 1,
+      "question": "最新一天的 DAU 是多少",
+      "goldens": [
+        {
+          "label": "events last day distinct users",
+          "rows": [
+            [
+              27
+            ]
+          ]
+        },
+        {
+          "label": "mart_daily_kpi last day",
+          "rows": [
+            [
+              27
+            ]
+          ]
+        }
+      ],
+      "status": "golden_ok"
+    },
+    {
+      "id": "L1-ab-running",
+      "level": 1,
+      "question": "正在进行的 A/B 测试有哪些",
+      "goldens": [
+        {
+          "label": "status=running",
+          "rows": [
+            [
+              "首页推荐算法优化"
+            ],
+            [
+              "Push通知发送时间优化"
+            ],
+            [
+              "会员等级权益展示"
+            ],
+            [
+              "订单确认页推荐"
+            ]
+          ]
+        }
+      ],
+      "status": "golden_ok"
+    },
+    {
+      "id": "L1-channel-list",
+      "level": 1,
+      "question": "有哪些获客渠道",
+      "goldens": [
+        {
+          "label": "all channels",
+          "rows": [
+            [
+              "抖音信息流"
+            ],
+            [
+              "抖音搜索"
+            ],
+            [
+              "小红书种草"
+            ],
+            [
+              "小红书搜索"
+            ],
+            [
+              "微信朋友圈广告"
+            ],
+            [
+              "微信公众号"
+            ],
+            [
+              "百度搜索"
+            ],
+            [
+              "快手信息流"
+            ],
+            [
+              "微博KOL"
+            ],
+            [
+              "App Store"
+            ],
+            [
+              "应用宝"
+            ],
+            [
+              "老用户邀请"
+            ]
+          ]
+        }
+      ],
+      "status": "golden_ok"
+    },
+    {
+      "id": "L2-gender-dist",
+      "level": 2,
+      "question": "用户的性别分布是怎样的？男女各多少人？",
+      "goldens": [
+        {
+          "label": "group by gender",
+          "rows": [
+            [
+              "female",
+              258
+            ],
+            [
+              "male",
+              242
+            ]
+          ]
+        }
+      ],
+      "status": "golden_ok"
+    },
+    {
+      "id": "L2-device-dist",
+      "level": 2,
+      "question": "用户使用的设备类型分布，iOS 和 Android 各占多少设备",
+      "goldens": [
+        {
+          "label": "device rows",
+          "rows": [
+            [
+              "ios",
+              245
+            ],
+            [
+              "mini_program",
+              44
+            ],
+            [
+              "web",
+              83
+            ],
+            [
+              "android",
+              372
+            ]
+          ]
+        },
+        {
+          "label": "distinct users per type",
+          "rows": [
+            [
+              "ios",
+              207
+            ],
+            [
+              "mini_program",
+              44
+            ],
+            [
+              "android",
+              305
+            ],
+            [
+              "web",
+              82
+            ]
+          ]
+        }
+      ],
+      "status": "golden_ok"
+    },
+    {
+      "id": "L2-order-status-dist",
+      "level": 2,
+      "question": "各订单状态的数量分布",
+      "goldens": [
+        {
+          "label": "group by status",
+          "rows": [
+            [
+              "shipped",
+              60
+            ],
+            [
+              "refunded",
+              145
+            ],
+            [
+              "cancelled",
+              240
+            ],
+            [
+              "delivered",
+              1509
+            ],
+            [
+              "paid",
+              32
+            ],
+            [
+              "pending",
+              14
+            ]
+          ]
+        }
+      ],
+      "status": "golden_ok"
+    },
+    {
+      "id": "L2-top-pages-7d",
+      "level": 2,
+      "question": "最近7天访问量最高的页面 Top 10",
+      "goldens": [
+        {
+          "label": "page_views 7d anchored",
+          "rows": [
+            [
+              "order_list"
+            ],
+            [
+              "favorites"
+            ],
+            [
+              "coupon_center"
+            ],
+            [
+              "messages"
+            ],
+            [
+              "home"
+            ],
+            [
+              "category"
+            ],
+            [
+              "post_detail"
+            ],
+            [
+              "cart"
+            ],
+            [
+              "post_feed"
+            ],
+            [
+              "settings"
+            ]
+          ]
+        }
+      ],
+      "status": "golden_ok"
+    },
+    {
+      "id": "L2-top-liked-posts",
+      "level": 2,
+      "question": "点赞数最多的帖子 Top 5",
+      "goldens": [
+        {
+          "label": "join post_likes",
+          "rows": [
+            [
+              "带你看看我的商品140"
+            ],
+            [
+              "商品131氛围感"
+            ],
+            [
+              "商品53开箱测评，真香！"
+            ],
+            [
+              "入手商品121一个月，说说感受"
+            ],
+            [
+              "我的对比测试"
+            ]
+          ]
+        },
+        {
+          "label": "denormalized like_count",
+          "rows": [
+            [
+              "责任氛围感"
+            ],
+            [
+              "商品39氛围感"
+            ],
+            [
+              "新手必看！简介选购指南"
+            ],
+            [
+              "成功开箱视频"
+            ],
+            [
+              "不过实拍图"
+            ]
+          ]
+        }
+      ],
+      "status": "golden_ok"
+    },
+    {
+      "id": "L2-coupon-usage-rate",
+      "level": 2,
+      "question": "优惠券的使用率是多少",
+      "goldens": [
+        {
+          "label": "used/total",
+          "rows": [
+            [
+              49.68990543215307
+            ]
+          ]
+        }
+      ],
+      "status": "golden_ok"
+    },
+    {
+      "id": "L3-gmv-30d",
+      "level": 3,
+      "question": "过去30天的 GMV 是多少",
+      "goldens": [
+        {
+          "label": "actual_amount valid status",
+          "rows": [
+            [
+              2841462.13
+            ]
+          ]
+        },
+        {
+          "label": "total_amount valid status",
+          "rows": [
+            [
+              2860941.76
+            ]
+          ]
+        },
+        {
+          "label": "mart_daily_revenue 30d",
+          "rows": [
+            [
+              2841462.13
+            ]
+          ]
+        }
+      ],
+      "status": "golden_ok"
+    },
+    {
+      "id": "L3-top-products-gmv",
+      "level": 3,
+      "question": "GMV 最高的商品 Top 10，显示商品名称和销售额",
+      "goldens": [
+        {
+          "label": "order_items joined valid orders",
+          "rows": [
+            [
+              "经典宜家 床上用品"
+            ],
+            [
+              "时尚H&M 衬衫"
+            ],
+            [
+              "新款九阳 收纳箱"
+            ],
+            [
+              "限定九阳 刀具"
+            ],
+            [
+              "新款UR 文胸"
+            ],
+            [
+              "限定李宁 登山杖"
+            ],
+            [
+              "优质SK-II 精华"
+            ],
+            [
+              "精选科沃斯 消毒柜"
+            ],
+            [
+              "优质安踏 拉力带"
+            ],
+            [
+              "美的 垃圾袋"
+            ]
+          ]
+        }
+      ],
+      "status": "golden_ok"
+    },
+    {
+      "id": "L3-churn-30d",
+      "level": 3,
+      "question": "过去30天没有任何会话活动的用户有多少（流失用户）",
+      "goldens": [
+        {
+          "label": "no session in 30d",
+          "rows": [
+            [
+              18
+            ]
+          ]
+        },
+        {
+          "label": "last_active_at variant",
+          "rows": [
+            [
+              174
+            ]
+          ]
+        }
+      ],
+      "status": "golden_ok"
+    },
+    {
+      "id": "L3-coupon-aov-compare",
+      "level": 3,
+      "question": "使用了优惠券的订单和未使用优惠券的订单，客单价对比",
+      "goldens": [
+        {
+          "label": "valid status",
+          "rows": [
+            [
+              5069.9,
+              5475.7
+            ]
+          ]
+        },
+        {
+          "label": "all status",
+          "rows": [
+            [
+              5292.1,
+              5610.7
+            ]
+          ]
+        }
+      ],
+      "status": "golden_ok"
+    },
+    {
+      "id": "L4-funnel",
+      "level": 4,
+      "question": "从浏览商品 → 加入购物车 → 开始结算 → 支付成功的转化漏斗，各步骤的独立用户数",
+      "goldens": [
+        {
+          "label": "all-time distinct users",
+          "rows": [
+            [
+              394,
+              385,
+              396,
+              373
+            ]
+          ]
+        },
+        {
+          "label": "30d anchored",
+          "rows": [
+            [
+              197,
+              190,
+              194,
+              190
+            ]
+          ]
+        }
+      ],
+      "status": "golden_ok"
+    },
+    {
+      "id": "L4-arpu-by-channel",
+      "level": 4,
+      "question": "各获客渠道的用户 ARPU（人均消费）对比，给出最高的3个渠道",
+      "goldens": [
+        {
+          "label": "attribution join orders",
+          "rows": [
+            [
+              "微信朋友圈广告"
+            ],
+            [
+              "应用宝"
+            ],
+            [
+              "直接访问"
+            ]
+          ]
+        }
+      ],
+      "status": "golden_ok"
+    },
+    {
+      "id": "L5-repurchase-rate",
+      "level": 5,
+      "question": "用户的 30 天复购率是多少",
+      "goldens": [
+        {
+          "label": "governed mart definition",
+          "rows": [
+            [
+              62.4
+            ]
+          ]
+        }
+      ],
+      "status": "golden_ok"
+    },
+    {
+      "id": "L5-wow-gmv",
+      "level": 5,
+      "question": "最近7天的 GMV 和再往前7天相比是涨是跌？涨跌多少？",
+      "goldens": [
+        {
+          "label": "mart_daily_kpi wow",
+          "rows": [
+            [
+              675179.41,
+              708728.19
+            ]
+          ]
+        },
+        {
+          "label": "raw orders wow",
+          "rows": [
+            [
+              675179.41,
+              708728.19
+            ]
+          ]
+        }
+      ],
+      "status": "golden_ok"
+    },
+    {
+      "id": "L3-refund-total",
+      "level": 3,
+      "question": "这段时间一共退了多少钱？退款总额是多少？",
+      "goldens": [
+        {
+          "label": "全量退款 (fin_daily_revenue, 按 refunded_at 建轴)",
+          "rows": [
+            [
+              963560.92
+            ]
+          ]
+        },
+        {
+          "label": "同口径的基表校验",
+          "rows": [
+            [
+              963560.92
+            ]
+          ]
+        }
+      ],
+      "status": "golden_ok"
+    },
+    {
+      "id": "L3-channel-cost-total",
+      "level": 3,
+      "question": "各渠道投放一共花了多少钱？总花费是多少？",
+      "goldens": [
+        {
+          "label": "真实花费 (channel_daily_costs 明细)",
+          "rows": [
+            [
+              1449872.13
+            ]
+          ]
+        },
+        {
+          "label": "同口径的集市层校验 (mart_channel_daily)",
+          "rows": [
+            [
+              1449872.13
+            ]
+          ]
+        }
+      ],
+      "status": "golden_ok"
+    },
+    {
+      "id": "L4-cac-lowest-channel",
+      "level": 4,
+      "question": "哪个渠道的获客成本最低？",
+      "goldens": [
+        {
+          "label": "CAC 升序 (成本限制在业务日历轴内)",
+          "rows": [
+            [
+              "小红书种草"
+            ],
+            [
+              "抖音搜索"
+            ],
+            [
+              "小红书搜索"
+            ]
+          ]
+        }
+      ],
+      "status": "golden_ok"
+    },
+    {
+      "id": "L4-roi-cac-by-channel",
+      "level": 4,
+      "question": "最近30天各渠道的 ROI 和 CAC 分别是多少？",
+      "goldens": [
+        {
+          "label": "抖音搜索 近30天的 ROI 与 CAC (同锚点、带上界)",
+          "rows": [
+            [
+              20.66,
+              1353.29
+            ]
+          ]
+        }
+      ],
+      "status": "golden_ok"
+    },
+    {
+      "id": "L3-cac-overall",
+      "level": 3,
+      "question": "整体的获客成本 CAC 是多少？",
+      "goldens": [
+        {
+          "label": "全量 CAC (成本限制在业务日历轴内)",
+          "rows": [
+            [
+              2880.14
+            ]
+          ]
+        }
+      ],
+      "status": "golden_ok"
+    }
+  ]
+}

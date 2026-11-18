@@ -11,7 +11,7 @@
 | sku_id | BIGINT | SKU ID |
 | sku_name | VARCHAR(200) | SKU 名称（如颜色/尺码） |
 | quantity | INT | 购买数量 |
-| unit_price | DECIMAL(10,2) | 商品单价 |
+| unit_price | DECIMAL(10,2) | 成交单价 = 所购商品的 `products.price`（标价，逐行相等） |
 | discount_amount | DECIMAL(10,2) | 该商品优惠金额 |
 | actual_amount | DECIMAL(10,2) | 实付金额 |
 | created_at | TIMESTAMP | 记录创建时间 |
@@ -21,7 +21,7 @@
 ### product_name 和 sku_name
 
 - **product_name**: 下单时的商品名称快照，不随商品后续修改变化
-- **sku_name**: SKU 属性描述，如 "黑色/XL"、"128GB/深空灰"
+- **sku_name**: SKU 属性描述。实测全部是 `<product_name>-标准装`（如 "立白 清洁剂 家庭装-标准装"），没有颜色 / 尺码之类的规格
 
 ### 金额计算
 
@@ -29,6 +29,11 @@
 单商品实付 = 单价 × 数量 - 优惠金额
 actual_amount = unit_price × quantity - discount_amount
 ```
+
+> `discount_amount` 是单品级促销（非负），与订单头的券优惠 `orders.discount_amount` 是两层，
+> 不相加也不相等；同一单的 `SUM(actual_amount)` = `orders.total_amount`。
+> 因为 `unit_price` 就是标价，「按商品标价带算销售额」= `SUM(unit_price × quantity)`，
+> 「实际成交额」= `SUM(actual_amount)`，两者之差就是单品促销让利。
 
 ## 索引
 
@@ -49,7 +54,7 @@ SELECT
 FROM order_items oi
 JOIN orders o ON oi.order_id = o.order_id
 WHERE o.status IN ('paid', 'shipped', 'delivered')
-  AND o.placed_at >= CURRENT_DATE - INTERVAL '30 days'
+  AND o.placed_at >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '29' day AND o.placed_at < (SELECT max(as_of_date) FROM meta_snapshot) + interval '1' day
 GROUP BY oi.product_id, oi.product_name
 ORDER BY total_revenue DESC
 LIMIT 20;
@@ -67,7 +72,7 @@ SELECT
 FROM order_items oi
 JOIN orders o ON oi.order_id = o.order_id
 WHERE o.status IN ('paid', 'shipped', 'delivered')
-  AND o.placed_at >= CURRENT_DATE - INTERVAL '30 days'
+  AND o.placed_at >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '29' day AND o.placed_at < (SELECT max(as_of_date) FROM meta_snapshot) + interval '1' day
 GROUP BY oi.product_id, oi.product_name, oi.sku_id, oi.sku_name
 ORDER BY total_revenue DESC
 LIMIT 50;
@@ -86,7 +91,7 @@ SELECT
     ROUND(AVG(actual_amount), 2) AS avg_order_value
 FROM orders
 WHERE status IN ('paid', 'shipped', 'delivered')
-  AND placed_at >= CURRENT_DATE - INTERVAL '30 days'
+  AND placed_at >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '29' day AND placed_at < (SELECT max(as_of_date) FROM meta_snapshot) + interval '1' day
 GROUP BY 1
 ORDER BY 1;
 ```

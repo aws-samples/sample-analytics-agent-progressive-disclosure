@@ -15,28 +15,29 @@
 ### tag_type 标签类型
 | 值 | 说明 | 常见标签示例 |
 |----|------|-------------|
-| promotion | 促销标签 | 新品、热卖、限时折扣、秒杀、满减 |
-| feature | 功能标签 | 包邮、正品保证、7天无理由、急速发货 |
-| season | 季节标签 | 春季新款、夏日特惠、秋冬上新 |
-| audience | 人群标签 | 学生专享、会员专属、新人专享 |
-| style | 风格标签 | 简约、复古、潮流、ins风、日系 |
+| promotion | 促销标签 | 新品、热销、限时特惠、秒杀、满减 |
+| feature | 功能标签 | 包邮、正品保证、七天无理由、急速发货 |
+| season | 季节标签 | 春季新款、夏季清凉、秋冬保暖、四季通用 |
+| audience | 人群标签 | 学生专享、送礼佳品、白领首选 |
+| style | 风格标签 | 简约、复古、潮流、轻奢、国潮 |
 
 ### 常见 tag_name 值
+实测全表 10,659 行、28 个 tag_name（下面是全集，按它之外的值过滤是空集；各标签行数在 334~416 之间，分布均匀）：
 ```
 -- promotion 促销类
-新品, 热卖, 限时折扣, 秒杀, 满减, 买一送一, 清仓
+新品, 热销, 限时特惠, 秒杀, 满减, 买一送一, 清仓
 
 -- feature 功能类
-包邮, 正品保证, 7天无理由, 急速发货, 官方直营, 赠运费险
+包邮, 正品保证, 七天无理由, 急速发货, 进口, 自营
 
 -- season 季节类
-春季新款, 夏日特惠, 秋冬上新, 年货节, 双11爆款
+春季新款, 夏季清凉, 秋冬保暖, 四季通用
 
 -- audience 人群类
-学生专享, 会员专属, 新人专享, VIP折扣
+学生专享, 送礼佳品, 白领首选, 家庭装, 情侣款
 
 -- style 风格类
-简约, 复古, 潮流, ins风, 日系, 韩版, 轻奢
+简约, 复古, 潮流, 轻奢, 文艺, 国潮
 ```
 
 ## 索引
@@ -80,7 +81,7 @@ SELECT
     AVG(p.sold_count) AS avg_sold_per_product
 FROM product_tags pt
 JOIN products p ON pt.product_id = p.product_id
-WHERE p.status = 'active'
+WHERE p.status = 'on_sale'
 GROUP BY pt.tag_name, pt.tag_type
 HAVING COUNT(DISTINCT p.product_id) >= 10
 ORDER BY total_sold DESC
