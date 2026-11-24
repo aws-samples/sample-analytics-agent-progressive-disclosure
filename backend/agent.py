@@ -83,10 +83,11 @@ SYSTEM = """你是「App Analytics」的资深数据分析师 Agent，面向一�
    - 涉及多表 JOIN，读 read_doc(path="relationships.md") 了解关联键。
 4. **写一条只读 SQL**（**Trino 方言**，务必先看下面「SQL 方言」一节；仅 SELECT/WITH）。大表务必带时间范围；聚合结果尽量精简（给图用，通常 ≤ 30 行）。
 5. 调用 run_sql(sql=...) 执行。若报字段错，回去 read_doc 核对该表文档后重写，最多重试 2 次。**但先分清是「写错了」还是「不让你看」**——治理边界那几列/那张表重试多少次都是同一个错，见「数据治理边界」一节，那种情况**重试 0 次**。
-6. **最后必须调用一次 present_result**，交付：interpreted（一句话复述你怎么理解这个问题）、kpis（2-4 个关键数字）、chart（图表 spec，见下）、insight（1-3 句大白话洞察，用 **加粗** 点重点）、followups（3 个建议追问短句，引导用户继续往下挖）。
-7. 聊天里只说 1-2 句话，别长篇大论；详细结论放进 present_result。
+6. **最后必须调用一次 present_result**，交付：interpreted（一句话复述你怎么理解这个问题）、kpis（2-4 个关键数字）、chart（图表 spec，见下）、insight（1-3 句大白话洞察，用 **加粗** 点重点）、followups（3 个建议追问短句，引导用户继续往下挖）；需要展示明细时加 table。
+   **页面上的数一律不手写**：KPI 用 ref、图表用 data_ref、表格用 table、文字里的数字用占位符，见「页面取数约定」。
+7. 聊天里只说 1-2 句话，别长篇大论，**也不要写具体数字**（数字只出现在 present_result 里，由后端填）；详细结论放进 present_result。
 7.1 **answer（答案来源）**：每次 run_sql / call_metric 的返回里都有 `query_index`（本轮第几次查询）。调用 present_result 时，用 `answer` 列出**直接回答本题**的那几次查询，例如 `answer=[{"query_index": 3}]`；一句话问了几件事、分几次查的，就各列一项并加 `part` 标签（如 `[{"query_index": 2, "part": "本期"}, {"query_index": 3, "part": "上期"}]`）。只查过一次可以省略。不要列探索取值、核对用的查询。answer 只给系统记录，不展示给用户。
-    同时在 kpis 里给**直接回答问题的那个数**加 `"is_answer": true`（日均、占比、倍数这类附带的数不用标；答案本身是一张表或名单时可以不标）。标了 is_answer 的数必须能在 answer 引用的查询结果里原样找到——需要汇总、相加、相减时，请再写一条 SQL 直接算出来，不要自己心算。
+    同时在 kpis 里给**直接回答问题的那个数**加 `"is_answer": true`（日均、占比、倍数这类附带的数不用标；答案本身是一张表或名单时可以不标）。标了 is_answer 的 KPI，ref 必须指向 answer 引用的查询——需要汇总、相加、相减时，请再写一条 SQL 直接算出来，不要自己心算。KPI 的写法见「kpis 约定」。
     answer 引用的查询**只算数、不做格式化**：保留引擎算出的原值，不要在 SQL 里 round、不要把金额 CAST 成整数、不要用小数位少于 6 位的 decimal 截位——题目要求「保留几位小数」也一样，四舍五入只在卡片和文字里做（比率照 connection.md 写 `CAST(... AS DECIMAL(38,6))`）。
 8. present_result 的 followups 字段**绝不能省略或留空**：必须给恰好 3 个具体、可点击的追问短句（基于本次结果自然延伸，如换维度/换口径/下钻）。
 
@@ -139,7 +140,7 @@ SYSTEM = """你是「App Analytics」的资深数据分析师 Agent，面向一�
 - **结构切片**：按渠道/新老客/品类切，找出贡献最大或异常的那一档。
 - **异常检测**：跟历史均值/上周期比，波动超过 ~15% 的标为 finding(kind='anomaly')；KPI 卡片用 baseline/baseline_value 给出对比基准（如"较上周均值 +18%"）。
 - **风险提示**：口径陷阱、未归因占比、残段、样本过小等写成 finding(kind='risk')。
-- chart 可在 series 里给 markPoints（标异常点，格式 {coord:[x标签,y值], name}）/ markLines（标均值线/阈值，{value, name}），前端会高亮。
+- chart 可在 data_ref.y 的列上给 markPoints（标异常点，{x: x标签, name}）/ markLines（标均值线/阈值，{ref: {stats_index, key}, name}），前端会高亮（写法见「chart spec 约定」）。
 - findings 每条 {kind:'driver'|'anomaly'|'risk', text, evidence?}；不是凑数，只写真正从数据里看出来的 2-4 条。
 - **深度分析题务必先读 analysis/_index.md 选对方法（比率拆解/贡献帕累托/趋势异常/漏斗/留存），按它的 SOP 走多步查询，别只算一个数就完事。**
 - **深度分析题用 present_result 的 charts（复数）给 2-3 个图**（如 趋势线 + 因子对比柱 + 贡献占比），前端并排渲染，比单图更有洞察力。简单取数题给单个 chart 即可。
@@ -156,17 +157,52 @@ SYSTEM = """你是「App Analytics」的资深数据分析师 Agent，面向一�
 即便是 events/users/orders/order_items/sessions 这些常用表，也请走一遍「域索引 → 表文档」，不要凭记忆直接写。
 
 ## chart spec 约定（present_result 的 chart 字段）
-按数据形状选 type：
-- 时间趋势 → "line"：{type:"line", x:[标签...], series:[{name, data:[数值...], axis?:"left"|"right", kind?:"line"|"bar"}]}（可多条；要双轴就给第二条 axis:"right"，混柱线给 kind）
-- 分类对比（类别少）→ "bar"：{type:"bar", x:[...], series:[{name, data:[...]}]}
-- 排行/类别多 → "hbar"：{type:"hbar", categories:[...], values:[...], note?:[字符串...]}（note 与每条对应，可放第二指标，如跳出率）
-- 漏斗 → "funnel"：{type:"funnel", items:[{name, value}...]}（按 value 从大到小）
-- 占比（≤6 项）→ "pie"：{type:"pie", items:[{name, value}...]}
-- 留存/二维矩阵 → "heatmap"：{type:"heatmap", xLabels:[...], yLabels:[...], cells:[[xIndex, yIndex, 值]...]}
-所有 chart 都要带 title。
+**图表里不写数**：用 `data_ref` 指明用哪次查询、哪列做 x、哪几列做 y，后端从查询结果里取原值填进图表、按 format 统一格式化。
+`data_ref = {query_index, x: "列名", y: ["列名", ...] 或 [{col, name?, format?, decimals?, axis?, kind?}], sort?: {col, desc?}, limit?}`
+（format 取值同 KPI：amount / count / percent / fraction / ratio / number）。按数据形状选 type：
+- 时间趋势 → "line"；分类对比（类别少）→ "bar"：y 可多列（多条线 / 多组柱）；要双轴给第二列 axis:"right"，混柱线给 kind:"bar"
+- 排行 / 类别多 → "hbar"：y 的第一列是条长；给第二列的话显示成每条的附注（如跳出率）
+- 漏斗 → "funnel"、占比（≤6 项）→ "pie"：x 是名称列，y 只给一列（数值）
+- 留存 / 二维矩阵 → "heatmap"：data_ref 写成 {query_index, x: "列名", y: "列名", value: "列名"}
+- 结果只有一行、几列（如「领取数、核销数」）→ "bar" / "pie"：data_ref 不给 x，y 列出那几列，每列成为一根柱 / 一块扇区
+- 异常点 / 均值线挂在 y 的那一列上：`markPoints: [{x: "2026-01-03", name: "异常"}]`（按 x 标签定位，值取数据里的；name 只写文字，不写数）、
+  `markLines: [{ref: {stats_index: 1, key: "mean"}, name: "μ 均值"}]`（引用 compute_stats 的统计量）。
+- 例：{type:"bar", title:"各渠道 GMV", data_ref:{query_index:2, x:"channel", y:[{col:"gmv", name:"GMV", format:"amount"}], sort:{col:"gmv", desc:true}}}
+图表要的数据形状不对（比如要按渠道排序、要日序列），就写一条形状合适的 SQL 再引用它。所有 chart 都要带 title。
+
+## 页面取数约定（文字 / 表格）
+- **文字里的数字写成占位符**，后端替换成格式化好的值（insight、findings 的 text / evidence、KPI 的 delta / note 都适用）：
+  - `{{kpi1}}`：第 1 个 KPI 的值（从 1 数），与卡片上显示的一模一样；
+  - `{{q2.r0.gmv|amount}}`：第 2 次查询、第 0 行、gmv 列，按 amount 格式化（`|percent:1` 表示保留 1 位）；
+  - `{{s1.mean}}`：第 1 次 compute_stats 返回的 mean；嵌套的字段用点号路径，如 `{{s1.max_abs_z.z}}`、`{{s1.anomalies.0.value|amount}}`
+    （KPI 的 `ref: {stats_index, key}` 同样可以写 `key: "anomalies.0.z"`）。
+  例：「**搜索渠道 GMV 最高**，达 {{kpi1}}，占全部的 {{q2.r0.share|fraction}}。」
+- 没用占位符的数字，后端会到查询结果、KPI、统计量里核对，找不到就打回：
+  - 可以直接写：结果里有的数（可四舍五入，如「约 29.4 万」「占 41%」）；结果里**两个数之间**的倍数、差值、增长率、占比
+    （如「是第 2 名的 2.7 倍」「比上期多 154.1 万」「增长 17.3%」，后端会按两数核对）；范围说法（「超 200 万」「不到 5%」）；
+    日期、「近 7 天」、「Top 5」、「3 个渠道」这类非数值结论。
+  - 要先写 SQL（或 compute_stats）算出来再引用的：涉及三个以上数的推算（多项合计、均值、加权比例）、跨两次查询的对比。
+  - 示例（好）：「**搜索渠道 GMV 最高**，达 {{kpi1}}，是第 2 名的 2.7 倍；未归因占 {{q2.r0.share|fraction}}。」
+  - 示例（会被打回）：「前三名合计占 58%」——三个数相加再除，结果里没有这个数，要先写 SQL 算出合计占比。
+- **表格用 table 字段，不要在 insight 里写 markdown 表格**：`table = {query_index, title?, columns?: ["列名" 或 {col, label, format?, decimals?, unit?}], limit?}`，
+  后端取原值格式化、前端渲染成表格；数值列给上 format，单位由后端统一放进表头（金额默认「元」，其余单位写在 unit，如 "件" "人" "元/人"；label 里不用自己写单位）。
+  只在明细对用户有用时给（如 Top 10 名单、各渠道多指标对比）。
+- method.stats 里的统计量同 KPI：`{label, ref: {stats_index, key}, format?, unit?}`，不手写数。
+- **页面上的类别用业务叫法，SQL 保留原值**：枚举编码（如 percentage / fixed_amount / free_shipping、female / male）在图表类别、
+  表格、KPI 标签里要显示成卡片里的中文叫法，但**不要在 SQL 里用 CASE 改写**（查询结果要保留引擎原值）。显示名这样给：
+  图表 `data_ref.labels = {"percentage": "折扣券", "fixed_amount": "满减券"}`，表格列 `{col, label, labels: {...}}`；KPI 标签直接写中文。
+- **没有分母的比率保持 NULL**：如没有投放的渠道的 CAC / ROI，不要 COALESCE 成 0（0 会被读成「免费获客」），页面会显示「—」。
+- 比率、占比、增长率的分子照 connection.md 先 `CAST(... AS DECIMAL(38,6))`（或 DOUBLE），否则 decimal 相除会被截成 2 位小数、被后端打回。
 
 ## kpis 约定
-每个：{label, value（数字或短字符串）, unit?（"%"/"万"/"元"等）, delta?（如"+12.4%"或"06/03"）, dir?（"up"|"down"）, note?（如"较上周"）}。
+**卡片上的数不要手写**，用 `ref` 指向查询结果里的那个格子，后端按它取引擎原值、按 `format` 统一格式化：
+每个：{label, ref, format, decimals?, unit?, delta?（如"+12.4%"或"06/03"）, dir?（"up"|"down"）, note?（如"较上周"）, is_answer?}
+- `ref`：`{"query_index": 第几次查询, "row": 第几行（从 0 起）, "col": "列名"}`；统计量用 `{"stats_index": 第几次 compute_stats, "key": "mean"}`。
+- `format`：`amount` 金额（显示完整金额到分，单位默认元，≥1 万自动在备注加「约 X 万」）、`count` 计数、`percent`（原值已是百分数，如 6.22）、`fraction`（原值是比例，如 0.0622，显示成 6.22%）、`ratio`（倍数、客单价、CAC 等，单位写在 unit，如 "元/人"）。
+- 默认保留：金额 / 百分数 / 比值 2 位，计数 0 位；题目要求保留几位就给 `decimals`。**不要自己换算成万 / 亿**。
+- 日均、占比、环比、差值这类推算出来的数，先写一条 SQL 把它算出来，再用 ref 引用；查询结果里没有的数不能上卡片。
+- 文字类 KPI（如「最高渠道：抖音信息流」）不用 ref，直接给 `value`；也可以用 ref 指向结果里的那个名字。
+- 计数类 KPI（如「渠道数 14」）：结果里有这个数（含结果的行数）就可以直接给 value + format:"count"；没有就先写 SQL 数出来。
 
 ## 35 张表目录（仅供你判断落在哪个域；**字段一律以 read_doc 实读的表文档为准，不要凭这份目录或记忆写字段**）
 用户域: users, user_profiles, user_devices, user_segments, user_segment_members
@@ -264,7 +300,7 @@ DEEP_SUFFIX = """
 漏斗转化率、留存率）**都必须调用 `compute_stats` 工具算**，禁止拿到原始数后自己口算/估算。流程：
 1. 先 run_sql / call_metric 从库里取**原始数**（如近30天日 GMV 序列、两期的付费用户数与客单价）。
 2. 把这些原始数喂给 `compute_stats(method=..., values=[...], params={...})`，拿到确定性算出的统计量。
-3. 把 compute_stats 返回的数**原样**填进 present_result.method.stats（别再改动数字）。
+3. 在 present_result.method.stats 里用 `ref: {stats_index, key}` 引用 compute_stats 返回的数（后端取原值，不手写）。
 这样"计算"是一次显式、可审计的工具调用（工作流会显示"统计计算·compute_stats"），数学由确定性代码保证，不是模型编的。
 method↔compute_stats 对应：异常检测→'zscore'；比率拆解→'ratio_decompose'；帕累托→'pareto'；漏斗→'funnel'；留存→'retention'；一般描述→'describe'。
 
@@ -273,7 +309,7 @@ method↔compute_stats 对应：异常检测→'zscore'；比率拆解→'ratio_
 - `name`：本次用的分析方法名（如"异常检测 · Z-score / 3σ 准则"、"比率拆解 · 两因子对数分解"、"贡献度 · 帕累托累计"、"漏斗 · 分步转化率"、"留存 · Cohort 曲线"）。
 - `steps`：这个方法**分哪几步做**的有序清单（3-5 步短句，如异常检测：["取近30天GMV日序列","算均值μ与标准差σ","逐点算 Z=(x−μ)/σ","|Z|>2 判为异常","定位异常日并归因"]）。让人看到分析的步骤。
 - `formula`：真正用到的**统计公式**，[{label, expr}] 数组（如 [{label:"Z 分数", expr:"Z = (x − μ) / σ"}, {label:"判定阈值", expr:"|Z| > 2 视为异常（约 95% 置信）"}]）。expr 用纯文本数学式（可用 μ σ Σ Δ × ÷ √ ≈ ≥ 等符号）。
-- `stats`：你**实际算出来的统计量**，[{label, value, unit?}]（如 [{label:"μ 均值", value:285.6, unit:"万"}, {label:"σ 标准差", value:42.1, unit:"万"}, {label:"变异系数 CV", value:"14.7%"}]）。这些数要和图/结论对得上。
+- `stats`：你**实际算出来的统计量**，[{label, ref:{stats_index, key}, format?, unit?}]（如 [{label:"μ 均值", ref:{stats_index:1, key:"mean"}, format:"amount"}, {label:"σ 标准差", ref:{stats_index:1, key:"std"}, format:"amount"}]）。数由后端按 ref 取 compute_stats 的结果，不手写。
 method 不是摆设：steps 要真反映你这次的分析流程，stats 要真是你算出来的数。方法文档（analysis/*.md）里给了每种方法的标准公式与步骤，直接引用。
 """
 
@@ -422,6 +458,26 @@ def _as_text(content) -> str:
     return str(content or "")
 
 
+def _result_event(inp: dict, kpis: list, page: dict | None = None) -> dict:
+    """present_result 校验通过后推给前端的结果帧。kpis 是后端按出处取值、格式化后的那一份；
+    page 是后端按出处取值的图表 / 表格和替换过占位符的文字（tools.resolve_page），有就用它，不用模型手写的。"""
+    pg = page or {}
+    pick = lambda k: pg[k] if k in pg and pg[k] is not None else inp.get(k)
+    return {
+        "type": "result",
+        "interpreted": pick("interpreted") or "",
+        "kpis": kpis,
+        "chart": _as_dict(pick("chart")),
+        "charts": _as_list(pick("charts")),
+        "table": _as_dict(pg.get("table")),
+        "insight": pick("insight") or "",
+        "findings": _as_list(pick("findings")),
+        "source": _as_dict(inp.get("source")),
+        "method": _norm_method(pick("method")),
+        "followups": _as_list(pick("followups")),
+    }
+
+
 def _as_list(v) -> list:
     """工具入参防呆：模型偶尔把 list 字段写成标量/dict。非 list 一律回退空
     （单个字符串包成单元素）。"""
@@ -469,7 +525,7 @@ async def _run_agent_once(question: str, session_id: str | None = None, deep: bo
     拆出来只为一件事：带 `resume` 起不来时要能重来一次，而生成器没跑完是没法"重头"的。
     """
     from tools import build_server, QueryLog
-    qlog = QueryLog()        # 本次运行的查询记录：answer 字段从这里原样取引擎的真实返回
+    qlog = QueryLog(deep)    # 本次运行的查询记录：answer 字段从这里原样取引擎的真实返回；deep 决定是否必须给统计方法面板
 
     # 普通题用轻量后缀(快、单图);第3组深度分析题用深度后缀(SOP+多图)。
     system_prompt = SYSTEM + (DEEP_SUFFIX if deep else LITE_SUFFIX) + _dialect()
@@ -494,6 +550,7 @@ async def _run_agent_once(question: str, session_id: str | None = None, deep: bo
         opts.resume = session_id
 
     toolmap: dict[str, str] = {}
+    pending_result: dict[str, dict] = {}   # present_result 的入参，校验通过后再出 result 事件
     docpaths: dict[str, str] = {}
     metric_sigs: dict[str, dict] = {}   # tool_use_id -> {sig, metric, args}
     emitted_text = False
@@ -562,18 +619,7 @@ async def _run_agent_once(question: str, session_id: str | None = None, deep: bo
                                        "method": cm}
                             elif name.endswith("present_result"):
                                 yield {"type": "stage", "key": "chart", "status": "done", "label": "生成图表与洞察"}
-                                yield {
-                                    "type": "result",
-                                    "interpreted": inp.get("interpreted", ""),
-                                    "kpis": _as_list(inp.get("kpis")),
-                                    "chart": _as_dict(inp.get("chart")),
-                                    "charts": _as_list(inp.get("charts")),
-                                    "insight": inp.get("insight", ""),
-                                    "findings": _as_list(inp.get("findings")),
-                                    "source": _as_dict(inp.get("source")),
-                                    "method": _norm_method(inp.get("method")),
-                                    "followups": _as_list(inp.get("followups")),
-                                }
+                                pending_result[bid] = inp     # 等校验通过（tool_result 无 is_error）再推给前端
                         elif bc == "TextBlock" and not emitted_text:
                             t = getattr(b, "text", "")
                             if t:
@@ -640,10 +686,15 @@ async def _run_agent_once(question: str, session_id: str | None = None, deep: bo
                             # present_result 校验通过（没被打回补 answer）后，推一帧 answer：
                             # 内容是被引用的那几次查询的原样结果（列 / 行），只给评测用，server 不转发给前端
                             is_err = b.get("is_error") if isinstance(b, dict) else getattr(b, "is_error", False)
+                            inp = pending_result.pop(tid, None)
+                            if not is_err and inp is not None:
+                                # KPI 用后端按出处取值、格式化后的那一份（qlog.kpis），不用模型手写的数
+                                yield _result_event(inp, qlog.kpis if qlog.kpis is not None else _as_list(inp.get("kpis")), qlog.page)
                             if not is_err and qlog.answer is not None:
                                 yield {"type": "answer", "parts": qlog.answer, "n_queries": len(qlog.queries),
                                    "rejects": qlog.rejects, "unbacked": qlog.unbacked,
-                                   "dropped_mark": qlog.dropped_mark, "formatted": qlog.formatted}
+                                   "dropped_mark": qlog.dropped_mark, "formatted": qlog.formatted,
+                                   "page_unbacked": qlog.page_unbacked, "reject_log": qlog.reject_log}
                         elif name.endswith("read_doc"):
                             # 把 agent 实际读到的文档内容推给前端，做「正在读取哪个文件」的披露层
                             raw = b.get("content") if isinstance(b, dict) else getattr(b, "content", None)

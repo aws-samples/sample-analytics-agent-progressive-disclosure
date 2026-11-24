@@ -577,7 +577,9 @@ async def run_case(case: dict, defaults: dict, dry_run: bool) -> dict:
                agent_docs=evidence["docs"],
                n_sql=evidence["n_sql"], agent_sqls=evidence["sqls"],
                agent_errors=evidence["errors"],
-               has_result=bool(evidence["result"]))
+               has_result=bool(evidence["result"]),
+               rejects=(evidence.get("answer") or {}).get("rejects"),
+               reject_log=(evidence.get("answer") or {}).get("reject_log") or [])
     if evidence["errors"] and not evidence["rowsets"] and not evidence["result"]:
         rec.update(status="agent_error", detail="; ".join(evidence["errors"])[:300])
         return rec

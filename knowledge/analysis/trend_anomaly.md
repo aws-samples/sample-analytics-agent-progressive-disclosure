@@ -32,7 +32,7 @@
 3. **逐点算 Z 分数**：Zᵢ = (xᵢ − μ) / σ。
 4. **按阈值判异常**：|Z| > 2 标为异常点；记录是哪天、偏离几个 σ、偏离百分比。
 5. **定位 + 归因**：对异常日结合业务（大促/节假日/投放/数据缺口）给可能原因。
-   - chart 的 series 里给 `markPoints`（异常点坐标 {coord:[x,y],name}）和 `markLines`（μ 均值线、μ±2σ 阈值带），前端高亮。
+   - chart 的 `data_ref.y` 那一列上给 `markPoints`（异常点：`{x: 异常日期, name: "异常"}`，值由后端从数据里取）和 `markLines`（μ 均值线、μ±2σ 阈值带：`{ref: {stats_index, key: "mean" / "upper" / "lower"}, name}`，引用 compute_stats 的结果），前端高亮。
    - 异常写成 `findings`：`{kind:'anomaly', text:'01-18 DAU=xxx，Z=-2.4（低于均值2.4个σ），环比-28%', evidence:'μ=..., σ=...'}`。
 6. **下判断**：趋势升/降、拐点在哪、异常是否值得追，而不是罗列每天的数。
 

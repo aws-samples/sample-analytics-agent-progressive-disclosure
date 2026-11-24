@@ -364,6 +364,14 @@ body{
 .kpi .label{font-size:12px;color:var(--muted);font-weight:500;margin-bottom:8px}
 .kpi .val{font-size:30px;font-weight:700;letter-spacing:-.02em;line-height:1;font-variant-numeric:tabular-nums}
 .kpi .val .unit{font-size:15px;color:var(--ink-soft);font-weight:600;margin-left:2px}
+/* 数值和单位不拆行；数字长（≥ 12 个字符，如 2,502,943.69）时缩小字号，四列并排也放得下 */
+.kpi .val.num{white-space:nowrap}
+.kpi .val.num.long{font-size:24px}
+.kpi .val.num.xlong{font-size:20px}
+/* 文字类 KPI（如商品名）：允许换行，按长度缩小字号，不截断 */
+.kpi .val.txt{white-space:normal;line-height:1.15;word-break:break-all}
+.kpi .val.txt.long{font-size:22px}
+.kpi .val.txt.xlong{font-size:18px}
 .kpi .delta{font-size:12px;font-weight:600;margin-top:9px;display:inline-flex;align-items:center;gap:4px;color:var(--ink-soft)}
 .kpi .delta.up{color:var(--good)}.kpi .delta.down{color:var(--bad)}
 .kpi .delta .lab{color:var(--muted);font-weight:500}
@@ -447,6 +455,13 @@ pre.sql .kw{color:var(--coral);font-weight:500}
 pre.sql .fn{color:var(--slate)}
 pre.sql .st{color:var(--teal)}
 .tablewrap{overflow-x:auto;max-height:340px;overflow-y:auto}
+.atable{padding:4px 20px 14px}
+.atable .at-title{font-size:12.5px;font-weight:700;color:var(--ink);margin:6px 0 8px}
+.atable table{width:100%;border-collapse:collapse;font-size:12.5px}
+.atable th{text-align:left;font-weight:700;color:var(--ink-soft);border-bottom:1px solid var(--line-soft);padding:6px 8px;white-space:nowrap}
+.atable td{border-bottom:1px solid var(--line-soft);padding:6px 8px;color:var(--ink)}
+.atable .num{text-align:right;font-variant-numeric:tabular-nums}
+.atable .at-more{font-size:11.5px;color:var(--muted,#9A9488);margin-top:6px}
 table{border-collapse:collapse;width:100%;font-size:13px}
 th,td{padding:9px 16px;text-align:left;border-bottom:1px solid var(--line-soft);white-space:nowrap}
 th{font-size:11.5px;color:var(--muted);font-weight:600;background:var(--surface-2);position:sticky;top:0}
@@ -623,6 +638,26 @@ td.num{text-align:right;font-weight:500;color:var(--ink)}
 const $=s=>document.querySelector(s);
 const API=location.protocol.startsWith('http') ? location.origin : 'http://127.0.0.1:8000';
 const fmt=n=>typeof n==='number'?n.toLocaleString('en-US'):n;
+// 与后端 tools.format_kpi_value 同一套规则（half-up）：amount/percent/fraction/ratio/number 默认 2 位，count 0 位；
+// fraction 乘 100 显示成 %；number 是整数时 0 位。图表的 tooltip / 数据标签用它，和卡片、文字、表格显示一致。
+const _DEF={amount:2,count:0,percent:2,fraction:2,ratio:2,number:2};
+function fmtVal(v,f){
+  if(v==null||v==='')return '—';if(typeof v!=='number'||!isFinite(v))return String(v);
+  f=f||{};const fm=_DEF.hasOwnProperty(f.format)?f.format:'number';
+  let x=v,n=(Number.isInteger(f.decimals)&&f.decimals>=0&&f.decimals<=6)?f.decimals:_DEF[fm];
+  if(f.decimals==null&&((fm==='count'&&!Number.isInteger(x))))n=2;
+  if(f.decimals==null&&fm==='number'&&Number.isInteger(x))n=0;
+  if(fm==='fraction')x=x*100;
+  const k=Math.pow(10,n), r=Math.sign(x)*Math.round(+(Math.abs(x)*k).toPrecision(15))/k;   // toPrecision 去掉二进制误差，再 half-up
+  const s=r.toLocaleString('en-US',{minimumFractionDigits:n,maximumFractionDigits:n});
+  return (fm==='percent'||fm==='fraction')?s+'%':(f.unit&&fm!=='amount'?s+' '+f.unit:s);
+}
+// 坐标轴刻度只是标尺：金额 / 计数用万、亿缩写，百分比带 %（具体数值看 tooltip 和标签）
+function fmtAxis(v,f){
+  f=f||{};if(f.format==='fraction')return (+(v*100).toFixed(2))+'%';if(f.format==='percent')return (+v.toFixed(2))+'%';
+  const a=Math.abs(v);if(a>=1e8)return (+(v/1e8).toFixed(2))+'亿';if(a>=1e4)return (+(v/1e4).toFixed(1))+'万';
+  return (+v.toFixed(2)).toLocaleString('en-US');
+}
 let MODE='baked';        // 'live' | 'baked'（'baked' 是 LEGACY 兜底，见下方 BAKED 块）
 let busy=false, sessionId=null;
 const log=$('#log'), canvas=$('#canvas');
@@ -703,7 +738,7 @@ const I18N={
   ft_metric:'ƒ Metric calls',ft_stats:'🧮 Stat computations',
   doc_missing:'Document not found',
   step_think:'Understanding the question and planning which docs to read',
-  lbl_doc:'Reading data dictionary',lbl_run:'Running query',lbl_metric:'Calling governance metric function',lbl_chart:'Generating charts and insights',
+  lbl_doc:'Reading data dictionary',lbl_run:'Running query',lbl_metric:'Calling governance metric function',lbl_chart:'Generating charts and insights',at_more:'Showing first {n} of {total} rows',
   step_readdoc:'Reading doc',metric_label:'Calling governance metric',running:'Running…',
   stats_label:'Stat computation',computing:'Computing…',notfound:'Not found',
   metric_notcov:'Metric not covered — switching to hand-written SQL',stats_done:'Computed',stats_detail_pre:'✓ Deterministic computation · ',
@@ -784,7 +819,7 @@ const I18N={
   ft_metric:'ƒ 指标调用',ft_stats:'🧮 统计计算',
   doc_missing:'文档不存在',
   step_think:'理解问题、规划要读哪些文档',
-  lbl_doc:'读取数据字典',lbl_run:'执行查询',lbl_metric:'调用治理指标 function',lbl_chart:'生成图表与洞察',
+  lbl_doc:'读取数据字典',lbl_run:'执行查询',lbl_metric:'调用治理指标 function',lbl_chart:'生成图表与洞察',at_more:'显示前 {n} 行，共 {total} 行',
   step_readdoc:'读取文档',metric_label:'调用治理指标',running:'执行中…',
   stats_label:'统计计算',computing:'计算中…',notfound:'未找到',
   metric_notcov:'指标未覆盖，改手写 SQL',stats_done:'已计算',stats_detail_pre:'✓ 确定性计算 · ',
@@ -1148,6 +1183,10 @@ function renderChart(el, spec){
           if(lab.length>10) lab=lab.slice(0,10);        // 避免长文本溢出
           return {coord, value:lab};
         }).filter(Boolean);
+        // 相邻（x 相隔 ≤ 3 格）的异常点标签交替抬高，避免两个「异常」叠在一起
+        let prevIx=-99, lift=false;
+        pts.forEach(pt=>{const ix=xs.indexOf(pt.coord[0]);lift=(ix>=0&&ix-prevIx<=3)?!lift:false;prevIx=ix;
+          if(lift)pt.label={offset:[0,-22]};});
         if(pts.length) mk.markPoint={
           symbol:'circle', symbolSize:11,
           itemStyle:{color:'#fff',borderColor:'#E0573B',borderWidth:3,
@@ -1170,7 +1209,7 @@ function renderChart(el, spec){
             type:isMean?'solid':'dashed',width:isMean?1.5:1}};
         }).filter(Boolean);
         if(lns.length) mk.markLine={symbol:'none',
-          label:{position:'start',formatter:o=>o.name||'',color:PAL.muted,fontSize:10,
+          label:{position:'insideStartTop',formatter:o=>o.name||'',color:PAL.muted,fontSize:10,   // 标在线的上方、图内左端，不压住 y 轴刻度
             backgroundColor:hexA('#FBFAF5',.85),padding:[1,3],borderRadius:3},
           data:lns};
       }
@@ -1188,27 +1227,36 @@ function renderChart(el, spec){
     // 让 y 轴上界比数据峰值再高一点,给异常点标签腾出净空
     const yBase={type:'value',...axisStyle};
     const yTop=hasMarks?{...yBase,scale:false}:yBase;
-    opt={grid,tooltip:{trigger:'axis'},legend:legend((spec.series||[]).length>1),
+    // 每条 series 的 fmt 来自后端（data_ref 的 format）；tooltip 按它显示，轴刻度按左右轴各自第一条 series 的 fmt
+    const sf=(spec.series||[]).map(s=>s.fmt||null);
+    const fL=sf[(spec.series||[]).findIndex(s=>s.axis!=='right')]||null, fR=sf[(spec.series||[]).findIndex(s=>s.axis==='right')]||null;
+    const yA=(f,b)=>f?{...b,axisLabel:{...(b.axisLabel||axisStyle.axisLabel||{}),formatter:v=>fmtAxis(v,f)}}:b;
+    opt={grid,tooltip:{trigger:'axis',formatter:ps=>{const a=Array.isArray(ps)?ps:[ps];
+        return esc(a[0]?a[0].axisValueLabel:'')+a.map(q=>'<br/>'+q.marker+esc(q.seriesName)+'：'+fmtVal(q.value,sf[q.seriesIndex])).join('');}},
+      legend:legend((spec.series||[]).length>1),
       xAxis:{type:'category',data:spec.x||[],...axisStyle,boundaryGap:hasBar},
-      yAxis:hasRight?[yTop,{type:'value',...axisStyle,splitLine:{show:false}}]:yTop,
+      yAxis:hasRight?[yA(fL,yTop),yA(fR,{type:'value',...axisStyle,splitLine:{show:false}})]:yA(fL,yTop),
       series};
   } else if(t==='hbar'){
     const cats=spec.categories||[], vals=spec.values||[], note=spec.note||[];
-    opt={grid:{left:8,right:74,top:14,bottom:8,containLabel:true},
-      tooltip:{trigger:'axis',axisPointer:{type:'shadow'},formatter:p=>{const i=p[0].dataIndex;return cats[i]+'<br/>'+fmt(p[0].value)+(note[i]?'<br/>'+note[i]:'');}},
-      xAxis:{type:'value',...axisStyle},
+    const hf=spec.fmt||null, hv=v=>hf?fmtVal(v,hf):fmt(v);
+    opt={grid:{left:8,right:(note.length?140:74),top:14,bottom:8,containLabel:true},
+      tooltip:{trigger:'axis',axisPointer:{type:'shadow'},formatter:p=>{const i=p[0].dataIndex;return esc(cats[i])+'<br/>'+hv(p[0].value)+(note[i]?'<br/>'+esc(note[i]):'');}},
+      xAxis:{type:'value',...axisStyle,...(hf?{axisLabel:{...(axisStyle.axisLabel||{}),formatter:v=>fmtAxis(v,hf)}}:{})},
       yAxis:{type:'category',data:cats,inverse:true,...axisStyle,axisLabel:{...axisStyle.axisLabel,color:'#544F45',fontWeight:600}},
       series:[{type:'bar',barWidth:'58%',data:vals.map((v,i)=>({value:v,itemStyle:{color:SER[i%SER.length],borderRadius:[0,6,6,0]}})),
-        label:{show:true,position:'right',formatter:p=>fmt(p.value)+(note[p.dataIndex]?'  ·  '+note[p.dataIndex]:''),color:PAL.muted,fontSize:11.5}}]};
+        label:{show:true,position:'right',formatter:p=>hv(p.value)+(note[p.dataIndex]?'  ·  '+note[p.dataIndex]:''),color:PAL.muted,fontSize:11.5}}]};
   } else if(t==='funnel'){
     const items=(spec.items||[]).slice().sort((a,b)=>b.value-a.value);
-    opt={tooltip:{trigger:'item',formatter:'{b}: {c}'},
+    const ff=spec.fmt||{};
+    opt={tooltip:{trigger:'item',formatter:p=>esc(p.name)+'：'+fmtVal(p.value,ff)},
       series:[{type:'funnel',top:18,bottom:18,left:'8%',right:'8%',minSize:'28%',gap:3,
-        label:{position:'inside',color:'#fff',fontWeight:600,fontFamily:'Hanken Grotesk',fontSize:14,formatter:'{b}  {c}'},
+        label:{position:'inside',color:'#fff',fontWeight:600,fontFamily:'Hanken Grotesk',fontSize:14,formatter:p=>p.name+'  '+fmtVal(p.value,ff)},
         itemStyle:{borderWidth:0},
         data:items.map((it,i)=>({value:it.value,name:it.name,itemStyle:{color:SER[i%SER.length]}}))}]};
   } else if(t==='pie'){
-    opt={tooltip:{trigger:'item',formatter:'{b}: {c} ({d}%)'},legend:legend(true),
+    const pf=spec.fmt||{};
+    opt={tooltip:{trigger:'item',formatter:p=>esc(p.name)+'：'+fmtVal(p.value,pf)+'（'+fmtVal(p.percent,{format:'percent'})+'）'},legend:legend(true),
       series:[{type:'pie',radius:['42%','70%'],center:['50%','54%'],avoidLabelOverlap:true,
         itemStyle:{borderColor:'#FBFAF5',borderWidth:3,borderRadius:5},
         label:{color:'#544F45',fontFamily:'Hanken Grotesk'},
@@ -1217,12 +1265,12 @@ function renderChart(el, spec){
     const xs=spec.xLabels||[], ys=spec.yLabels||[], cells=spec.cells||[];
     const vals=cells.map(c=>c[2]); const mn=Math.min(...vals,0), mx=Math.max(...vals,1);
     opt={grid:{left:8,right:18,top:14,bottom:60,containLabel:true},
-      tooltip:{position:'top',formatter:p=>ys[p.data[1]]+' · '+xs[p.data[0]]+'：'+p.data[2]},
+      tooltip:{position:'top',formatter:p=>esc(ys[p.data[1]])+' · '+esc(xs[p.data[0]])+'：'+fmtVal(p.data[2],spec.fmt||{})},
       xAxis:{type:'category',data:xs,splitArea:{show:true},axisLine:{lineStyle:{color:PAL.line}},axisTick:{show:false},axisLabel:{color:PAL.muted}},
       yAxis:{type:'category',data:ys,inverse:true,splitArea:{show:true},axisLine:{lineStyle:{color:PAL.line}},axisTick:{show:false},axisLabel:{color:PAL.muted}},
       visualMap:{min:mn,max:mx,calculable:true,orient:'horizontal',left:'center',bottom:8,
         inRange:{color:['#F4EAE0','#EE9F6F','#E0573B','#184E43']},textStyle:{color:PAL.muted}},
-      series:[{type:'heatmap',data:cells,label:{show:true,color:'#fff',fontSize:11,fontWeight:600},
+      series:[{type:'heatmap',data:cells,label:{show:true,color:'#fff',fontSize:11,fontWeight:600,formatter:p=>fmtVal(p.data[2],spec.fmt||{})},
         itemStyle:{borderColor:'#FBFAF5',borderWidth:3,borderRadius:4},emphasis:{itemStyle:{shadowBlur:8,shadowColor:'rgba(0,0,0,.2)'}}}]};
   } else { return null; }
   c.setOption(opt);
@@ -1242,13 +1290,15 @@ function hlSql(s){
 // 连引号一起转:这些文本也会落进 title="…" 这类属性上下文,只转 &< 挡不住 " 逃逸。
 const esc=s=>(s==null?'':String(s)).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 // 先全量转义,再把 **…** 还原成 <b>:$1 已转义,无法造出新标签或属性。
-const mdBold=s=>esc(s).replace(/\*\*(.+?)\*\*/g,'<b>$1</b>');
+const mdBold=s=>esc(s).replace(/\*\*(.+?)\*\*/g,'<b>$1</b>').replace(/\\n|\n/g,'<br>');
 const wait=ms=>new Promise(r=>setTimeout(r,ms));
 const stripTags=h=>{const d=document.createElement('div');d.innerHTML=h;return d.textContent;};
 async function typeIn(el,text){el.textContent='';for(let i=0;i<text.length;i++){el.textContent+=text[i];if(i%3===0)await wait(8);}}
-function countUp(el){const target=parseFloat(el.dataset.count);if(isNaN(target))return;const dec=(target%1!==0)?1:0;const dur=850,t0=performance.now();
-  (function step(t){const p=Math.min((t-t0)/dur,1),e=1-Math.pow(1-p,3),v=target*e;
-    el.firstChild.textContent=dec?v.toFixed(1):Math.round(v).toLocaleString('en-US');
+function countUp(el){const target=parseFloat(el.dataset.count);if(isNaN(target))return;
+  // 小数位按原值实际位数（最多 2 位），带千分位；以前一律截成 1 位、且小数不加千分位
+  const dec=(target%1!==0)?Math.min(2,(String(target).split('.')[1]||'').length):0;const dur=850,t0=performance.now();
+  (function step(t){const p=Math.min((t-t0)/dur,1),e=1-Math.pow(1-p,3),v=p<1?target*e:target;
+    el.firstChild.textContent=v.toLocaleString('en-US',{minimumFractionDigits:dec,maximumFractionDigits:dec});
     if(p<1)requestAnimationFrame(step);})(t0);}
 
 /* ---------------- rail turn ---------------- */
@@ -1434,7 +1484,10 @@ function renderResult(p){
   currentCharts=[];
   const ACC=['var(--brand)','var(--coral)','var(--teal)','var(--gold)'];
   const kpiHTML=(Array.isArray(p.kpis)?p.kpis:[]).map((k,i)=>{
-    const isNum=typeof k.value==='number';
+    // display：后端按出处取引擎原值、按 format 格式化好的文本（千分位、小数位已定），前端原样显示、不再取整。
+    // 没有 display 的（离线演示数据）才走数字动画。
+    const hasDisp=typeof k.display==='string'&&k.display!=='';
+    const isNum=!hasDisp&&typeof k.value==='number';
     // dir 只取白名单值:它落在 class 属性里,不能让模型输出直接写进属性上下文。
     const dir=(k.dir==='up'||k.dir==='down')?k.dir:'';
     const delta=(k.delta||k.note)?`<div class="delta ${dir}">${dir?(dir==='up'?'▲':'▼'):''} ${esc(k.delta)}${k.note?` <span class="lab">${esc(k.note)}</span>`:''}</div>`:'';
@@ -1442,7 +1495,9 @@ function renderResult(p){
     const base=(k.baseline||k.baseline_value!=null)?`<div class="kpi-base">${esc(k.baseline||t('kpi_baseline'))}${k.baseline_value!=null?`：${typeof k.baseline_value==='number'?fmt(k.baseline_value):esc(String(k.baseline_value))}`:''}</div>`:'';
     return `<div class="kpi" style="--accent:${ACC[i%ACC.length]}">
       <div class="label">${esc(k.label)}</div>
-      <div class="val" ${isNum?`data-count="${Number(k.value)}"`:''}>${isNum?'0':esc(k.value==null?'':String(k.value))}${k.unit?`<span class="unit">${esc(String(k.unit))}</span>`:''}</div>
+      <div class="val${(()=>{const txt=String(hasDisp?k.display:(k.value??''));const L=txt.length;
+        const isTxt=!/^[-+]?[\d,.]+$/.test(txt.trim());       // 文字类（商品名、渠道名）与数值分开处理
+        return isTxt?(' txt'+(L>=10?' xlong':(L>=6?' long':''))):(' num'+(L>=15?' xlong':(L>=12?' long':'')));})()}" ${isNum?`data-count="${Number(k.value)}"`:''}>${hasDisp?esc(k.display):(isNum?'0':esc(k.value==null?'':String(k.value)))}${k.unit?`<span class="unit">${esc(String(k.unit))}</span>`:''}</div>
       ${delta}${base}</div>`;}).join('');
   // findings 洞察面板(方向3):驱动/异常/风险三类要点
   const FK={driver:{ic:'↑',cls:'f-driver',lab:t('find_driver')},anomaly:{ic:'⚠',cls:'f-anomaly',lab:t('find_anomaly')},risk:{ic:'▽',cls:'f-risk',lab:t('find_risk')}};
@@ -1459,7 +1514,7 @@ function renderResult(p){
   if(mtFormula.length||mtStats.length){
     const stepsHTML=_arr(mt.steps).map(x=>`<li>${esc(x)}</li>`).join('');
     const formHTML=mtFormula.map(f=>`<div class="m-frow"><div class="m-flab">${esc(f.label)}</div><div class="m-fexpr">${esc(f.expr)}</div></div>`).join('');
-    const statsHTML=mtStats.map(st=>{const v=(typeof st.value==='number')?fmt(st.value):esc(st.value);
+    const statsHTML=mtStats.map(st=>{const v=(typeof st.display==='string'&&st.display!=='')?esc(st.display):((typeof st.value==='number')?fmt(st.value):esc(st.value));
       return `<div class="m-stat"><div class="m-sv">${v}${st.unit?`<span class="m-su">${esc(st.unit)}</span>`:''}</div><div class="m-sl">${esc(st.label)}</div></div>`;}).join('');
     const toolTag=p.statsToolUsed?`<span class="m-tool" title="${t('stats_tool_title')}">${t('stats_tool_tag')}</span>`:'';
     methodHTML=`<div class="method reveal">
@@ -1502,6 +1557,15 @@ function renderResult(p){
   const chartList=(Array.isArray(p.charts)&&p.charts.length)?p.charts:(p.chart&&p.chart.type?[p.chart]:[]);
   const title=(chartList[0]&&chartList[0].title)||t('result_title');
   const chartsHTML=chartList.map((c,i)=>`<div class="chart" id="chartEl${i}"></div>`).join('');
+  // 明细表（present_result.table）：后端按出处取原值、格式化好的文本，前端原样显示
+  const at=p.atable;let atHTML='';
+  if(at&&Array.isArray(at.columns)&&Array.isArray(at.rows)&&at.rows.length){
+    const num=at.num||[];
+    atHTML=`<div class="atable">${at.title?`<div class="at-title">${esc(at.title)}</div>`:''}<div class="tablewrap"><table>
+      <thead><tr>${at.columns.map((c,i)=>`<th class="${num[i]?'num':''}">${esc(c)}</th>`).join('')}</tr></thead>
+      <tbody>${at.rows.map(r=>`<tr>${r.map((c,i)=>`<td class="${num[i]?'num':''}">${esc(c)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>
+      ${at.total>at.rows.length?`<div class="at-more">${esc(t('at_more').replace('{n}',at.rows.length).replace('{total}',at.total))}</div>`:''}</div>`;
+  }
 
   canvas.innerHTML=`
     <div class="interp reveal"><span class="tag">${t('interp_tag')}</span><span class="txt">${esc(p.interpreted)}</span></div>
@@ -1510,7 +1574,8 @@ function renderResult(p){
     <div class="card reveal">
       <div class="card-head"><h3>${esc(chartList.length>1?t('multi_title'):title)}</h3>
         <div class="toggle"><button class="on">${t('toggle_chart')}</button><button>${t('toggle_data')}</button></div></div>
-      ${chartsHTML||'<div class="chart" id="chartEl0"></div>'}
+      ${chartsHTML||(atHTML?'':'<div class="chart" id="chartEl0"></div>')}
+      ${atHTML}
       ${p.insight?`<div class="insight"><span class="ic">✦</span><p>${mdBold(p.insight)}</p></div>`:''}
       ${findHTML?`<div class="findings reveal">${findHTML}</div>`:''}
       ${fncallHTML}
@@ -1594,7 +1659,8 @@ async function askLive(question, deep){
             freezeStep(T,o,{dbMs:ev.exec_ms});}     // SQL 步定格在【真实 DB 执行毫秒】，不再吞掉后续推理
           openReason(T,t('reason_gen'));   // DB 之后的 LLM 时间单列(这才是真正耗时大头)
         }
-        else if(ev.type==='text'){textBuf+=ev.delta;T.summary.style.display='';T.summary.innerHTML=mdBold(textBuf);log.scrollTop=log.scrollHeight;}
+        // 结果出来后左侧气泡锁定为后端核对过的 insight：模型在 present_result 之后还会接着说话，那段原话里的数没有核对过
+        else if(ev.type==='text'){textBuf+=ev.delta;if(!rendered){T.summary.style.display='';T.summary.innerHTML=mdBold(textBuf);}log.scrollTop=log.scrollHeight;}
         else if(ev.type==='metric'){          // 治理指标 function call 返回的权威数 + 来源
           payload.columns=ev.columns||payload.columns;payload.rows=ev.rows||payload.rows;
           payload.source={metric:ev.metric,label:ev.label,owner:ev.owner,version:ev.version,'口径声明':ev['口径声明']};
@@ -1627,9 +1693,11 @@ async function askLive(question, deep){
           payload.charts=ev.charts||[];
           payload.insight=ev.insight;payload.followups=ev.followups||[];
           payload.findings=ev.findings||[];
+          payload.atable=(ev.table&&ev.table.columns)?ev.table:null;
           payload.method=ev.method||{};
           if(ev.source&&(ev.source.metric||ev.source.owner))payload.source=ev.source;
           renderResult(payload);rendered=true;
+          if(payload.insight){T.summary.style.display='';T.summary.innerHTML=mdBold(payload.insight);}
         }
         else if(ev.type==='error'){addStep(T,'think',t('err_step'));T.summary.style.display='';T.summary.classList.remove('typing');T.summary.innerHTML=`<span style="color:var(--bad)">${esc(ev.message||t('err_unknown'))}</span>`;}
       }
@@ -1637,7 +1705,7 @@ async function askLive(question, deep){
     if(!rendered && payload.sql){renderResult(payload);}
     finishTrace(T);
     T.summary.classList.remove('typing');
-    if(!textBuf && payload.insight){T.summary.style.display='';T.summary.innerHTML=mdBold(payload.insight);}
+    if((rendered||!textBuf) && payload.insight){T.summary.style.display='';T.summary.innerHTML=mdBold(payload.insight);}
     const fu=(payload.followups&&payload.followups.length)?payload.followups:L_followups();
     setChips(T.chips,fu);
     if(payload.sql||(payload.chart&&payload.chart.type)) attachResult(T,payload);

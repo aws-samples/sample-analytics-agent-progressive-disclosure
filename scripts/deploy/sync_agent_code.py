@@ -105,6 +105,8 @@ AGENT_NODES = [
     # 事件流解析辅助：两侧吐给前端的事件形状必须一样
     "_cls", "_metric_sig", "_fmt_num", "_stats_summary", "_as_text",
     "_as_list", "_as_dict", "_norm_method", "_make_gate",
+    # 结果帧的组装（present_result 校验通过后才推；KPI 用后端按出处取值的那一份）
+    "_result_event",
 ]
 
 # `ClaudeAgentOptions` 的 kwargs **不在**上面那份节点清单里，也进不去：它写在
