@@ -12,7 +12,7 @@ CREATE TABLE campaigns (
     end_date TIMESTAMP,
     target_segment_ids INT[],  -- 目标用户分群
     budget DECIMAL(12,2),
-    status VARCHAR(20) DEFAULT 'draft',  -- 'draft', 'scheduled', 'active', 'ended'
+    status VARCHAR(20) DEFAULT 'draft',  -- 'draft', 'scheduled', 'active', 'paused', 'completed', 'cancelled'（结束态叫 completed，不叫 ended）
     owner VARCHAR(50),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -23,7 +23,7 @@ CREATE TABLE push_notifications (
     push_id BIGSERIAL PRIMARY KEY,
     user_id BIGINT REFERENCES users(user_id),
     campaign_id INT REFERENCES campaigns(campaign_id),
-    push_type VARCHAR(50),  -- 'marketing', 'transactional', 'system'
+    push_type VARCHAR(50),  -- 按业务场景分：'reminder', 'social', 'promotion', 'order', 'system'（不是按 marketing/transactional 这种投递属性分）
     title VARCHAR(200),
     content TEXT,
     deep_link VARCHAR(500),
@@ -67,17 +67,17 @@ CREATE TABLE user_coupons (
     used_at TIMESTAMP,
     order_id BIGINT,  -- 使用时关联的订单
     status VARCHAR(20) DEFAULT 'unused',  -- 'unused', 'used', 'expired'
-    source VARCHAR(50)  -- 'campaign', 'share', 'purchase', 'new_user'
+    source VARCHAR(50)  -- 'claim', 'gift', 'reward', 'system'（旧注释的 campaign/share/purchase/new_user 一个都不存在）
 );
 
 -- Banner/资源位配置
 CREATE TABLE banners (
     banner_id SERIAL PRIMARY KEY,
-    position VARCHAR(50) NOT NULL,  -- 'home_top', 'home_middle', 'category_top'
+    position VARCHAR(50) NOT NULL,  -- 'home_top', 'home_middle', 'category_top', 'search_top', 'detail_bottom', 'cart_bottom', 'splash'
     banner_name VARCHAR(200),
     image_url VARCHAR(500),
     target_url VARCHAR(500),
-    target_type VARCHAR(50),  -- 'product', 'category', 'campaign', 'external'
+    target_type VARCHAR(50),  -- 'product', 'category', 'campaign', 'external', 'content'
     target_id VARCHAR(100),
     sort_order INT DEFAULT 0,
     start_date TIMESTAMP,

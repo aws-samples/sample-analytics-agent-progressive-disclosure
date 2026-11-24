@@ -149,6 +149,58 @@ def test_text():
     check("从池取值合法", set(np.unique(got)).issubset({"x", "y", "z"}))
 
 
+def test_unique_text():
+    """唯一字符串列（combine_unique / unique_digits）。
+
+    这两个函数的**全部价值**是"组合空间比行数小的时候仍然唯一"，所以这里刻意把
+    池子选到远小于 n：4×4×4 = 64 种组合放 5,000 行。够不着这个条件的用例（池子
+    比行数大）验不出任何东西——旧的纯 combine 在那种规模上本来也基本不撞。
+    """
+    print("唯一字符串（combine_unique / unique_digits）")
+    n = 5_000
+    pools = [np.array(list("甲乙丙丁"), dtype=object),
+             np.array(list("鱼虾蟹贝"), dtype=object),
+             np.array(["", "88", "酱", "_x"], dtype=object)]
+    plain = F.combine(F.rng_for(42, "users", "username"), n, *pools)
+    check("对照：纯 combine 在 64 种组合上大量重复", len(np.unique(plain)) < n / 50,
+          f"{len(np.unique(plain))} 个不同值 / {n} 行")
+
+    out = F.combine_unique(F.rng_for(42, "users", "username"), n, *pools)
+    check("combine_unique 全列唯一", len(np.unique(out)) == n,
+          f"{len(np.unique(out))} / {n}")
+    check("同 (seed,表,列) → 逐元素相同",
+          bool((out == F.combine_unique(F.rng_for(42, "users", "username"),
+                                        n, *pools)).all()))
+    # 「先到先得」：每种组合恰好有一行拿到干净的名字（= 该组合本身）
+    combos = set(np.unique(plain).tolist())
+    clean = [x for x in out.tolist() if x in combos]
+    check("每种组合恰有一行不带后缀（先到先得）",
+          len(clean) == len(combos) == len(set(clean)),
+          f"干净名 {len(clean)} 行 / 组合 {len(combos)} 种")
+
+    # 空间不够时必须抛错，而不是悄悄产出重复列
+    try:
+        F.combine_unique(F.rng_for(42, "t", "c"), 20_000,
+                         np.array(["a", "b"], dtype=object))
+        check("组内序次超出后缀空间应报错", False, "没有抛异常")
+    except ValueError as e:
+        check("组内序次超出后缀空间时报错", "唯一性无法保证" in str(e), str(e)[:60])
+
+    ph = F.unique_digits(F.rng_for(42, "users", "phone"), 200_000,
+                         np.array(["138", "139", "150"], dtype=object), 6)
+    check("unique_digits 全列唯一", len(np.unique(ph)) == 200_000,
+          f"{len(np.unique(ph))} / 200000")
+    check("unique_digits 定长且前缀合法",
+          bool((np.char.str_len(ph) == 9).all())
+          and set(x[:3] for x in ph.tolist()) <= {"138", "139", "150"})
+    try:
+        F.unique_digits(F.rng_for(42, "t", "c"), 1_001,
+                        np.array(["1"], dtype=object), 3)
+        check("行数超过空间应报错", False, "没有抛异常")
+    except ValueError as e:
+        check("行数超过空间时报错", "放不进" in str(e), str(e)[:60])
+
+
 def test_by_type_guard():
     print("兜底护栏")
     try:
@@ -160,7 +212,8 @@ def test_by_type_guard():
 
 if __name__ == "__main__":
     for fn in (test_determinism, test_pareto, test_children, test_unique_pairs,
-               test_ts_window, test_amounts, test_text, test_by_type_guard):
+               test_ts_window, test_amounts, test_text, test_unique_text,
+               test_by_type_guard):
         fn()
     print()
     if FAILED:

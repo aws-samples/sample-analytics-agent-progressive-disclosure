@@ -1,29 +1,57 @@
 {
-  "defaults": {"tolerance_pct": 0.5, "toplist_k": 5, "toplist_min_hit": 0.6},
+  "defaults": {
+    "tolerance_pct": 0.5,
+    "toplist_k": 5,
+    "toplist_min_hit": 0.6
+  },
   "cases": [
     {
       "id": "TRAP-total-orders",
       "level": 6,
       "question": "查一下总订单数",
-      "judge": {"mode": "scalar"},
-      "golden": [{"label": "orders not dwd", "sql": "SELECT count(*) FROM orders"}],
-      "value_hint": "2000; 用 dwd_orders_valid 会错得 1601"
+      "judge": {
+        "mode": "scalar"
+      },
+      "golden": [
+        {
+          "label": "orders not dwd",
+          "sql": "SELECT count(*) FROM orders"
+        }
+      ],
+      "value_hint": "「总订单数」问的是 orders 全表行数。掉进 dwd_orders_valid 会只数有效订单（status IN ('paid','shipped','delivered')），偏小且不报错。两个数都随数据重灌移动，所以这里不钉具体值——判定靠运行时现算的金标。"
     },
     {
       "id": "TRAP-fin-net-revenue-dec",
       "level": 6,
       "question": "2025年12月的财务口径确认净收入是多少",
-      "judge": {"mode": "scalar", "tolerance_pct": 2.0},
-      "golden": [{"label": "fin_daily_revenue net", "sql": "SELECT sum(net_revenue) FROM fin_daily_revenue WHERE dt BETWEEN '2025-12-01' AND '2025-12-31'"}],
-      "value_hint": "2438362; 用 GMV 口径会得 2829581 (偏高16%)"
+      "judge": {
+        "mode": "scalar",
+        "tolerance_pct": 2.0
+      },
+      "golden": [
+        {
+          "label": "fin_daily_revenue net",
+          "sql": "SELECT sum(net_revenue) FROM fin_daily_revenue WHERE dt BETWEEN '2025-12-01' AND '2025-12-31'"
+        }
+      ],
+      "value_hint": "净收入必须走 fin_daily_revenue.net_revenue（按退款发生日建轴）。拿 GMV 口径顶会偏高——GMV 没减退款，而且它的轴是下单日，跟这题的月份边界都不是同一段。别用「GMV − 退款」自己推，见 metrics/governed_metrics.md。"
     },
     {
       "id": "TRAP-roi-tmp-table",
       "level": 6,
       "question": "各广告渠道的 ROI 排名",
-      "judge": {"mode": "toplist", "k": 3, "min_hit": 0.34},
-      "golden": [{"label": "mart_channel_daily roi", "sql": "SELECT channel_name FROM (SELECT channel_name, sum(gmv_attributed)/NULLIF(sum(cost),0) AS roi FROM mart_channel_daily GROUP BY channel_name) t WHERE roi IS NOT NULL ORDER BY roi DESC LIMIT 3"}],
-      "value_hint": "tmp_campaign_roi_analysis 的 roi 列全 NULL, 掉进去就答不出"
+      "judge": {
+        "mode": "toplist",
+        "k": 3,
+        "min_hit": 0.34
+      },
+      "golden": [
+        {
+          "label": "mart_channel_daily roi",
+          "sql": "SELECT channel_name FROM (SELECT channel_name, sum(gmv_attributed)/NULLIF(sum(cost),0) AS roi FROM mart_channel_daily GROUP BY channel_name) t WHERE roi IS NOT NULL ORDER BY roi DESC LIMIT 3"
+        }
+      ],
+      "value_hint": "ROI 要走 mart_channel_daily 现算（sum(gmv_attributed)/sum(cost)）。tmp_campaign_roi_analysis 表名最像这道题，但它的 attributed_gmv / roi 两列**整列 NULL**（登记在 scripts/lakehouse/verify_constants.py 的清单里），掉进去只会得到一列 NULL 排名。"
     }
   ]
 }

@@ -5,6 +5,7 @@ genlib 自测 —— 证明 4 个 blocker-killer 正确 + 确定性 + CSV 可被
 """
 from __future__ import annotations
 import os
+import re
 import sys
 import tempfile
 
@@ -82,25 +83,47 @@ def test_csv_roundtrip():
     rng = R.make_rng()
     n = 1_000_000
     base = np.datetime64('2026-01-01T00:00:00')
+    ts = base + rng.integers(0, 86400 * 30, size=n).astype('timedelta64[s]')
     cols = {
         'id': I.id_range(1, n),
         'user_id': rng.integers(1, 50_000, size=n),
         'amount': np.round(rng.uniform(1, 1000, size=n), 2),
         'is_active': rng.integers(0, 2, size=n).astype(bool),
-        'ts': base + rng.integers(0, 86400 * 30, size=n).astype('timedelta64[s]'),
+        'ts': ts,
+        'd': ts.astype('datetime64[D]'),          # DDL 里的 date 列
+        # 可空时间列只能用 object 数组表达（None 与 datetime 混在一起），
+        # 它走 _cell 逐格那支而不是整列向量化那支。两支必须给出同一种文本形式。
+        'ts_nullable': np.array(
+            [None if i % 3 == 0 else ts[i].astype(object) for i in range(n)],
+            dtype=object),
     }
     fd, path = tempfile.mkstemp(suffix='.csv')
     os.close(fd)
     written = pgcsv.write_table(path, cols, chunk_rows=250_000)
     with open(path, encoding='utf-8') as f:
         header = f.readline().strip()
-        first = f.readline().strip()
-        line_count = 1 + sum(1 for _ in f) + 1  # header + remaining + first
+        rows = [f.readline().rstrip('\n') for _ in range(6)]
+        line_count = 1 + len(rows) + sum(1 for _ in f)
     os.remove(path)
     check('写出行数正确(1M)', written == n)
-    check('header 正确', header == 'id,user_id,amount,is_active,ts')
-    check('bool 渲染为 true/false', first.split(',')[3] in ('true', 'false'))
+    check('header 正确',
+          header == 'id,user_id,amount,is_active,ts,d,ts_nullable')
+    check('bool 渲染为 true/false', rows[0].split(',')[3] in ('true', 'false'))
     check('文件行数 = 1M + header', line_count == n + 1)
+
+    # 时间戳形式：Athena/Trino 的 `CAST(x AS timestamp(6))` 只认**空格**分隔，
+    # 喂它 ISO 的 `T` 分隔会抛 INVALID_CAST_ARGUMENT——曾因此整条装载链路不可用，
+    # 而 CSV 本身完全正常，报错指不到成因。date 列同理，只认裸 'YYYY-MM-DD'。
+    TS = re.compile(r'^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$')
+    D = re.compile(r'^\d{4}-\d{2}-\d{2}$')
+    cells = [r.split(',') for r in rows]
+    check('timestamp 列是空格分隔且到秒（无 T）',
+          all(TS.match(c[4]) for c in cells))
+    check('date 列是裸日期（无时间部分）', all(D.match(c[5]) for c in cells))
+    check('可空 timestamp 列：空值给空串，非空值与 timestamp 列同形',
+          all(c[6] == '' or TS.match(c[6]) for c in cells)
+          and any(c[6] == '' for c in cells)
+          and any(TS.match(c[6]) for c in cells))
 
 
 def test_textpool():

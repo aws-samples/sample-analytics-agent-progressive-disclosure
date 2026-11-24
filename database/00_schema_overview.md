@@ -1,11 +1,22 @@
 # APP Analytics Demo - Database Schema
 
-> **LEGACY —— 不再维护。** 本目录下的顶层 `*.sql` 是 v1 的 PostgreSQL DDL（35 张表、
-> 约 19 万行），已被 `database/redshift/` 取代：v2 的正式形态是 Redshift Serverless，
-> 48 张表、约 9,129 万行（其中 35 张原始表 7,992 万），元数据在 Glue Data Catalog，
-> 治理（GRANT + 动态脱敏）下沉到数仓。
-> 本文里的表数、行数、方言均为 v1 事实，不再随 v2 更新。
-> 现行架构见 `docs/architecture-v2-redshift-glue.md`，取舍与边界见 `docs/legacy.md`。
+> **这些 DDL 仍是真源，但方言不是现行的。** 本目录下的顶层 `*.sql` 是 v1 的
+> PostgreSQL DDL（35 张表、约 19 万行）。它**没有被取代**——`database/iceberg/01_tables.sql`
+> 就是 `scripts/lakehouse/gen_ddl.py` 从这批文件机械生成的，并由 `--check` 守着不许漂移
+> （`database/0[1-8]_*.sql` = 声明态唯一真源，进 git、走评审）。改表结构改这里。
+>
+> 差别只在**方言和运行时**：现行形态是 S3 Tables（Apache Iceberg）+ Amazon Athena，
+> Glue Data Catalog 里 48 张表，查询用 **Trino 方言**，本文和顶层 `*.sql` 里的 `::` 强转、
+> `interval '30 days'` 那类写法在 Athena 上不合法。
+>
+> **行数不写在这里**：`data/csv/` 种子灌完是约 22 万行（35 张原始表约 19 万行），但某个账号
+> 的湖里此刻装的是哪一批要单独确认——本仓库开发账号 2026-09-17 实测已经是 8000 万行那一批。
+> 表结构两者相同，这份文档说的是**结构**。规模见 [deployment.md](../docs/deployment.md#数据说明)。
+>
+> 另：v2 的 Redshift 形态（`database/redshift/`，含 GRANT + 动态脱敏的治理层）已随
+> Redshift 整体退役，留作记录；**数据层治理尚未在湖仓上重新实现**。
+> 现行架构见项目 README 的「v3 变了什么」，v2 的搬迁记录见
+> `docs/architecture-v2-redshift-glue.md`，legacy 边界见 `docs/legacy.md`。
 
 ## 概览
 
