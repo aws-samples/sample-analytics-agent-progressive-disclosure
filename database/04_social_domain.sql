@@ -25,7 +25,7 @@ CREATE TABLE posts (
     like_count INT DEFAULT 0,
     comment_count INT DEFAULT 0,
     share_count INT DEFAULT 0,
-    status VARCHAR(20) DEFAULT 'published',  -- 'draft', 'published', 'hidden', 'deleted'
+    status VARCHAR(20) DEFAULT 'published',  -- 'published', 'under_review', 'draft', 'deleted'（审核态叫 under_review；没有 hidden）
     is_featured BOOLEAN DEFAULT FALSE,
     published_at TIMESTAMP,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -57,7 +57,7 @@ CREATE TABLE post_shares (
     share_id BIGSERIAL PRIMARY KEY,
     user_id BIGINT REFERENCES users(user_id),
     post_id BIGINT REFERENCES posts(post_id),
-    share_channel VARCHAR(50),  -- 'wechat_friend', 'wechat_moment', 'weibo', 'copy_link'
+    share_channel VARCHAR(50),  -- 'wechat_friend', 'wechat_moments', 'weibo', 'copy_link', 'qq', 'other'（朋友圈是 wechat_moments，带 s）
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -67,7 +67,7 @@ CREATE TABLE user_messages (
     sender_id BIGINT REFERENCES users(user_id),
     receiver_id BIGINT REFERENCES users(user_id),
     content TEXT NOT NULL,
-    message_type VARCHAR(20) DEFAULT 'text',  -- 'text', 'image', 'product'
+    message_type VARCHAR(20) DEFAULT 'text',  -- 'text', 'image', 'link'（没有 product）
     related_post_id BIGINT REFERENCES posts(post_id),
     related_product_id BIGINT,
     is_read BOOLEAN DEFAULT FALSE,

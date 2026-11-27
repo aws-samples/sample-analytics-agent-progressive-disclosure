@@ -21,7 +21,7 @@
 |----|------|------|
 | 1 | 一级分类 | 服装、数码、食品、家居 |
 | 2 | 二级分类 | 男装、女装、手机、零食 |
-| 3 | 三级分类 | T恤、连衣裙、iPhone、坚果 |
+| 3 | 三级分类 | T恤、连衣裙、智能手机、坚果 |
 
 ### is_active 启用状态
 | 值 | 说明 |
@@ -38,10 +38,11 @@
 
 ### 获取完整分类树
 ```sql
-WITH RECURSIVE category_tree AS (
+-- Trino 的递归 CTE **必须显式声明列名**，否则报 MISSING_COLUMN_ALIASES
+WITH RECURSIVE category_tree (category_id, category_name, parent_id, level, path) AS (
     -- 顶级分类
     SELECT category_id, category_name, parent_id, level,
-           category_name::TEXT AS path
+           CAST(category_name AS varchar) AS path
     FROM categories
     WHERE parent_id IS NULL AND is_active = true
 

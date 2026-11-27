@@ -4,8 +4,13 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>App Analytics · AI 数据分析师</title>
-<link rel="stylesheet" href="/vendor/fonts/fonts.css">
-<!-- 部署期注入的运行配置(Cognito 池/客户端等);config.js 在 S3 站点根,随部署生成 -->
+<!-- 本地资源一律用**相对**路径:线上这个 shell 在站点根(解析成 /vendor/...),本地被
+     FastAPI 挂在 /app 下(解析成 /app/vendor/...)。写死绝对路径的话本地就是静默 404
+     ——页面照常出,只有图表框空白、字体退回系统默认,不报错也没红字。见 L6 的资源可达断言。 -->
+<link rel="stylesheet" href="vendor/fonts/fonts.css">
+<!-- 部署期注入的运行配置(Cognito 池/客户端等);config.js 在 S3 站点根,随部署生成。
+     这一条**保持绝对路径**:它的语义就是"站点根上那份部署产物",不跟着 shell 的挂载点走。
+     本地没有这份文件,server.py 回一个空脚本 → window.APP_CONFIG 缺席 → 回退 /api/config。 -->
 <script src="/config.js"></script>
 <!-- nosemgrep: insecure-document-method —— 渲染的是 app/模型生成内容,回显的用户文本已 HTML 转义 -->
 <script>
@@ -49,7 +54,7 @@
     if(!cfg.authEnabled)return;        // 未开认证:放行
     if(tokenValid())return;            // 已登录:fetch 包装会带 X-Id-Token
     localStorage.removeItem(TOKEN_KEY);
-    loadScript('/vendor/amazon-cognito-identity.min.js').then(function(){showLogin(cfg);})
+    loadScript('vendor/amazon-cognito-identity.min.js').then(function(){showLogin(cfg);})
       .catch(function(){alert((localStorage.getItem('aa_lang')||'en')==='zh'?'登录组件加载失败,请检查网络后刷新。':'Failed to load the sign-in component. Check your network and refresh.');});
   }
   document.addEventListener('DOMContentLoaded',function(){
@@ -136,7 +141,7 @@
   }
 })();
 </script>
-<script src="/vendor/echarts.min.js"></script>
+<script src="vendor/echarts.min.js"></script>
 <style>
 :root{
   --paper:#F2EFE7;
@@ -359,6 +364,14 @@ body{
 .kpi .label{font-size:12px;color:var(--muted);font-weight:500;margin-bottom:8px}
 .kpi .val{font-size:30px;font-weight:700;letter-spacing:-.02em;line-height:1;font-variant-numeric:tabular-nums}
 .kpi .val .unit{font-size:15px;color:var(--ink-soft);font-weight:600;margin-left:2px}
+/* 数值和单位不拆行；数字长（≥ 12 个字符，如 2,502,943.69）时缩小字号，四列并排也放得下 */
+.kpi .val.num{white-space:nowrap}
+.kpi .val.num.long{font-size:24px}
+.kpi .val.num.xlong{font-size:20px}
+/* 文字类 KPI（如商品名）：允许换行，按长度缩小字号，不截断 */
+.kpi .val.txt{white-space:normal;line-height:1.15;word-break:break-all}
+.kpi .val.txt.long{font-size:22px}
+.kpi .val.txt.xlong{font-size:18px}
 .kpi .delta{font-size:12px;font-weight:600;margin-top:9px;display:inline-flex;align-items:center;gap:4px;color:var(--ink-soft)}
 .kpi .delta.up{color:var(--good)}.kpi .delta.down{color:var(--bad)}
 .kpi .delta .lab{color:var(--muted);font-weight:500}
@@ -442,6 +455,13 @@ pre.sql .kw{color:var(--coral);font-weight:500}
 pre.sql .fn{color:var(--slate)}
 pre.sql .st{color:var(--teal)}
 .tablewrap{overflow-x:auto;max-height:340px;overflow-y:auto}
+.atable{padding:4px 20px 14px}
+.atable .at-title{font-size:12.5px;font-weight:700;color:var(--ink);margin:6px 0 8px}
+.atable table{width:100%;border-collapse:collapse;font-size:12.5px}
+.atable th{text-align:left;font-weight:700;color:var(--ink-soft);border-bottom:1px solid var(--line-soft);padding:6px 8px;white-space:nowrap}
+.atable td{border-bottom:1px solid var(--line-soft);padding:6px 8px;color:var(--ink)}
+.atable .num{text-align:right;font-variant-numeric:tabular-nums}
+.atable .at-more{font-size:11.5px;color:var(--muted,#9A9488);margin-top:6px}
 table{border-collapse:collapse;width:100%;font-size:13px}
 th,td{padding:9px 16px;text-align:left;border-bottom:1px solid var(--line-soft);white-space:nowrap}
 th{font-size:11.5px;color:var(--muted);font-weight:600;background:var(--surface-2);position:sticky;top:0}
@@ -618,6 +638,26 @@ td.num{text-align:right;font-weight:500;color:var(--ink)}
 const $=s=>document.querySelector(s);
 const API=location.protocol.startsWith('http') ? location.origin : 'http://127.0.0.1:8000';
 const fmt=n=>typeof n==='number'?n.toLocaleString('en-US'):n;
+// 与后端 tools.format_kpi_value 同一套规则（half-up）：amount/percent/fraction/ratio/number 默认 2 位，count 0 位；
+// fraction 乘 100 显示成 %；number 是整数时 0 位。图表的 tooltip / 数据标签用它，和卡片、文字、表格显示一致。
+const _DEF={amount:2,count:0,percent:2,fraction:2,ratio:2,number:2};
+function fmtVal(v,f){
+  if(v==null||v==='')return '—';if(typeof v!=='number'||!isFinite(v))return String(v);
+  f=f||{};const fm=_DEF.hasOwnProperty(f.format)?f.format:'number';
+  let x=v,n=(Number.isInteger(f.decimals)&&f.decimals>=0&&f.decimals<=6)?f.decimals:_DEF[fm];
+  if(f.decimals==null&&((fm==='count'&&!Number.isInteger(x))))n=2;
+  if(f.decimals==null&&fm==='number'&&Number.isInteger(x))n=0;
+  if(fm==='fraction')x=x*100;
+  const k=Math.pow(10,n), r=Math.sign(x)*Math.round(+(Math.abs(x)*k).toPrecision(15))/k;   // toPrecision 去掉二进制误差，再 half-up
+  const s=r.toLocaleString('en-US',{minimumFractionDigits:n,maximumFractionDigits:n});
+  return (fm==='percent'||fm==='fraction')?s+'%':(f.unit&&fm!=='amount'?s+' '+f.unit:s);
+}
+// 坐标轴刻度只是标尺：金额 / 计数用万、亿缩写，百分比带 %（具体数值看 tooltip 和标签）
+function fmtAxis(v,f){
+  f=f||{};if(f.format==='fraction')return (+(v*100).toFixed(2))+'%';if(f.format==='percent')return (+v.toFixed(2))+'%';
+  const a=Math.abs(v);if(a>=1e8)return (+(v/1e8).toFixed(2))+'亿';if(a>=1e4)return (+(v/1e4).toFixed(1))+'万';
+  return (+v.toFixed(2)).toLocaleString('en-US');
+}
 let MODE='baked';        // 'live' | 'baked'（'baked' 是 LEGACY 兜底，见下方 BAKED 块）
 let busy=false, sessionId=null;
 const log=$('#log'), canvas=$('#canvas');
@@ -643,10 +683,13 @@ const I18N={
   gov_grant:'Agent role can read',
   gov_grant_tail:'tables',
   gov_deny:'Not granted at all',
-  gov_mask:'Masked columns',
-  gov_note:'The agent role only holds SELECT on the tables it needs; PII columns carry '
-    +'masking policies attached TO PUBLIC — even an admin reads masked values. '
-    +'Enforced at query time in the warehouse, not by prompting the model.',
+  gov_mask:'Columns withheld',
+  // 跟在行数后面，说明这个总数少了谁。见 rowsPhrase()。
+  rows_unc_gov:'{n} table(s) not counted — not granted',
+  rows_unc_err:'{n} table(s) could not be counted',
+  gov_note:'The agent role only holds SELECT on the tables it needs, and PII columns are '
+    +'excluded from that grant — they are absent from SELECT *, and naming one fails. '
+    +'Lake Formation enforces this at query time; it is not prompt instruction.',
   model_connecting:'Connecting…',
   rail_h2:'Conversation',
   rail_p:'Ask in plain language — the agent finds the tables, writes the SQL, and builds the charts',
@@ -680,6 +723,11 @@ const I18N={
   foot_live:'Engine: Claude Agent SDK + Bedrock · querying the live warehouse',
   model_offline:'Offline demo mode',
   foot_offline:'Backend not connected — running the offline demo (mock data). Start the backend: <code style="font-family:JetBrains Mono">backend/run.sh</code>',
+  // file:// 打开时「启动后端」是句无用的提示：后端可能正跑着，只是从这里到不了它。
+  foot_offline_file:'Opened as a local file (<code style="font-family:JetBrains Mono">file://</code>) — from here the browser cannot reach the backend even if it is running. Open <code style="font-family:JetBrains Mono">http://127.0.0.1:8000/</code> instead.',
+  // 每个烘焙答案自己带一句声明。只靠右上角那个徽标不够：徽标在页首，答案在页尾，
+  // 而烘焙答案是**按关键词粗路由**的（问退款可能给你 DAU 走势），读起来却完全像真结论。
+  baked_notice:'**⚠️ Offline demo — canned sample answer.** Not a query against your warehouse, and it may not match the question at all. ',
   wf_agent:'Agent workflow',wf_analyzing:'Analyzing…',
   recall_view:'↺ Revisit this chart',recall_showing:'● Now showing',
   badge_think:'reason',badge_doc:'read_doc',badge_schema:'schema',badge_run:'run_sql',badge_metric:'call_metric',
@@ -690,7 +738,7 @@ const I18N={
   ft_metric:'ƒ Metric calls',ft_stats:'🧮 Stat computations',
   doc_missing:'Document not found',
   step_think:'Understanding the question and planning which docs to read',
-  lbl_doc:'Reading data dictionary',lbl_run:'Running query',lbl_metric:'Calling governance metric function',lbl_chart:'Generating charts and insights',
+  lbl_doc:'Reading data dictionary',lbl_run:'Running query',lbl_metric:'Calling governance metric function',lbl_chart:'Generating charts and insights',at_more:'Showing first {n} of {total} rows',
   step_readdoc:'Reading doc',metric_label:'Calling governance metric',running:'Running…',
   stats_label:'Stat computation',computing:'Computing…',notfound:'Not found',
   metric_notcov:'Metric not covered — switching to hand-written SQL',stats_done:'Computed',stats_detail_pre:'✓ Deterministic computation · ',
@@ -719,9 +767,13 @@ const I18N={
   gov_grant:'Agent 角色可读',
   gov_grant_tail:'张表',
   gov_deny:'连授权都没给',
-  gov_mask:'脱敏列',
-  gov_note:'Agent 角色只在需要的表上有 SELECT；PII 列挂了 TO PUBLIC 的脱敏策略，'
-    +'连管理员查出来也是掩码值。这两层都在数仓查询时生效，不靠提示词约束模型。',
+  gov_mask:'不授权的列',
+  // 跟在行数后面，说明这个总数少了谁。见 rowsPhrase()。
+  rows_unc_gov:'另有 {n} 张表不授权，未计入',
+  rows_unc_err:'另有 {n} 张表行数取不到',
+  gov_note:'Agent 角色只在需要的表上有 SELECT，PII 列从这份授权里排除掉了——'
+    +'`SELECT *` 里没有它们，点名查报列不存在。由 Lake Formation 在查询时强制，'
+    +'不是靠提示词叮嘱模型。',
   model_connecting:'连接中…',
   rail_h2:'对话',
   rail_p:'用大白话提问，Agent 自动找表、写 SQL、出图',
@@ -755,6 +807,8 @@ const I18N={
   foot_live:'大脑：Claude Agent SDK + Bedrock · 真实查询数据仓库',
   model_offline:'离线演示模式',
   foot_offline:'后端未连接，当前为离线演示（模拟数据）。启动后端：<code style="font-family:JetBrains Mono">backend/run.sh</code>',
+  foot_offline_file:'当前是用本地文件方式（<code style="font-family:JetBrains Mono">file://</code>）打开的——即使后端正在运行，浏览器也连不过去。请改用 <code style="font-family:JetBrains Mono">http://127.0.0.1:8000/</code> 打开。',
+  baked_notice:'**⚠️ 离线演示模式的预置示例答案。** 不是查你的数据仓库得到的，也可能跟你问的根本不是一回事。',
   wf_agent:'Agent 工作流',wf_analyzing:'分析中…',
   recall_view:'↺ 回看此图表',recall_showing:'● 正在显示',
   badge_think:'推理',badge_doc:'read_doc',badge_schema:'表结构',badge_run:'run_sql',badge_metric:'call_metric',
@@ -765,7 +819,7 @@ const I18N={
   ft_metric:'ƒ 指标调用',ft_stats:'🧮 统计计算',
   doc_missing:'文档不存在',
   step_think:'理解问题、规划要读哪些文档',
-  lbl_doc:'读取数据字典',lbl_run:'执行查询',lbl_metric:'调用治理指标 function',lbl_chart:'生成图表与洞察',
+  lbl_doc:'读取数据字典',lbl_run:'执行查询',lbl_metric:'调用治理指标 function',lbl_chart:'生成图表与洞察',at_more:'显示前 {n} 行，共 {total} 行',
   step_readdoc:'读取文档',metric_label:'调用治理指标',running:'执行中…',
   stats_label:'统计计算',computing:'计算中…',notfound:'未找到',
   metric_notcov:'指标未覆盖，改手写 SQL',stats_done:'已计算',stats_detail_pre:'✓ 确定性计算 · ',
@@ -829,7 +883,10 @@ function renderStatus(){
     $('#foot').textContent=t('foot_live');
   } else {
     $('#modelLabel').textContent=t('model_offline');
-    $('#foot').innerHTML=t('foot_offline');
+    // 用 file:// 双击打开时探针**必然**连不上：跨源请求带 `Origin: null`，后端 CORS
+    // 白名单里没有它。这时候提示「启动后端」是错的——后端很可能正跑着。两种情形的
+    // 现象一字不差（右上角离线演示 + 烘焙答案），这个歧义真实地花掉过一轮排查。
+    $('#foot').innerHTML=(location.protocol==='file:')?t('foot_offline_file'):t('foot_offline');
   }
 }
 
@@ -883,9 +940,24 @@ function rowsShort(n){
   return fmt(n);
 }
 // 带前缀后缀的完整短语。中文「万行」要连写，所以整句返回，不让调用方拼量词。
-function rowsPhrase(n){
+//
+// `totals` 是可选的第二参：给了就把**没数进这个总数的表**跟在数字后面说明。
+// 不说的话这里会显示「约 18 万行」，而全库其实是 19 万——差的那 9,253 行是
+// user_messages，治理层不授权所以 count(*) 拿不到（见 backend/catalog.py 里
+// rows_uncounted_* 那段）。一个少 5% 又没人解释的数字比不显示数字更糟。
+// 老快照没有这两个键（`web/catalog.json` 是生成物，可能先于本次改动生成），
+// 所以一律兜成空数组：那时退回原来的纯数字，不至于报错。
+function rowsPhrase(n, totals){
   if(n==null) return '';
-  return LANG==='zh' ? '约 '+rowsShort(n)+'行' : '~'+rowsShort(n)+' rows';
+  const zh=LANG==='zh';
+  const base = zh ? '约 '+rowsShort(n)+'行' : '~'+rowsShort(n)+' rows';
+  const gov=(totals&&totals.rows_uncounted_governed)||[];
+  const err=(totals&&totals.rows_uncounted_failed)||[];
+  const notes=[];
+  if(gov.length) notes.push(t('rows_unc_gov').replace('{n}',gov.length));
+  if(err.length) notes.push(t('rows_unc_err').replace('{n}',err.length));
+  if(!notes.length) return base;
+  return base+(zh?'（':' (')+notes.join(zh?'；':'; ')+(zh?'）':')');
 }
 
 function renderCatalog(){
@@ -896,7 +968,7 @@ function renderCatalog(){
   if(span){
     span.removeAttribute('data-i18n');               // 交给我们渲染，别再被 applyI18n 覆盖
     span.innerHTML=[C.database, L_tablesCount(C.totals.tables),
-                    rowsPhrase(C.totals.rows),
+                    rowsPhrase(C.totals.rows, C.totals),
                     C.engine].filter(Boolean).join(' · ')
       +' <span class="mut">· '+t('lbl_meta_from')
       +(C.source==='glue'?'Glue Data Catalog':'information_schema')
@@ -925,8 +997,12 @@ function renderCatalog(){
   }
 
   // ③ 治理面板：客户最常问的是「AI 会不会读到 PII」。这里给的不是承诺而是现状——
-  //    授权面几张、哪几张连表都没给、哪些列挂了脱敏。数据来自库里现查的
-  //    svv_relation_privileges 与 svv_attached_masking_policy。
+  //    授权面几张、哪几张连表都没给、哪些列不在授权里。数据由 backend/catalog.py 现查
+  //    Lake Formation（lakeformation:ListPermissions，按 AGENT_ROLE_ARN 那个 principal 过滤）得到。
+  //    没接治理层（未设 AGENT_ROLE_ARN）时 available=false，面板显示 reason 而不是画一个
+  //    空的"已脱敏"，因为一个看起来齐全的治理面板比没有面板更危险。
+  //    注意 masked 这个键的语义：v3 是**列级排除**（列不在授权面里、SELECT * 里没有它），
+  //    不是 v2 那种值级掩码（列在、值被替换）。LF 没有值级掩码原语，文案已跟着改。
   const g=C.governance||{};
   let panel=document.getElementById('govPanel');
   if(g.available){
@@ -1107,6 +1183,10 @@ function renderChart(el, spec){
           if(lab.length>10) lab=lab.slice(0,10);        // 避免长文本溢出
           return {coord, value:lab};
         }).filter(Boolean);
+        // 相邻（x 相隔 ≤ 3 格）的异常点标签交替抬高，避免两个「异常」叠在一起
+        let prevIx=-99, lift=false;
+        pts.forEach(pt=>{const ix=xs.indexOf(pt.coord[0]);lift=(ix>=0&&ix-prevIx<=3)?!lift:false;prevIx=ix;
+          if(lift)pt.label={offset:[0,-22]};});
         if(pts.length) mk.markPoint={
           symbol:'circle', symbolSize:11,
           itemStyle:{color:'#fff',borderColor:'#E0573B',borderWidth:3,
@@ -1129,7 +1209,7 @@ function renderChart(el, spec){
             type:isMean?'solid':'dashed',width:isMean?1.5:1}};
         }).filter(Boolean);
         if(lns.length) mk.markLine={symbol:'none',
-          label:{position:'start',formatter:o=>o.name||'',color:PAL.muted,fontSize:10,
+          label:{position:'insideStartTop',formatter:o=>o.name||'',color:PAL.muted,fontSize:10,   // 标在线的上方、图内左端，不压住 y 轴刻度
             backgroundColor:hexA('#FBFAF5',.85),padding:[1,3],borderRadius:3},
           data:lns};
       }
@@ -1147,27 +1227,36 @@ function renderChart(el, spec){
     // 让 y 轴上界比数据峰值再高一点,给异常点标签腾出净空
     const yBase={type:'value',...axisStyle};
     const yTop=hasMarks?{...yBase,scale:false}:yBase;
-    opt={grid,tooltip:{trigger:'axis'},legend:legend((spec.series||[]).length>1),
+    // 每条 series 的 fmt 来自后端（data_ref 的 format）；tooltip 按它显示，轴刻度按左右轴各自第一条 series 的 fmt
+    const sf=(spec.series||[]).map(s=>s.fmt||null);
+    const fL=sf[(spec.series||[]).findIndex(s=>s.axis!=='right')]||null, fR=sf[(spec.series||[]).findIndex(s=>s.axis==='right')]||null;
+    const yA=(f,b)=>f?{...b,axisLabel:{...(b.axisLabel||axisStyle.axisLabel||{}),formatter:v=>fmtAxis(v,f)}}:b;
+    opt={grid,tooltip:{trigger:'axis',formatter:ps=>{const a=Array.isArray(ps)?ps:[ps];
+        return esc(a[0]?a[0].axisValueLabel:'')+a.map(q=>'<br/>'+q.marker+esc(q.seriesName)+'：'+fmtVal(q.value,sf[q.seriesIndex])).join('');}},
+      legend:legend((spec.series||[]).length>1),
       xAxis:{type:'category',data:spec.x||[],...axisStyle,boundaryGap:hasBar},
-      yAxis:hasRight?[yTop,{type:'value',...axisStyle,splitLine:{show:false}}]:yTop,
+      yAxis:hasRight?[yA(fL,yTop),yA(fR,{type:'value',...axisStyle,splitLine:{show:false}})]:yA(fL,yTop),
       series};
   } else if(t==='hbar'){
     const cats=spec.categories||[], vals=spec.values||[], note=spec.note||[];
-    opt={grid:{left:8,right:74,top:14,bottom:8,containLabel:true},
-      tooltip:{trigger:'axis',axisPointer:{type:'shadow'},formatter:p=>{const i=p[0].dataIndex;return cats[i]+'<br/>'+fmt(p[0].value)+(note[i]?'<br/>'+note[i]:'');}},
-      xAxis:{type:'value',...axisStyle},
+    const hf=spec.fmt||null, hv=v=>hf?fmtVal(v,hf):fmt(v);
+    opt={grid:{left:8,right:(note.length?140:74),top:14,bottom:8,containLabel:true},
+      tooltip:{trigger:'axis',axisPointer:{type:'shadow'},formatter:p=>{const i=p[0].dataIndex;return esc(cats[i])+'<br/>'+hv(p[0].value)+(note[i]?'<br/>'+esc(note[i]):'');}},
+      xAxis:{type:'value',...axisStyle,...(hf?{axisLabel:{...(axisStyle.axisLabel||{}),formatter:v=>fmtAxis(v,hf)}}:{})},
       yAxis:{type:'category',data:cats,inverse:true,...axisStyle,axisLabel:{...axisStyle.axisLabel,color:'#544F45',fontWeight:600}},
       series:[{type:'bar',barWidth:'58%',data:vals.map((v,i)=>({value:v,itemStyle:{color:SER[i%SER.length],borderRadius:[0,6,6,0]}})),
-        label:{show:true,position:'right',formatter:p=>fmt(p.value)+(note[p.dataIndex]?'  ·  '+note[p.dataIndex]:''),color:PAL.muted,fontSize:11.5}}]};
+        label:{show:true,position:'right',formatter:p=>hv(p.value)+(note[p.dataIndex]?'  ·  '+note[p.dataIndex]:''),color:PAL.muted,fontSize:11.5}}]};
   } else if(t==='funnel'){
     const items=(spec.items||[]).slice().sort((a,b)=>b.value-a.value);
-    opt={tooltip:{trigger:'item',formatter:'{b}: {c}'},
+    const ff=spec.fmt||{};
+    opt={tooltip:{trigger:'item',formatter:p=>esc(p.name)+'：'+fmtVal(p.value,ff)},
       series:[{type:'funnel',top:18,bottom:18,left:'8%',right:'8%',minSize:'28%',gap:3,
-        label:{position:'inside',color:'#fff',fontWeight:600,fontFamily:'Hanken Grotesk',fontSize:14,formatter:'{b}  {c}'},
+        label:{position:'inside',color:'#fff',fontWeight:600,fontFamily:'Hanken Grotesk',fontSize:14,formatter:p=>p.name+'  '+fmtVal(p.value,ff)},
         itemStyle:{borderWidth:0},
         data:items.map((it,i)=>({value:it.value,name:it.name,itemStyle:{color:SER[i%SER.length]}}))}]};
   } else if(t==='pie'){
-    opt={tooltip:{trigger:'item',formatter:'{b}: {c} ({d}%)'},legend:legend(true),
+    const pf=spec.fmt||{};
+    opt={tooltip:{trigger:'item',formatter:p=>esc(p.name)+'：'+fmtVal(p.value,pf)+'（'+fmtVal(p.percent,{format:'percent'})+'）'},legend:legend(true),
       series:[{type:'pie',radius:['42%','70%'],center:['50%','54%'],avoidLabelOverlap:true,
         itemStyle:{borderColor:'#FBFAF5',borderWidth:3,borderRadius:5},
         label:{color:'#544F45',fontFamily:'Hanken Grotesk'},
@@ -1176,12 +1265,12 @@ function renderChart(el, spec){
     const xs=spec.xLabels||[], ys=spec.yLabels||[], cells=spec.cells||[];
     const vals=cells.map(c=>c[2]); const mn=Math.min(...vals,0), mx=Math.max(...vals,1);
     opt={grid:{left:8,right:18,top:14,bottom:60,containLabel:true},
-      tooltip:{position:'top',formatter:p=>ys[p.data[1]]+' · '+xs[p.data[0]]+'：'+p.data[2]},
+      tooltip:{position:'top',formatter:p=>esc(ys[p.data[1]])+' · '+esc(xs[p.data[0]])+'：'+fmtVal(p.data[2],spec.fmt||{})},
       xAxis:{type:'category',data:xs,splitArea:{show:true},axisLine:{lineStyle:{color:PAL.line}},axisTick:{show:false},axisLabel:{color:PAL.muted}},
       yAxis:{type:'category',data:ys,inverse:true,splitArea:{show:true},axisLine:{lineStyle:{color:PAL.line}},axisTick:{show:false},axisLabel:{color:PAL.muted}},
       visualMap:{min:mn,max:mx,calculable:true,orient:'horizontal',left:'center',bottom:8,
         inRange:{color:['#F4EAE0','#EE9F6F','#E0573B','#184E43']},textStyle:{color:PAL.muted}},
-      series:[{type:'heatmap',data:cells,label:{show:true,color:'#fff',fontSize:11,fontWeight:600},
+      series:[{type:'heatmap',data:cells,label:{show:true,color:'#fff',fontSize:11,fontWeight:600,formatter:p=>fmtVal(p.data[2],spec.fmt||{})},
         itemStyle:{borderColor:'#FBFAF5',borderWidth:3,borderRadius:4},emphasis:{itemStyle:{shadowBlur:8,shadowColor:'rgba(0,0,0,.2)'}}}]};
   } else { return null; }
   c.setOption(opt);
@@ -1201,13 +1290,15 @@ function hlSql(s){
 // 连引号一起转:这些文本也会落进 title="…" 这类属性上下文,只转 &< 挡不住 " 逃逸。
 const esc=s=>(s==null?'':String(s)).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 // 先全量转义,再把 **…** 还原成 <b>:$1 已转义,无法造出新标签或属性。
-const mdBold=s=>esc(s).replace(/\*\*(.+?)\*\*/g,'<b>$1</b>');
+const mdBold=s=>esc(s).replace(/\*\*(.+?)\*\*/g,'<b>$1</b>').replace(/\\n|\n/g,'<br>');
 const wait=ms=>new Promise(r=>setTimeout(r,ms));
 const stripTags=h=>{const d=document.createElement('div');d.innerHTML=h;return d.textContent;};
 async function typeIn(el,text){el.textContent='';for(let i=0;i<text.length;i++){el.textContent+=text[i];if(i%3===0)await wait(8);}}
-function countUp(el){const target=parseFloat(el.dataset.count);if(isNaN(target))return;const dec=(target%1!==0)?1:0;const dur=850,t0=performance.now();
-  (function step(t){const p=Math.min((t-t0)/dur,1),e=1-Math.pow(1-p,3),v=target*e;
-    el.firstChild.textContent=dec?v.toFixed(1):Math.round(v).toLocaleString('en-US');
+function countUp(el){const target=parseFloat(el.dataset.count);if(isNaN(target))return;
+  // 小数位按原值实际位数（最多 2 位），带千分位；以前一律截成 1 位、且小数不加千分位
+  const dec=(target%1!==0)?Math.min(2,(String(target).split('.')[1]||'').length):0;const dur=850,t0=performance.now();
+  (function step(t){const p=Math.min((t-t0)/dur,1),e=1-Math.pow(1-p,3),v=p<1?target*e:target;
+    el.firstChild.textContent=v.toLocaleString('en-US',{minimumFractionDigits:dec,maximumFractionDigits:dec});
     if(p<1)requestAnimationFrame(step);})(t0);}
 
 /* ---------------- rail turn ---------------- */
@@ -1393,7 +1484,10 @@ function renderResult(p){
   currentCharts=[];
   const ACC=['var(--brand)','var(--coral)','var(--teal)','var(--gold)'];
   const kpiHTML=(Array.isArray(p.kpis)?p.kpis:[]).map((k,i)=>{
-    const isNum=typeof k.value==='number';
+    // display：后端按出处取引擎原值、按 format 格式化好的文本（千分位、小数位已定），前端原样显示、不再取整。
+    // 没有 display 的（离线演示数据）才走数字动画。
+    const hasDisp=typeof k.display==='string'&&k.display!=='';
+    const isNum=!hasDisp&&typeof k.value==='number';
     // dir 只取白名单值:它落在 class 属性里,不能让模型输出直接写进属性上下文。
     const dir=(k.dir==='up'||k.dir==='down')?k.dir:'';
     const delta=(k.delta||k.note)?`<div class="delta ${dir}">${dir?(dir==='up'?'▲':'▼'):''} ${esc(k.delta)}${k.note?` <span class="lab">${esc(k.note)}</span>`:''}</div>`:'';
@@ -1401,7 +1495,9 @@ function renderResult(p){
     const base=(k.baseline||k.baseline_value!=null)?`<div class="kpi-base">${esc(k.baseline||t('kpi_baseline'))}${k.baseline_value!=null?`：${typeof k.baseline_value==='number'?fmt(k.baseline_value):esc(String(k.baseline_value))}`:''}</div>`:'';
     return `<div class="kpi" style="--accent:${ACC[i%ACC.length]}">
       <div class="label">${esc(k.label)}</div>
-      <div class="val" ${isNum?`data-count="${Number(k.value)}"`:''}>${isNum?'0':esc(k.value==null?'':String(k.value))}${k.unit?`<span class="unit">${esc(String(k.unit))}</span>`:''}</div>
+      <div class="val${(()=>{const txt=String(hasDisp?k.display:(k.value??''));const L=txt.length;
+        const isTxt=!/^[-+]?[\d,.]+$/.test(txt.trim());       // 文字类（商品名、渠道名）与数值分开处理
+        return isTxt?(' txt'+(L>=10?' xlong':(L>=6?' long':''))):(' num'+(L>=15?' xlong':(L>=12?' long':'')));})()}" ${isNum?`data-count="${Number(k.value)}"`:''}>${hasDisp?esc(k.display):(isNum?'0':esc(k.value==null?'':String(k.value)))}${k.unit?`<span class="unit">${esc(String(k.unit))}</span>`:''}</div>
       ${delta}${base}</div>`;}).join('');
   // findings 洞察面板(方向3):驱动/异常/风险三类要点
   const FK={driver:{ic:'↑',cls:'f-driver',lab:t('find_driver')},anomaly:{ic:'⚠',cls:'f-anomaly',lab:t('find_anomaly')},risk:{ic:'▽',cls:'f-risk',lab:t('find_risk')}};
@@ -1418,7 +1514,7 @@ function renderResult(p){
   if(mtFormula.length||mtStats.length){
     const stepsHTML=_arr(mt.steps).map(x=>`<li>${esc(x)}</li>`).join('');
     const formHTML=mtFormula.map(f=>`<div class="m-frow"><div class="m-flab">${esc(f.label)}</div><div class="m-fexpr">${esc(f.expr)}</div></div>`).join('');
-    const statsHTML=mtStats.map(st=>{const v=(typeof st.value==='number')?fmt(st.value):esc(st.value);
+    const statsHTML=mtStats.map(st=>{const v=(typeof st.display==='string'&&st.display!=='')?esc(st.display):((typeof st.value==='number')?fmt(st.value):esc(st.value));
       return `<div class="m-stat"><div class="m-sv">${v}${st.unit?`<span class="m-su">${esc(st.unit)}</span>`:''}</div><div class="m-sl">${esc(st.label)}</div></div>`;}).join('');
     const toolTag=p.statsToolUsed?`<span class="m-tool" title="${t('stats_tool_title')}">${t('stats_tool_tag')}</span>`:'';
     methodHTML=`<div class="method reveal">
@@ -1461,6 +1557,15 @@ function renderResult(p){
   const chartList=(Array.isArray(p.charts)&&p.charts.length)?p.charts:(p.chart&&p.chart.type?[p.chart]:[]);
   const title=(chartList[0]&&chartList[0].title)||t('result_title');
   const chartsHTML=chartList.map((c,i)=>`<div class="chart" id="chartEl${i}"></div>`).join('');
+  // 明细表（present_result.table）：后端按出处取原值、格式化好的文本，前端原样显示
+  const at=p.atable;let atHTML='';
+  if(at&&Array.isArray(at.columns)&&Array.isArray(at.rows)&&at.rows.length){
+    const num=at.num||[];
+    atHTML=`<div class="atable">${at.title?`<div class="at-title">${esc(at.title)}</div>`:''}<div class="tablewrap"><table>
+      <thead><tr>${at.columns.map((c,i)=>`<th class="${num[i]?'num':''}">${esc(c)}</th>`).join('')}</tr></thead>
+      <tbody>${at.rows.map(r=>`<tr>${r.map((c,i)=>`<td class="${num[i]?'num':''}">${esc(c)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>
+      ${at.total>at.rows.length?`<div class="at-more">${esc(t('at_more').replace('{n}',at.rows.length).replace('{total}',at.total))}</div>`:''}</div>`;
+  }
 
   canvas.innerHTML=`
     <div class="interp reveal"><span class="tag">${t('interp_tag')}</span><span class="txt">${esc(p.interpreted)}</span></div>
@@ -1469,7 +1574,8 @@ function renderResult(p){
     <div class="card reveal">
       <div class="card-head"><h3>${esc(chartList.length>1?t('multi_title'):title)}</h3>
         <div class="toggle"><button class="on">${t('toggle_chart')}</button><button>${t('toggle_data')}</button></div></div>
-      ${chartsHTML||'<div class="chart" id="chartEl0"></div>'}
+      ${chartsHTML||(atHTML?'':'<div class="chart" id="chartEl0"></div>')}
+      ${atHTML}
       ${p.insight?`<div class="insight"><span class="ic">✦</span><p>${mdBold(p.insight)}</p></div>`:''}
       ${findHTML?`<div class="findings reveal">${findHTML}</div>`:''}
       ${fncallHTML}
@@ -1553,7 +1659,8 @@ async function askLive(question, deep){
             freezeStep(T,o,{dbMs:ev.exec_ms});}     // SQL 步定格在【真实 DB 执行毫秒】，不再吞掉后续推理
           openReason(T,t('reason_gen'));   // DB 之后的 LLM 时间单列(这才是真正耗时大头)
         }
-        else if(ev.type==='text'){textBuf+=ev.delta;T.summary.style.display='';T.summary.innerHTML=mdBold(textBuf);log.scrollTop=log.scrollHeight;}
+        // 结果出来后左侧气泡锁定为后端核对过的 insight：模型在 present_result 之后还会接着说话，那段原话里的数没有核对过
+        else if(ev.type==='text'){textBuf+=ev.delta;if(!rendered){T.summary.style.display='';T.summary.innerHTML=mdBold(textBuf);}log.scrollTop=log.scrollHeight;}
         else if(ev.type==='metric'){          // 治理指标 function call 返回的权威数 + 来源
           payload.columns=ev.columns||payload.columns;payload.rows=ev.rows||payload.rows;
           payload.source={metric:ev.metric,label:ev.label,owner:ev.owner,version:ev.version,'口径声明':ev['口径声明']};
@@ -1586,9 +1693,11 @@ async function askLive(question, deep){
           payload.charts=ev.charts||[];
           payload.insight=ev.insight;payload.followups=ev.followups||[];
           payload.findings=ev.findings||[];
+          payload.atable=(ev.table&&ev.table.columns)?ev.table:null;
           payload.method=ev.method||{};
           if(ev.source&&(ev.source.metric||ev.source.owner))payload.source=ev.source;
           renderResult(payload);rendered=true;
+          if(payload.insight){T.summary.style.display='';T.summary.innerHTML=mdBold(payload.insight);}
         }
         else if(ev.type==='error'){addStep(T,'think',t('err_step'));T.summary.style.display='';T.summary.classList.remove('typing');T.summary.innerHTML=`<span style="color:var(--bad)">${esc(ev.message||t('err_unknown'))}</span>`;}
       }
@@ -1596,7 +1705,7 @@ async function askLive(question, deep){
     if(!rendered && payload.sql){renderResult(payload);}
     finishTrace(T);
     T.summary.classList.remove('typing');
-    if(!textBuf && payload.insight){T.summary.style.display='';T.summary.innerHTML=mdBold(payload.insight);}
+    if((rendered||!textBuf) && payload.insight){T.summary.style.display='';T.summary.innerHTML=mdBold(payload.insight);}
     const fu=(payload.followups&&payload.followups.length)?payload.followups:L_followups();
     setChips(T.chips,fu);
     if(payload.sql||(payload.chart&&payload.chart.type)) attachResult(T,payload);
@@ -1611,9 +1720,13 @@ async function askLive(question, deep){
 /* ================== BAKED (offline demo fallback) —— LEGACY，不再维护 ==================
    这一整块是"没有后端也能演示"的兜底：写死的问答、图表、KPI、SQL。
 
-   **已冻结在 v1 形态，且不打算跟进 v2。** 里面的数字全是 Aurora 时代的：DAU 1418、
-   7 日 GMV 124 万、日期 05/29–06/04，对应约 19 万行的旧数据集；现在真实规模是
-   48 张表 / 7992 万行 / Redshift Serverless。SQL 方言也还是 Postgres 的。
+   **已冻结在 v1 形态，后面两次换库都没跟。** 里面的数字全是 Aurora 时代的：DAU 1418、
+   7 日 GMV 124 万、日期 05/29–06/04。现行后端是 **Athena + S3 Tables / Iceberg**
+   （v2 的 Redshift Serverless 也已退役），Glue 目录 48 张表、约 22 万行，业务日历
+   止于 2026-01-24。这块里的每条 SQL 都还是 **Postgres 方言**、还在用
+   `current_date - interval '7 days'` 当"今天"——两样在现行后端上都是错的
+   （Trino 要 `interval '7' day`，"今天"要取 `meta_snapshot.as_of_date`）。
+   它们不进数据库、只是给观众看的字符串，所以没有任何检查会因此变红。
 
    为什么留着不删：它是 MODE==='baked' 的唯一落点，删了得连着改 boot() 的失败路径和
    一堆渲染分支，而线上根本走不到这里——线上 config.js 配了 askUrl，boot() 第一行就
@@ -1724,7 +1837,7 @@ const DOC_CONTENT={
 'domains/_index.md':"# 业务域索引\n\n共 8 个原始业务域（35 张明细表）+ 治理层 mart（4 张预聚合表）。根据问题关键词加载对应域的索引文件。\n\n## 域路由表\n| 域 | 表数 | 索引文件 |\n|----|----|----|\n| 用户域 | 5 | `user/_index.md` |\n| 商品域 | 3 | `product/_index.md` |\n| 行为域 | 4 | `behavior/_index.md` |\n| 社交域 | 6 | `social/_index.md` |\n| 交易域 | 4 | `transaction/_index.md` |\n| 归因域 | 5 | `attribution/_index.md` |\n| 营销域 | 5 | `marketing/_index.md` |\n| 实验域 | 3 | `experiment/_index.md` |\n\n## 关键词路由\n- **交易**：订单、GMV、成交、客单、订阅、套餐 → `transaction/_index.md`\n- **行为**：会话、事件、埋点、漏斗、转化 → `behavior/_index.md`\n- **归因**：渠道、获客、CAC、ROI、投放 → `attribution/_index.md`\n- **营销**：活动、优惠券、核销、推送 → `marketing/_index.md`\n- **实验**：A/B、实验、变体、分桶、对照组 → `experiment/_index.md`",
 'domains/behavior/_index.md':"# 行为域 (Behavior Domain)\n\n## 表清单\n| 表名 | 说明 | 详情文件 |\n|----|----|----|\n| events | 用户事件埋点 | `events.md` |\n| sessions | 会话记录 | `sessions.md` |\n| page_views | 页面浏览 | `page_views.md` |\n\n## 关键词路由\n| 关键词 | 加载文件 |\n|----|----|\n| 事件、埋点、漏斗、DAU | `events.md` |\n| 会话、来源、跳出 | `sessions.md` |",
 'domains/behavior/events.md':"# events - 用户事件表\n\n## 表结构\n| 字段 | 类型 | 说明 |\n|----|----|----|\n| event_id | BIGINT | 主键 |\n| user_id | BIGINT | 用户ID |\n| session_id | BIGINT | 会话ID |\n| event_name | VARCHAR(50) | app_open / view_product / add_to_cart / begin_checkout / purchase |\n| event_time | TIMESTAMP | 事件时间 |\n| properties | SUPER | 事件属性 |\n\n## 常用查询\n```sql\nSELECT date(event_time), count(DISTINCT user_id)\nFROM events GROUP BY 1;\n```",
-'domains/behavior/sessions.md':"# sessions - 会话表\n\n## 表结构\n| 字段 | 类型 | 说明 |\n|----|----|----|\n| session_id | BIGINT | 主键 |\n| user_id | BIGINT | 用户ID |\n| start_time | TIMESTAMP | 开始时间 |\n| is_bounce | BOOLEAN | 是否跳出 |\n| traffic_source | VARCHAR(50) | direct / organic_search / paid_search / social |\n| utm_source | VARCHAR(50) | UTM来源 |",
+'domains/behavior/sessions.md':"# sessions - 会话表\n\n## 表结构\n| 字段 | 类型 | 说明 |\n|----|----|----|\n| session_id | BIGINT | 主键 |\n| user_id | BIGINT | 用户ID |\n| start_time | TIMESTAMP | 开始时间 |\n| is_bounce | BOOLEAN | 是否跳出 |\n| traffic_source | VARCHAR(50) | direct / organic / paid / social / referral / email |\n| utm_source | VARCHAR(50) | weixin / douyin / baidu / xiaohongshu / organic / direct |",
 'domains/transaction/_index.md':"# 交易域 (Transaction Domain)\n\n## 表清单\n| 表名 | 说明 | 详情文件 |\n|----|----|----|\n| orders | 订单主表 | `orders.md` |\n| order_items | 订单明细 | `order_items.md` |\n| payments | 支付记录 | `payments.md` |\n| subscriptions | 订阅/会员 | `subscriptions.md` |\n\n## 关键词路由\n| 关键词 | 加载文件 |\n|----|----|\n| 订单、GMV、成交、客单 | `orders.md` |\n| 订阅、套餐、会员、续费 | `subscriptions.md` |",
 'domains/transaction/orders.md':"# orders - 订单表\n\n## 表结构\n| 字段 | 类型 | 说明 |\n|----|----|----|\n| order_id | BIGINT | 主键 |\n| user_id | BIGINT | 用户ID |\n| status | VARCHAR(20) | paid / shipped / delivered / cancelled / refunded |\n| actual_amount | DECIMAL(12,2) | 实付金额 |\n| placed_at | TIMESTAMP | 下单时间 |\n\n## 口径\n有效订单：`status IN ('paid','shipped','delivered')`",
 'domains/user/_index.md':"# 用户域 (User Domain)\n\n## 表清单\n| 表名 | 说明 | 详情文件 |\n|----|----|----|\n| users | 用户主表 | `users.md` |\n| user_profiles | 用户画像 | `user_profiles.md` |\n| user_devices | 设备信息 | `user_devices.md` |",
@@ -1756,14 +1869,27 @@ async function askBaked(question){
   addStep(T,'chart',t('lbl_chart'),'');await wait(560);
   renderResult(p);
   finishTrace(T);
-  T.summary.style.display='';await typeIn(T.summary,stripTags(mdBold(p.insight)));T.summary.innerHTML=mdBold(p.insight);T.summary.classList.remove('typing');
+  // 烘焙答案一律带上声明。BAKED_ROUTE 是关键词粗路由，问"退了多少钱"会落到默认那条
+  // （DAU 走势）——不标出来的话，这一段读起来和真结论一模一样。
+  const insight=t('baked_notice')+p.insight;
+  T.summary.style.display='';await typeIn(T.summary,stripTags(mdBold(insight)));T.summary.innerHTML=mdBold(insight);T.summary.classList.remove('typing');
   setChips(T.chips,p.followups);
   attachResult(T,p);
   busy=false;$('#send').disabled=false;
 }
 
 /* ---------------- dispatch + boot ---------------- */
-function ask(question, deep){ return MODE==='live'?askLive(question,deep):askBaked(question); }
+// 探针还没跑完就提问：**等它**，不能就地按 MODE 分派。否则「页面刚打开就点一个预置问题」
+// 会拿到一份写死的烘焙答案，而那时后端其实是好的——错的答案比转圈几秒难查得多。
+async function ask(question, deep){
+  if(BOOT) await BOOT;
+  // 已经降级过的页面，在提问前再探一发：后端可能是这一页加载之后才起来的。
+  // 少了这一发，最坏的情形是用户拿到一个「看起来正常、其实和问题无关」的烘焙答案
+  // （问退款给 DAU 走势），而后端就在旁边好好跑着。连不上时这一发是即刻失败的，
+  // 不会让离线演示变慢。见下方 recheckOnce()。
+  if(MODE!=='live') await recheckOnce();
+  return MODE==='live'?askLive(question,deep):askBaked(question);
+}
 // 示例问题:显示按语言切换的 label,但发给后端的 q 始终是原中文(知识库为中文)。
 const PRESET_GROUPS=[
   {name:{zh:'原始数据 · 问数',en:'Raw data · Ask'}, mode:'text-to-ETL', cap:{zh:'AI 现场从 35 张明细表 join、定口径、写复杂 SQL',en:'The AI joins across 35 detail tables, defines the metrics, and writes complex SQL on the fly'}, items:[
@@ -1814,33 +1940,131 @@ function clearSession(){
 }
 $('#clearBtn').onclick=clearSession;
 
+// —— 存活探针 ——
+// 这里原来是「一发、2500ms、超时即永久降级」。那个 2500 是本地 Postgres 时代照
+// `SELECT 1` 的几十毫秒定的；换成 Athena 后**后端刚起来时第一次打开页面必然掉进 baked**：
+// 右上角标「离线演示模式」，答案换成写死的烘焙数据（问"这段时间退了多少钱"答的是 DAU
+// 走势），底部提示还写着"后端未连接，请启动后端"，而后端就在那儿好好跑着——归因被指到了
+// 完全相反的方向。探针失败的代价不是一句红字，是**一个看起来正常、其实和问题无关的答案**。
+//
+// 第一版修法是把预算改成 12000ms。**那也是错的**：同一台机器上冷启动 ping 实测过 5.0s，
+// 也实测过 13.5s（凭证 + 查询排队），L6 当场就量到 12.5s 把它顶爆了。任何写死的毫秒数
+// 都是在猜一个云上的分位数，猜大一点只是把下一次翻车往后推。
+//
+// 所以判据换了：后端现在告诉我们它**在不在**（/health 三态 ok / warming / error，
+// 见 backend/server.py），而"在不在"是个本地事实、答得快。
+//   · warming（后端在、第一发 ping 还没回来）⟹ **继续等**，等到 PROBE_WARM_ATTEMPTS 发为止
+//   · error（探完了不通）/ 连不上 ⟹ 才算失败，攒够 PROBE_FAIL_ATTEMPTS 发再降级
+// 单发超时因此只需要覆盖「后端答一句话」而不是「Athena 查完一次」，8s 极宽裕。
+// 这两条由 scripts/ui/boot_test.mjs 钉住（含"warming 不许当成不在"那一条），
+// L6 则量后端答第一句话有多快、以及预热到 ok 用了多久还在不在这里的等待窗口里。
+const PROBE_TIMEOUT_MS=8000,      // 单发：够后端答一句话（它不再等 Athena 查完才回）
+      PROBE_FAIL_ATTEMPTS=3,      // 连不上 / dataLayer=error：攒够这么多发才降级
+      PROBE_WARM_ATTEMPTS=30,     // 后端在、数据层还在预热：最多陪它等这么多发（≈45s）
+      PROBE_GAP_MS=1500;
+
+// 返回 {state:'live', h} / {state:'warming'} / {state:'error'} / {state:'down'}。
+// 三种失败必须分开：'warming' 是"再等等"，另两种才是"降级"的理由。
+async function probeHealth(){
+  const ctrl=new AbortController();const to=setTimeout(()=>ctrl.abort(),PROBE_TIMEOUT_MS);
+  try{
+    // 探针必须打 /health：它是 GET，返回 {ok, dataLayer, db, model}。这里曾被误改成
+    // '/ask'，而 /ask 是 POST——GET 过去必然 405，h.ok 是 undefined，于是每次都掉进
+    // catch，本地跑的 demo 一直在放烘焙数据。
+    const r=await fetch(API+'/health',{signal:ctrl.signal});
+    const h=await r.json();
+    if(h&&h.ok) return {state:'live',h};
+    // dataLayer 缺失（老后端）按 'error' 处理：宁可少等，不要把"探不通"读成"再等等"。
+    return {state:(h&&h.dataLayer==='warming')?'warming':'error'};
+  }catch(e){
+    return {state:'down'};           // 连不上：后端没起、端口不对、或真超时
+  }finally{
+    clearTimeout(to);
+  }
+}
+
+let BOOT=null;                       // boot() 的 promise。ask() 要等它，见 ask()
 async function boot(){
   // AgentCore 部署：配了 askUrl 即恒为在线(实时链路),无需网络探针(且未登录时无凭证探不了)。
   if(window.APP_CONFIG&&window.APP_CONFIG.askUrl){
     MODE='live';HEALTH={ok:true};BOOTED=true;$('#pulse').classList.remove('off');
     renderStatus();loadCatalog();return;
   }
-  try{
-    const ctrl=new AbortController();const to=setTimeout(()=>ctrl.abort(),2500);
-    // 探针必须打 /health：它是 GET，返回 {ok, db, model}。这里曾被误改成 '/ask'，
-    // 而 /ask 是 POST——GET 过去必然 405，h.ok 是 undefined，于是每次都掉进 catch，
-    // 本地跑的 demo 一直在放烘焙数据。界面确实标了"离线演示模式"，但它给的提示是
-    // "后端未连接，启动后端"——而后端明明起着，归因完全指错了方向。
-    const r=await fetch(API+'/health',{signal:ctrl.signal});clearTimeout(to);
-    const h=await r.json();
-    if(h.ok){
-      MODE='live';HEALTH=h;BOOTED=true;
+  // 探不到就重试：后端可能正在起（uvicorn 打印端口早于数据层预热完成）。
+  // 这期间界面停在初始的「连接中…」——不先渲染成「离线演示模式」再翻回来，
+  // 因为那个标签会被读成结论。
+  // 两个计数分开记：'warming' 是后端明说"我在，再等等"，它不该消耗"失败"的额度；
+  // 而它自己也有上限，否则后端要是卡在预热上，页面就永远转圈——那同样是不说实话。
+  let fails=0, warms=0;
+  for(;;){
+    const r=await probeHealth();
+    if(r.state==='live'){
+      MODE='live';HEALTH=r.h;BOOTED=true;
       $('#pulse').classList.remove('off');
       renderStatus();
       loadCatalog();                 // 异步拉真实元数据，不阻塞首屏
-    } else { throw new Error('db down'); }
-  }catch(e){
-    MODE='baked';BOOTED=true;
-    renderStatus();
+      return;
+    }
+    if(r.state==='warming'){ if(++warms>=PROBE_WARM_ATTEMPTS) break; }
+    else                   { if(++fails>=PROBE_FAIL_ATTEMPTS) break; }
+    await wait(PROBE_GAP_MS);
   }
+  MODE='baked';BOOTED=true;
+  renderStatus();
+  recheckLoop();                     // 降级不是终局，见下
   // 不自动发问：登录后先停在欢迎页，由用户主动点示例或输入
 }
-boot();
+
+// —————————————— 降级之后还要继续看后端：自愈 ——————————————
+// 上面那个 for(;;) 里 break 出去就完事了，于是这一页在它整个生命周期里**再也不看一眼
+// 后端**。而失败额度只有 PROBE_FAIL_ATTEMPTS 发 ≈ 3s，比 uvicorn 打开端口的时间还短：
+// 「重启后端 → 立刻刷新页面」这个最自然的动作，三发全落在 connection refused 上，页面
+// 就永久锁死在离线演示模式，后端随后热起来也没人再问。用户看到的是"重启也刷新了，
+// 还是跟之前一模一样"，而归因会指向"改的东西没生效"——它生效了，只是救不了这条路。
+//
+// 三条自愈路径，用户不需要知道发生了什么：
+//   · 后台退避重探：覆盖"先开页面、再起后端"。**有上限**——探通的 /health 会真查一次
+//     Athena（要钱），无限轮询会把一个没人看的空闲页面变成持续开销。
+//   · 标签页重新可见时探一发：切回来这个动作本身就是"我要用了"，而且不花后台轮询的钱。
+//   · 提问前探一发（最要紧的一条）：绝不在后端明明活着的时候给出烘焙答案。
+// 这三条由 scripts/ui/boot_test.mjs 场景⑧⑨钉住。
+const RECHECK_GAP_MS=3000,           // 降级后第一次重探隔多久
+      RECHECK_MAX_GAP_MS=15000,      // 退避上限
+      RECHECK_WINDOW_MS=120000;      // 后台重探总共试这么久；此后只留"可见"和"提问"两条
+let RECHECKING=false;
+
+// 从 baked 翻到 live。方向只有这一个：live 不会退回 baked——半途换掉一个已经给过答案的
+// 页面的身份标签，比继续用当前模式更容易被误读。
+function goLive(h){
+  if(MODE==='live') return;
+  MODE='live';HEALTH=h;
+  $('#pulse').classList.remove('off');
+  renderStatus();                    // 徽标/底部文案从「离线演示」翻成真实模型与库
+  loadCatalog();                     // baked 那条路没拉过真元数据，这里补上
+}
+/** 探一发；活了就切实时。返回"现在是不是实时"。 */
+async function recheckOnce(){
+  if(MODE==='live') return true;
+  const r=await probeHealth();
+  if(r.state==='live'){ goLive(r.h); return true; }
+  return false;
+}
+async function recheckLoop(){
+  if(RECHECKING||MODE==='live') return;
+  RECHECKING=true;
+  let gap=RECHECK_GAP_MS,spent=0;
+  while(MODE!=='live'&&spent<RECHECK_WINDOW_MS){
+    await wait(gap);spent+=gap;
+    if(await recheckOnce()) break;
+    gap=Math.min(Math.round(gap*1.5),RECHECK_MAX_GAP_MS);
+  }
+  RECHECKING=false;
+}
+document.addEventListener('visibilitychange',()=>{
+  if(!document.hidden&&MODE!=='live') recheckOnce();
+});
+
+BOOT=boot();
 </script>
 </body>
 </html>

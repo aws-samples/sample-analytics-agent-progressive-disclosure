@@ -28,7 +28,7 @@ ad_campaigns ─┬── user_attributions (1:N)
               └── channel_daily_costs (1:N)
 
 ad_creatives ─┬── user_attributions (1:N)
-              └── channel_daily_costs (1:N)
+              └── channel_daily_costs (1:N)  ← 当前成本表 creative_id 整列 NULL，接不上
 ```
 
 ## 关键词路由
@@ -48,7 +48,7 @@ ad_creatives ─┬── user_attributions (1:N)
 
 1. **渠道效果分析**: 加载 `channels.md` + `channel_daily_costs.md`
 2. **广告 ROI 计算**: 加载 `channel_daily_costs.md` + `user_attributions.md`
-3. **素材 A/B 测试**: 加载 `ad_creatives.md` + `channel_daily_costs.md`
+3. **素材 A/B 测试**: 加载 `ad_creatives.md` + `channel_daily_costs.md`（成本不拆到素材，当前只能做到活动粒度）
 4. **用户获取路径**: 加载 `user_attributions.md`
 5. **预算消耗监控**: 加载 `ad_campaigns.md` + `channel_daily_costs.md`
 

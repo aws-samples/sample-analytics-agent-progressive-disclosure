@@ -31,12 +31,15 @@
 
 ## 构建口径（本表如何从基表算出）
 
+> 方言为 Trino（Athena）。真源是 `schema_manifest.yaml` 里的 Postgres 写法，
+> 由 `scripts/gen/pg_to_trino.py` 转换而来。
+
 ```sql
 SELECT c.channel_id, c.channel_name,
-       sum(d.cost)::numeric(14,2) AS total_cost,
-       NULL::numeric(14,2)        AS attributed_gmv,
-       NULL::numeric(8,4)         AS roi
-FROM channel_daily_costs d JOIN channels c USING (channel_id)
+       CAST(sum(d.cost) AS decimal(14,2)) AS total_cost,
+       CAST(NULL AS decimal(14,2))        AS attributed_gmv,
+       CAST(NULL AS decimal(8,4))         AS roi
+FROM channel_daily_costs d JOIN channels c ON c.channel_id = d.channel_id
 WHERE d.date < DATE '2026-01-10'
 GROUP BY 1, 2
 ```

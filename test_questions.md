@@ -4,7 +4,24 @@
 
 > **Web App 的示例题在哪**:网页问数(`web/index.html` / live demo)左侧那 6 个由易到难的预设按钮(30天GMV → 订阅套餐 → 转化漏斗 → 优惠券核销 → 渠道CAC → A/B实验)是另一套、专门挑了能体现"读对文档才查得对"的口径陷阱题,定义在 `web/index.html` 的 `PRESETS` 里,跟本文件互补。
 
-> **⚠️ 时间口径**:本库是**静态样本**,数据落在 2025-10-27 ~ 2026-01-24。下面用了"今天/最近7天/过去30天"这类相对时间的题,**测试时要把"今天"理解成数据里的最新日期**,SQL 用表自身时间列的 `max()` 作锚点(如 `WHERE event_time >= (SELECT max(event_time)::date FROM events) - interval '6 days'`),**不要用 `current_date`/`now()`**——否则会落在数据区间外查出空结果。这本身就是一道隐含的口径考点。
+> **⚠️ 时间口径**:本库是**静态样本**,业务日历是 2025-10-26 ~ **2026-01-24**(`meta_snapshot`
+> 的 `data_start` / `as_of_date`)。下面用了"今天/最近7天/过去30天"这类相对时间的题,
+> **测试时要把"今天"理解成 `as_of_date`**,锚点统一写成:
+>
+> ```sql
+> WHERE event_time >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '6' day
+> ```
+>
+> 两个坑:
+>
+> - **不要用 `current_date` / `now()`** —— 落在数据区间外,查出空结果,而且不报错。
+> - **不要用各表自己的 `max(dt)` 当锚** —— 各表末端并不齐:orders / events / mart_daily_kpi 停在
+>   2026-01-24,`fin_daily_revenue` 到 2026-02-02,`channel_daily_costs`(时间列叫 **`date`** 不是 `dt`)
+>   和 `mart_channel_daily` 一直到 2026-09-01。用各表自己的 max 去算"最近 30 天",两张表的窗口
+>   会错开半年,ROI/CAC 这类要成本和收入相除的指标直接算歪。
+>
+> SQL 方言是 **Trino**(Athena),不是 Postgres:用 `CAST(x AS date)` 而不是 `::`,
+> `interval '30' day` 而不是 `interval '30 days'`。这本身就是一道隐含的口径考点。
 
 ## 治理层 / 洞察场景(text-to-insight)
 
@@ -185,7 +202,10 @@ GMV 最高的商品 Top 10，显示商品名称和销售额
 ```
 从浏览商品 → 加入购物车 → 下单 → 支付的转化漏斗
 ```
-**预期**: events 表 → 漏斗各步骤用户数 + 转化率
+**预期**: events 表 → 漏斗各步骤用户数 + 转化率。**每步必须约束成上一步的子集**
+（`AND user_id IN (上一步)`），否则算的是四个互不相干的集合、可能出现"结算 > 浏览"；
+口径与参考 SQL 见 `knowledge/analysis/funnel_analysis.md` 的约束 A/B。
+子集口径实测 394 → 314 → 258 → 199（全期，逐层流失 20%/18%/23%）。
 
 ### 4.3 LTV 计算
 ```

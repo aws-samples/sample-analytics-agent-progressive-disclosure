@@ -1,0 +1,1158 @@
+{
+  "meta": {
+    "ts": "2026-09-03 01:43:58",
+    "model": "global.anthropic.claude-opus-4-8",
+    "arm": "redshift",
+    "avg_s": 47.9,
+    "avg_docs": 2.5,
+    "avg_sql": 0.8
+  },
+  "records": [
+    {
+      "id": "L1-users-count",
+      "level": 1,
+      "question": "查一下目前有多少注册用户",
+      "goldens": [
+        {
+          "label": "all users",
+          "rows": [
+            [
+              213535
+            ]
+          ]
+        }
+      ],
+      "elapsed_s": 61.5,
+      "n_docs": 3,
+      "agent_docs": [
+        "domains/_index.md",
+        "domains/user/_index.md",
+        "domains/user/users.md"
+      ],
+      "n_sql": 1,
+      "agent_sqls": [
+        "SELECT status, COUNT(*) AS user_count FROM users GROUP BY status ORDER BY user_count DESC;"
+      ],
+      "agent_errors": [],
+      "has_result": true,
+      "status": "pass",
+      "detail": "命中 golden[all users]≈213535.0"
+    },
+    {
+      "id": "L1-order-count",
+      "level": 1,
+      "question": "查一下总订单数",
+      "goldens": [
+        {
+          "label": "all orders",
+          "rows": [
+            [
+              854140
+            ]
+          ]
+        }
+      ],
+      "elapsed_s": 36.2,
+      "n_docs": 3,
+      "agent_docs": [
+        "domains/_index.md",
+        "domains/transaction/_index.md",
+        "domains/transaction/orders.md"
+      ],
+      "n_sql": 1,
+      "agent_sqls": [
+        "SELECT status, COUNT(*) AS order_count FROM orders GROUP BY status ORDER BY order_count DESC"
+      ],
+      "agent_errors": [],
+      "has_result": true,
+      "status": "pass",
+      "detail": "命中 golden[all orders]≈854140.0"
+    },
+    {
+      "id": "L1-post-count",
+      "level": 1,
+      "question": "平台上一共发过多少帖子",
+      "goldens": [
+        {
+          "label": "all posts",
+          "rows": [
+            [
+              427070
+            ]
+          ]
+        },
+        {
+          "label": "published only",
+          "rows": [
+            [
+              361578
+            ]
+          ]
+        }
+      ],
+      "elapsed_s": 35.9,
+      "n_docs": 3,
+      "agent_docs": [
+        "domains/_index.md",
+        "domains/social/_index.md",
+        "domains/social/posts.md"
+      ],
+      "n_sql": 1,
+      "agent_sqls": [
+        "SELECT status, COUNT(*) AS post_count FROM posts GROUP BY status ORDER BY post_count DESC"
+      ],
+      "agent_errors": [],
+      "has_result": true,
+      "status": "pass",
+      "detail": "命中 golden[all posts]≈427070.0"
+    },
+    {
+      "id": "L1-campaign-count",
+      "level": 1,
+      "question": "目前有多少营销活动",
+      "goldens": [
+        {
+          "label": "all campaigns",
+          "rows": [
+            [
+              50
+            ]
+          ]
+        },
+        {
+          "label": "active only",
+          "rows": [
+            [
+              11
+            ]
+          ]
+        }
+      ],
+      "elapsed_s": 29.7,
+      "n_docs": 3,
+      "agent_docs": [
+        "domains/_index.md",
+        "domains/marketing/_index.md",
+        "domains/marketing/campaigns.md"
+      ],
+      "n_sql": 1,
+      "agent_sqls": [
+        "SELECT status, COUNT(*) AS campaign_count FROM campaigns GROUP BY status ORDER BY campaign_count DESC"
+      ],
+      "agent_errors": [],
+      "has_result": true,
+      "status": "pass",
+      "detail": "命中 golden[all campaigns]≈50.0"
+    },
+    {
+      "id": "L1-dau-latest",
+      "level": 1,
+      "question": "最新一天的 DAU 是多少",
+      "goldens": [
+        {
+          "label": "events last day distinct users",
+          "rows": [
+            [
+              30159
+            ]
+          ]
+        },
+        {
+          "label": "mart_daily_kpi last day",
+          "rows": [
+            [
+              30159
+            ]
+          ]
+        }
+      ],
+      "elapsed_s": 45.8,
+      "n_docs": 0,
+      "agent_docs": [],
+      "n_sql": 0,
+      "agent_sqls": [],
+      "agent_errors": [],
+      "has_result": true,
+      "status": "pass",
+      "detail": "命中 golden[events last day distinct users]≈30159.0"
+    },
+    {
+      "id": "L1-ab-running",
+      "level": 1,
+      "question": "正在进行的 A/B 测试有哪些",
+      "goldens": [
+        {
+          "label": "status=running",
+          "rows": [
+            [
+              "首页推荐算法优化"
+            ],
+            [
+              "Push通知发送时间优化"
+            ],
+            [
+              "会员等级权益展示"
+            ],
+            [
+              "订单确认页推荐"
+            ]
+          ]
+        }
+      ],
+      "elapsed_s": 50.4,
+      "n_docs": 3,
+      "agent_docs": [
+        "domains/_index.md",
+        "domains/experiment/_index.md",
+        "domains/experiment/ab_tests.md"
+      ],
+      "n_sql": 1,
+      "agent_sqls": [
+        "SELECT\n    test_id,\n    test_name,\n    primary_metric,\n    traffic_percentage,\n    TO_CHAR(start_date, 'YYYY-MM-DD') AS start_date,\n    TO_CHAR(end_date, 'YYYY-MM-DD') AS end_date,\n    owner\nFROM ab_tests\nWHERE status = 'running'\nORDER BY start_date DESC;"
+      ],
+      "agent_errors": [],
+      "has_result": true,
+      "status": "pass",
+      "detail": "命中 golden[status=running] 键4/4"
+    },
+    {
+      "id": "L1-channel-list",
+      "level": 1,
+      "question": "有哪些获客渠道",
+      "goldens": [
+        {
+          "label": "all channels",
+          "rows": [
+            [
+              "抖音信息流"
+            ],
+            [
+              "抖音搜索"
+            ],
+            [
+              "小红书种草"
+            ],
+            [
+              "小红书搜索"
+            ],
+            [
+              "微信朋友圈广告"
+            ],
+            [
+              "微信公众号"
+            ],
+            [
+              "百度搜索"
+            ],
+            [
+              "快手信息流"
+            ],
+            [
+              "微博KOL"
+            ],
+            [
+              "App Store"
+            ],
+            [
+              "应用宝"
+            ],
+            [
+              "老用户邀请"
+            ]
+          ]
+        }
+      ],
+      "elapsed_s": 55.5,
+      "n_docs": 3,
+      "agent_docs": [
+        "domains/_index.md",
+        "domains/attribution/_index.md",
+        "domains/attribution/channels.md"
+      ],
+      "n_sql": 1,
+      "agent_sqls": [
+        "SELECT channel_id, channel_name, channel_type, platform, is_active\nFROM channels\nORDER BY channel_type, channel_name;"
+      ],
+      "agent_errors": [],
+      "has_result": true,
+      "status": "pass",
+      "detail": "命中 golden[all channels] 键14/14"
+    },
+    {
+      "id": "L2-gender-dist",
+      "level": 2,
+      "question": "用户的性别分布是怎样的？男女各多少人？",
+      "goldens": [
+        {
+          "label": "group by gender",
+          "rows": [
+            [
+              "male",
+              103524
+            ],
+            [
+              "female",
+              110011
+            ]
+          ]
+        }
+      ],
+      "elapsed_s": 32.4,
+      "n_docs": 3,
+      "agent_docs": [
+        "domains/_index.md",
+        "domains/user/_index.md",
+        "domains/user/user_profiles.md"
+      ],
+      "n_sql": 1,
+      "agent_sqls": [
+        "SELECT gender, COUNT(*) AS user_count,\n       ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER(), 2) AS pct\nFROM user_profiles\nGROUP BY gender\nORDER BY user_count DESC;"
+      ],
+      "agent_errors": [],
+      "has_result": true,
+      "status": "pass",
+      "detail": "命中 golden[group by gender] 键2/2"
+    },
+    {
+      "id": "L2-device-dist",
+      "level": 2,
+      "question": "用户使用的设备类型分布，iOS 和 Android 各占多少设备",
+      "goldens": [
+        {
+          "label": "device rows",
+          "rows": [
+            [
+              "android",
+              158570
+            ],
+            [
+              "web",
+              35739
+            ],
+            [
+              "mini_program",
+              18686
+            ],
+            [
+              "ios",
+              104745
+            ]
+          ]
+        },
+        {
+          "label": "distinct users per type",
+          "rows": [
+            [
+              "web",
+              28379
+            ],
+            [
+              "mini_program",
+              16363
+            ],
+            [
+              "ios",
+              63396
+            ],
+            [
+              "android",
+              81928
+            ]
+          ]
+        }
+      ],
+      "elapsed_s": 36.0,
+      "n_docs": 3,
+      "agent_docs": [
+        "domains/_index.md",
+        "domains/user/_index.md",
+        "domains/user/user_devices.md"
+      ],
+      "n_sql": 1,
+      "agent_sqls": [
+        "SELECT\n    device_type,\n    COUNT(*) AS device_count,\n    COUNT(DISTINCT user_id) AS user_count,\n    ROUND(100.0 * COUNT(*) / SUM(COUNT(*)) OVER(), 2) AS pct\nFROM user_devices\nGROUP BY device_type\nORDER BY device_count DESC;"
+      ],
+      "agent_errors": [],
+      "has_result": true,
+      "status": "pass",
+      "detail": "命中 golden[device rows] 键4/4"
+    },
+    {
+      "id": "L2-order-status-dist",
+      "level": 2,
+      "question": "各订单状态的数量分布",
+      "goldens": [
+        {
+          "label": "group by status",
+          "rows": [
+            [
+              "refunded",
+              41995
+            ],
+            [
+              "paid",
+              232643
+            ],
+            [
+              "shipped",
+              197296
+            ],
+            [
+              "pending",
+              89279
+            ],
+            [
+              "delivered",
+              217456
+            ],
+            [
+              "cancelled",
+              75471
+            ]
+          ]
+        }
+      ],
+      "elapsed_s": 37.2,
+      "n_docs": 3,
+      "agent_docs": [
+        "domains/_index.md",
+        "domains/transaction/_index.md",
+        "domains/transaction/orders.md"
+      ],
+      "n_sql": 1,
+      "agent_sqls": [
+        "SELECT\n    status,\n    COUNT(*) AS order_count,\n    ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER(), 2) AS pct\nFROM orders\nGROUP BY status\nORDER BY order_count DESC;"
+      ],
+      "agent_errors": [],
+      "has_result": true,
+      "status": "pass",
+      "detail": "命中 golden[group by status] 键6/6"
+    },
+    {
+      "id": "L2-top-pages-7d",
+      "level": 2,
+      "question": "最近7天访问量最高的页面 Top 10",
+      "goldens": [
+        {
+          "label": "page_views 7d anchored",
+          "rows": [
+            [
+              "home"
+            ],
+            [
+              "product_detail"
+            ],
+            [
+              "category"
+            ],
+            [
+              "search"
+            ],
+            [
+              "cart"
+            ],
+            [
+              "post_feed"
+            ],
+            [
+              "order_list"
+            ],
+            [
+              "post_detail"
+            ],
+            [
+              "order_detail"
+            ],
+            [
+              "profile"
+            ]
+          ]
+        }
+      ],
+      "elapsed_s": 40.9,
+      "n_docs": 3,
+      "agent_docs": [
+        "domains/_index.md",
+        "domains/behavior/_index.md",
+        "domains/behavior/page_views.md"
+      ],
+      "n_sql": 1,
+      "agent_sqls": [
+        "SELECT\n    page_name,\n    COUNT(*) AS pv,\n    COUNT(DISTINCT user_id) AS uv,\n    ROUND(AVG(duration_seconds), 1) AS avg_duration,\n    ROUND(AVG(scroll_depth_pct), 1) AS avg_scroll_depth\nFROM page_views\nWHERE view_time >= (SELECT max(as_of_date) FROM meta_snapshot) - 7\nGROUP BY page_name\nORDER BY pv DESC\nLIMIT 10;"
+      ],
+      "agent_errors": [],
+      "has_result": true,
+      "status": "pass",
+      "detail": "命中 golden[page_views 7d anchored] 10/10"
+    },
+    {
+      "id": "L2-top-liked-posts",
+      "level": 2,
+      "question": "点赞数最多的帖子 Top 5",
+      "goldens": [
+        {
+          "label": "join post_likes",
+          "rows": [
+            [
+              "刚拆快递，这台台式机没必要，附实拍"
+            ],
+            [
+              "新手第一次买，这台洗衣机闭眼入，谨慎参考"
+            ],
+            [
+              "用了半年来反馈，这台消毒柜没必要，附实拍"
+            ],
+            [
+              "蹲了两个月降价，这罐婴儿奶粉没必要，谨慎参考"
+            ],
+            [
+              "第三次回购，这双足球鞋不推荐，附实拍"
+            ]
+          ]
+        },
+        {
+          "label": "denormalized like_count",
+          "rows": [
+            [
+              "刚拆快递，这台台式机没必要，附实拍"
+            ],
+            [
+              "新手第一次买，这台洗衣机闭眼入，谨慎参考"
+            ],
+            [
+              "用了半年来反馈，这台消毒柜没必要，附实拍"
+            ],
+            [
+              "蹲了两个月降价，这罐婴儿奶粉没必要，谨慎参考"
+            ],
+            [
+              "第三次回购，这双足球鞋不推荐，附实拍"
+            ]
+          ]
+        }
+      ],
+      "elapsed_s": 43.7,
+      "n_docs": 3,
+      "agent_docs": [
+        "domains/_index.md",
+        "domains/social/_index.md",
+        "domains/social/posts.md"
+      ],
+      "n_sql": 1,
+      "agent_sqls": [
+        "SELECT post_id, user_id, content_type, title, like_count, view_count, comment_count, share_count\nFROM posts\nWHERE status = 'published'\nORDER BY like_count DESC\nLIMIT 5;"
+      ],
+      "agent_errors": [],
+      "has_result": true,
+      "status": "pass",
+      "detail": "命中 golden[join post_likes] 5/5"
+    },
+    {
+      "id": "L2-coupon-usage-rate",
+      "level": 2,
+      "question": "优惠券的使用率是多少",
+      "goldens": [
+        {
+          "label": "used/total",
+          "rows": [
+            [
+              3.343345586705551
+            ]
+          ]
+        }
+      ],
+      "elapsed_s": 50.2,
+      "n_docs": 3,
+      "agent_docs": [
+        "domains/_index.md",
+        "domains/marketing/_index.md",
+        "domains/marketing/user_coupons.md"
+      ],
+      "n_sql": 1,
+      "agent_sqls": [
+        "SELECT\n  COUNT(*) AS total,\n  SUM(CASE WHEN status = 'used' THEN 1 ELSE 0 END) AS used_count,\n  SUM(CASE WHEN status = 'unused' THEN 1 ELSE 0 END) AS unused_count,\n  SUM(CASE WHEN status = 'expired' THEN 1 ELSE 0 END) AS expired_count,\n  ROUND(SUM(CASE WHEN status = 'used' THEN 1 ELSE 0 END) * 100.0 / NULLIF(COUNT(*),0), 2) AS usage_rate\nFROM user_coupons;"
+      ],
+      "agent_errors": [],
+      "has_result": true,
+      "status": "pass",
+      "detail": "命中 golden[used/total]≈3.343345586705551"
+    },
+    {
+      "id": "L3-gmv-30d",
+      "level": 3,
+      "question": "过去30天的 GMV 是多少",
+      "goldens": [
+        {
+          "label": "actual_amount valid status",
+          "rows": [
+            [
+              57673919.78
+            ]
+          ]
+        },
+        {
+          "label": "total_amount valid status",
+          "rows": [
+            [
+              59621811.09
+            ]
+          ]
+        },
+        {
+          "label": "mart_daily_revenue 30d",
+          "rows": [
+            [
+              57673919.78
+            ]
+          ]
+        }
+      ],
+      "elapsed_s": 27.1,
+      "n_docs": 0,
+      "agent_docs": [],
+      "n_sql": 0,
+      "agent_sqls": [],
+      "agent_errors": [],
+      "has_result": true,
+      "status": "pass",
+      "detail": "命中 golden[actual_amount valid status]≈57673919.78"
+    },
+    {
+      "id": "L3-top-products-gmv",
+      "level": 3,
+      "question": "GMV 最高的商品 Top 10，显示商品名称和销售额",
+      "goldens": [
+        {
+          "label": "order_items joined valid orders",
+          "rows": [
+            [
+              "小米 充电器 二代款"
+            ],
+            [
+              "雅诗兰黛 女士香水 木质调"
+            ],
+            [
+              "波司登 外套 通勤款"
+            ],
+            [
+              "苏泊尔 吹风机 套装版"
+            ],
+            [
+              "H&M 裤子 亚麻款"
+            ],
+            [
+              "惠普 充电器 便携款"
+            ],
+            [
+              "小米有品 收纳袋 可折叠"
+            ],
+            [
+              "云米 消毒柜 高配款"
+            ],
+            [
+              "特步 运动套装 套装版"
+            ],
+            [
+              "绿联 手机壳 便携款"
+            ]
+          ]
+        }
+      ],
+      "elapsed_s": 36.9,
+      "n_docs": 3,
+      "agent_docs": [
+        "domains/_index.md",
+        "domains/transaction/_index.md",
+        "domains/transaction/order_items.md"
+      ],
+      "n_sql": 1,
+      "agent_sqls": [
+        "SELECT\n    oi.product_name,\n    SUM(oi.actual_amount) AS gmv\nFROM order_items oi\nJOIN orders o ON oi.order_id = o.order_id\nWHERE o.status IN ('paid', 'shipped', 'delivered')\nGROUP BY oi.product_name\nORDER BY gmv DESC\nLIMIT 10;"
+      ],
+      "agent_errors": [],
+      "has_result": true,
+      "status": "pass",
+      "detail": "命中 golden[order_items joined valid orders] 10/10"
+    },
+    {
+      "id": "L3-churn-30d",
+      "level": 3,
+      "question": "过去30天没有任何会话活动的用户有多少（流失用户）",
+      "goldens": [
+        {
+          "label": "no session in 30d",
+          "rows": [
+            [
+              93536
+            ]
+          ]
+        },
+        {
+          "label": "last_active_at variant",
+          "rows": [
+            [
+              40370
+            ]
+          ]
+        }
+      ],
+      "elapsed_s": 49.1,
+      "n_docs": 5,
+      "agent_docs": [
+        "domains/_index.md",
+        "domains/behavior/_index.md",
+        "domains/behavior/sessions.md",
+        "domains/user/_index.md",
+        "domains/user/users.md"
+      ],
+      "n_sql": 1,
+      "agent_sqls": [
+        "WITH anchor AS (SELECT max(as_of_date) AS d FROM meta_snapshot),\nactive AS (\n  SELECT DISTINCT s.user_id\n  FROM sessions s, anchor a\n  WHERE s.user_id IS NOT NULL\n    AND s.start_time >= a.d - 30\n)\nSELECT\n  (SELECT count(*) FROM users) AS total_users,\n  (SELECT count(*) FROM active) AS active_users_30d,\n  (SELECT count(*) FROM users u WHERE NOT EXISTS (SELECT 1 FROM active ac WHERE ac.user_id = u.user_id)) AS churned_users\n"
+      ],
+      "agent_errors": [],
+      "has_result": true,
+      "status": "pass",
+      "detail": "命中 golden[no session in 30d]≈93536.0"
+    },
+    {
+      "id": "L3-coupon-aov-compare",
+      "level": 3,
+      "question": "使用了优惠券的订单和未使用优惠券的订单，客单价对比",
+      "goldens": [
+        {
+          "label": "valid status",
+          "rows": [
+            [
+              234.2,
+              233.5
+            ]
+          ]
+        },
+        {
+          "label": "all status",
+          "rows": [
+            [
+              234.8,
+              233.6
+            ]
+          ]
+        }
+      ],
+      "elapsed_s": 42.7,
+      "n_docs": 3,
+      "agent_docs": [
+        "domains/_index.md",
+        "domains/transaction/_index.md",
+        "domains/transaction/orders.md"
+      ],
+      "n_sql": 1,
+      "agent_sqls": [
+        "SELECT\n  CASE WHEN coupon_id IS NOT NULL THEN '用券订单' ELSE '未用券订单' END AS grp,\n  COUNT(*) AS order_cnt,\n  ROUND(AVG(actual_amount), 2) AS aov,\n  ROUND(AVG(total_amount), 2) AS avg_total,\n  ROUND(AVG(discount_amount), 2) AS avg_discount\nFROM orders\nWHERE status IN ('paid','shipped','delivered')\nGROUP BY 1\nORDER BY 1;"
+      ],
+      "agent_errors": [],
+      "has_result": true,
+      "status": "pass",
+      "detail": "命中 golden[valid status] 两值均匹配"
+    },
+    {
+      "id": "L4-funnel",
+      "level": 4,
+      "question": "从浏览商品 → 加入购物车 → 开始结算 → 支付成功的转化漏斗，各步骤的独立用户数",
+      "goldens": [
+        {
+          "label": "all-time subset funnel",
+          "rows": [
+            [
+              177644,
+              151924,
+              131677,
+              77681
+            ]
+          ]
+        },
+        {
+          "label": "30d anchored subset funnel",
+          "rows": [
+            [
+              92800,
+              75676,
+              63781,
+              24052
+            ]
+          ]
+        }
+      ],
+      "elapsed_s": 50.1,
+      "n_docs": 4,
+      "agent_docs": [
+        "domains/_index.md",
+        "domains/behavior/_index.md",
+        "domains/behavior/events.md",
+        "analysis/funnel_analysis.md"
+      ],
+      "n_sql": 1,
+      "agent_sqls": [
+        "WITH w AS (\n  SELECT user_id, event_name\n  FROM events\n  WHERE event_name IN ('view_product','add_to_cart','begin_checkout','purchase')\n),\ns1 AS (SELECT DISTINCT user_id FROM w WHERE event_name = 'view_product'),\ns2 AS (SELECT DISTINCT user_id FROM w WHERE event_name = 'add_to_cart' AND user_id IN (SELECT user_id FROM s1)),\ns3 AS (SELECT DISTINCT user_id FROM w WHERE event_name = 'begin_checkout' AND user_id IN (SELECT user_id FROM s2)),\ns4 AS (SELECT DISTINCT user_id FROM w WHERE event_name = 'purchase' AND user_id IN (SELECT user_id FROM s3))\nSELECT (SELECT count(*) FROM s1) AS step1_view,\n       (SELECT count(*) FROM s2) AS step2_cart,\n       (SELECT count(*) FROM s3) AS step3_checkout,\n       (SELECT count(*) FROM s4) AS step4_purchase"
+      ],
+      "agent_errors": [],
+      "has_result": true,
+      "status": "pass",
+      "detail": "命中 golden[all-time subset funnel] 4/4 步"
+    },
+    {
+      "id": "L4-arpu-by-channel",
+      "level": 4,
+      "question": "各获客渠道的用户 ARPU（人均消费）对比，给出最高的3个渠道",
+      "goldens": [
+        {
+          "label": "attribution join orders",
+          "rows": [
+            [
+              "直接访问"
+            ],
+            [
+              "百度搜索"
+            ],
+            [
+              "微博KOL"
+            ]
+          ]
+        }
+      ],
+      "elapsed_s": 52.4,
+      "n_docs": 4,
+      "agent_docs": [
+        "domains/_index.md",
+        "domains/attribution/_index.md",
+        "domains/mart/_index.md",
+        "domains/mart/mart_user_summary.md"
+      ],
+      "n_sql": 1,
+      "agent_sqls": [
+        "SELECT register_channel,\n       COUNT(*) AS users,\n       SUM(CASE WHEN first_paid_date IS NOT NULL THEN 1 ELSE 0 END) AS buyers,\n       ROUND(AVG(total_gmv), 2) AS arpu_all_users,\n       ROUND(SUM(total_gmv) / NULLIF(SUM(CASE WHEN first_paid_date IS NOT NULL THEN 1 ELSE 0 END),0), 2) AS arpu_buyer\nFROM mart_user_summary\nGROUP BY register_channel\nORDER BY arpu_all_users DESC;"
+      ],
+      "agent_errors": [],
+      "has_result": true,
+      "status": "pass",
+      "detail": "命中 golden[attribution join orders] 3/3"
+    },
+    {
+      "id": "L5-retention-cohort",
+      "level": 5,
+      "question": "按注册周做留存 cohort 分析，最近 8 个注册周的周留存矩阵是什么样？",
+      "goldens": [
+        {
+          "label": "weekly matrix counts (full-window cohorts)",
+          "rows": [
+            [
+              2630,
+              2356,
+              1574,
+              1253,
+              1074
+            ],
+            [
+              15843,
+              11542,
+              8468,
+              7083,
+              6181
+            ],
+            [
+              16545,
+              11840,
+              8583,
+              7006,
+              6152
+            ],
+            [
+              17106,
+              12146,
+              8778,
+              7241,
+              6402
+            ],
+            [
+              17606,
+              12316,
+              8814,
+              7370,
+              5788
+            ]
+          ]
+        },
+        {
+          "label": "weekly matrix pct (full-window cohorts)",
+          "rows": [
+            [
+              89.6,
+              59.8,
+              47.6,
+              40.8
+            ],
+            [
+              72.9,
+              53.4,
+              44.7,
+              39.0
+            ],
+            [
+              71.6,
+              51.9,
+              42.3,
+              37.2
+            ],
+            [
+              71.0,
+              51.3,
+              42.3,
+              37.4
+            ],
+            [
+              70.0,
+              50.1,
+              41.9,
+              32.9
+            ]
+          ]
+        }
+      ],
+      "elapsed_s": 101.4,
+      "n_docs": 4,
+      "agent_docs": [
+        "domains/_index.md",
+        "metrics/core_metrics.md",
+        "analysis/retention_curve.md",
+        "domains/user/users.md"
+      ],
+      "n_sql": 2,
+      "agent_sqls": [
+        "WITH a AS (SELECT MAX(as_of_date) AS d FROM meta_snapshot),\ncohort AS (\n    SELECT u.user_id, DATE_TRUNC('week', u.registered_at::date) AS cohort_week\n    FROM users u, a\n    WHERE DATE_TRUNC('week', u.registered_at::date) >= DATEADD(week, -7, DATE_TRUNC('week', a.d))\n      AND u.registered_at::date <= a.d\n),\nactivity AS (\n    SELECT DISTINCT user_id, DATE_TRUNC('week', event_time::date) AS activity_week\n    FROM events\n),\nraw AS (\n    SELECT\n        c.cohort_week,\n        COUNT(DISTINCT c.user_id) AS cohort_size,\n        COUNT(DISTINCT CASE WHEN DATEDIFF(week, c.cohort_week, act.activity_week) = 1 THEN c.user_id END) AS w1,\n        COUNT(DISTINCT CASE WHEN DATEDIFF(week, c.cohort_week, act.activity_week) = 2 THEN c.user_id END) AS w2,\n        COUNT(DISTINCT CASE WHEN DATEDIFF(week, c.cohort_week, act.activity_week) = 3 THEN c.user_id END) AS w3,\n        COUNT(DISTINCT CASE WHEN DATEDIFF(week, c.cohort_week, act.activity_week) = 4 THEN c.user_id END) AS w4\n    FROM cohort c\n    LEFT JOIN activity act ON act.user_id = c.user_id\n    GROUP BY c.cohort_week\n)\nSELECT\n    TO_CHAR(cohort_week, 'YYYY-MM-DD') AS cohort_week,\n    cohort_size,\n    ROUND(w1::decimal(38,6) / cohort_size * 100, 1) AS w1_pct,\n    ROUND(w2::decimal(38,6) / cohort_size * 100, 1) AS w2_pct,\n    ROUND(w3::decimal(38,6) / cohort_size * 100, 1) AS w3_pct,\n    ROUND(w4::decimal(38,6) / cohort_size * 100, 1) AS w4_pct\nFROM raw\nORDER BY cohort_week;",
+        "WITH a AS (SELECT MAX(as_of_date) AS d FROM meta_snapshot),\ncohort AS (\n    SELECT u.user_id, DATE_TRUNC('week', u.registered_at::date) AS cohort_week\n    FROM users u, a\n    WHERE DATE_TRUNC('week', u.registered_at::date) >= DATEADD(week, -7, DATE_TRUNC('week', a.d))\n      AND u.registered_at::date <= a.d\n),\nactivity AS (\n    SELECT DISTINCT user_id, DATE_TRUNC('week', event_time::date) AS activity_week\n    FROM events\n),\nagg AS (\n    SELECT\n        c.cohort_week,\n        COUNT(DISTINCT c.user_id) AS cohort_size,\n        COUNT(DISTINCT CASE WHEN DATEDIFF(week, c.cohort_week, act.activity_week) = 1 THEN c.user_id END) AS w1,\n        COUNT(DISTINCT CASE WHEN DATEDIFF(week, c.cohort_week, act.activity_week) = 2 THEN c.user_id END) AS w2,\n        COUNT(DISTINCT CASE WHEN DATEDIFF(week, c.cohort_week, act.activity_week) = 3 THEN c.user_id END) AS w3,\n        COUNT(DISTINCT CASE WHEN DATEDIFF(week, c.cohort_week, act.activity_week) = 4 THEN c.user_id END) AS w4\n    FROM cohort c\n    LEFT JOIN activity act ON act.user_id = c.user_id\n    GROUP BY c.cohort_week\n)\nSELECT\n    TO_CHAR(cohort_week, 'YYYY-MM-DD') AS cohort_week,\n    cohort_size,\n    ROUND(w1::decimal(38,6) / cohort_size * 100, 1) AS w1_pct,\n    ROUND(w2::decimal(38,6) / cohort_size * 100, 1) AS w2_pct,\n    ROUND(w3::decimal(38,6) / cohort_size * 100, 1) AS w3_pct,\n    ROUND(w4::decimal(38,6) / cohort_size * 100, 1) AS w4_pct\nFROM agg\nORDER BY cohort_week;"
+      ],
+      "agent_errors": [],
+      "has_result": true,
+      "status": "pass",
+      "detail": "结论已声明数据限制；命中 golden[weekly matrix pct (full-window cohorts)] 18/20 个数值"
+    },
+    {
+      "id": "L5-repurchase-rate",
+      "level": 5,
+      "question": "用户的 30 天复购率是多少",
+      "goldens": [
+        {
+          "label": "governed mart definition",
+          "rows": [
+            [
+              63.1
+            ]
+          ]
+        }
+      ],
+      "elapsed_s": 63.5,
+      "n_docs": 2,
+      "agent_docs": [
+        "metrics/governed_metrics.md",
+        "domains/mart/mart_user_summary.md"
+      ],
+      "n_sql": 1,
+      "agent_sqls": [
+        "SELECT\n  SUM(CASE WHEN first_paid_date IS NOT NULL THEN 1 ELSE 0 END) AS buyers,\n  SUM(CASE WHEN is_repurchaser_30d THEN 1 ELSE 0 END) AS repurchasers,\n  ROUND(100.0 * SUM(CASE WHEN is_repurchaser_30d THEN 1 ELSE 0 END)\n        / NULLIF(SUM(CASE WHEN first_paid_date IS NOT NULL THEN 1 ELSE 0 END), 0), 1) AS repurchase_rate_30d_pct\nFROM mart_user_summary;"
+      ],
+      "agent_errors": [],
+      "has_result": true,
+      "status": "pass",
+      "detail": "命中 golden[governed mart definition]≈63.1"
+    },
+    {
+      "id": "L5-wow-gmv",
+      "level": 5,
+      "question": "最近7天的 GMV 和再往前7天相比是涨是跌？涨跌多少？",
+      "goldens": [
+        {
+          "label": "mart_daily_kpi wow",
+          "rows": [
+            [
+              13926391.12,
+              14280957.12
+            ]
+          ]
+        },
+        {
+          "label": "raw orders wow",
+          "rows": [
+            [
+              13926391.12,
+              14280957.12
+            ]
+          ]
+        }
+      ],
+      "elapsed_s": 48.6,
+      "n_docs": 3,
+      "agent_docs": [
+        "domains/mart/_index.md",
+        "metrics/governed_metrics.md",
+        "domains/mart/mart_daily_kpi.md"
+      ],
+      "n_sql": 1,
+      "agent_sqls": [
+        "WITH a AS (SELECT max(as_of_date) AS d FROM meta_snapshot)\nSELECT CASE WHEN k.dt > a.d - 7 THEN 'last7' ELSE 'prev7' END AS period,\n       min(k.dt) AS start_dt, max(k.dt) AS end_dt,\n       CAST(sum(k.gmv) AS decimal(14,2)) AS gmv\nFROM mart_daily_kpi k, a\nWHERE k.dt > a.d - 14 AND k.dt <= a.d\nGROUP BY 1\nORDER BY 1 DESC;"
+      ],
+      "agent_errors": [],
+      "has_result": true,
+      "status": "pass",
+      "detail": "命中 golden[mart_daily_kpi wow] 两值均匹配"
+    },
+    {
+      "id": "L3-refund-total",
+      "level": 3,
+      "question": "这段时间一共退了多少钱？退款总额是多少？",
+      "goldens": [
+        {
+          "label": "全量退款 (fin_daily_revenue, 按 refunded_at 建轴)",
+          "rows": [
+            [
+              9897495.82
+            ]
+          ]
+        },
+        {
+          "label": "同口径的基表校验",
+          "rows": [
+            [
+              9897495.82
+            ]
+          ]
+        }
+      ],
+      "elapsed_s": 44.1,
+      "n_docs": 0,
+      "agent_docs": [],
+      "n_sql": 0,
+      "agent_sqls": [],
+      "agent_errors": [],
+      "has_result": true,
+      "status": "pass",
+      "detail": "命中 golden[全量退款 (fin_daily_revenue, 按 refunded_at 建轴)]≈9897495.82"
+    },
+    {
+      "id": "L3-channel-cost-total",
+      "level": 3,
+      "question": "各渠道投放一共花了多少钱？总花费是多少？",
+      "goldens": [
+        {
+          "label": "真实花费 (channel_daily_costs 明细)",
+          "rows": [
+            [
+              4351988.47
+            ]
+          ]
+        },
+        {
+          "label": "同口径的集市层校验 (mart_channel_daily)",
+          "rows": [
+            [
+              4351988.47
+            ]
+          ]
+        }
+      ],
+      "elapsed_s": 49.3,
+      "n_docs": 4,
+      "agent_docs": [
+        "domains/_index.md",
+        "domains/attribution/_index.md",
+        "domains/attribution/channel_daily_costs.md",
+        "domains/attribution/channels.md"
+      ],
+      "n_sql": 1,
+      "agent_sqls": [
+        "SELECT ch.channel_name,\n       ch.channel_type,\n       SUM(cdc.cost) AS total_cost\nFROM channel_daily_costs cdc\nJOIN channels ch ON ch.channel_id = cdc.channel_id\nGROUP BY ch.channel_name, ch.channel_type\nORDER BY total_cost DESC;"
+      ],
+      "agent_errors": [],
+      "has_result": true,
+      "status": "pass",
+      "detail": "命中 golden[真实花费 (channel_daily_costs 明细)]≈4351988.47"
+    },
+    {
+      "id": "L4-cac-lowest-channel",
+      "level": 4,
+      "question": "哪个渠道的获客成本最低？",
+      "goldens": [
+        {
+          "label": "CAC 升序 (成本限制在业务日历轴内)",
+          "rows": [
+            [
+              "小红书搜索"
+            ],
+            [
+              "抖音搜索"
+            ],
+            [
+              "快手信息流"
+            ]
+          ]
+        }
+      ],
+      "elapsed_s": 91.1,
+      "n_docs": 0,
+      "agent_docs": [],
+      "n_sql": 0,
+      "agent_sqls": [],
+      "agent_errors": [],
+      "has_result": false,
+      "status": "pass",
+      "detail": "命中 golden[CAC 升序 (成本限制在业务日历轴内)] 2/2"
+    },
+    {
+      "id": "L4-roi-cac-by-channel",
+      "level": 4,
+      "question": "最近30天各渠道的 ROI 和 CAC 分别是多少？",
+      "goldens": [
+        {
+          "label": "抖音搜索 近30天的 ROI 与 CAC (同锚点、带上界)",
+          "rows": [
+            [
+              68.3051,
+              10.4077
+            ]
+          ]
+        }
+      ],
+      "elapsed_s": 38.9,
+      "n_docs": 0,
+      "agent_docs": [],
+      "n_sql": 0,
+      "agent_sqls": [],
+      "agent_errors": [],
+      "has_result": true,
+      "status": "pass",
+      "detail": "命中 golden[抖音搜索 近30天的 ROI 与 CAC (同锚点、带上界)] 两值均匹配"
+    },
+    {
+      "id": "L3-cac-overall",
+      "level": 3,
+      "question": "整体的获客成本 CAC 是多少？",
+      "goldens": [
+        {
+          "label": "全量 CAC (成本限制在业务日历轴内)",
+          "rows": [
+            [
+              17.07
+            ]
+          ]
+        }
+      ],
+      "elapsed_s": 43.1,
+      "n_docs": 0,
+      "agent_docs": [],
+      "n_sql": 0,
+      "agent_sqls": [],
+      "agent_errors": [],
+      "has_result": true,
+      "status": "pass",
+      "detail": "命中 golden[全量 CAC (成本限制在业务日历轴内)]≈17.07"
+    }
+  ]
+}

@@ -30,6 +30,7 @@ ab_tests (主表)
 | 实验、测试、假设、指标、流量 | `ab_tests.md` |
 | 变体、对照组、实验组、配置 | `ab_test_variants.md` |
 | 分流、分组、曝光、分配 | `ab_test_assignments.md` |
+| 获分组人数、各组人数、各组转化率 | `ab_test_assignments.md`（人数按去重 `user_id`；跨实验合计时同一用户可能在多个实验里） |
 
 ## 常见分析场景
 

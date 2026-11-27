@@ -1,5 +1,19 @@
 # v2 架构：Redshift + Glue Catalog
 
+> ## 📜 历史文档：**v2 已被 v3(湖仓)取代**,正文内容原样保留
+>
+> **Redshift Serverless 已整体退役。** 现行数据层是 Athena + S3 Tables (Iceberg) +
+> Glue Data Catalog,见 [../PROJECT_STATUS.md](../PROJECT_STATUS.md) 阶段七与
+> [deployment.md](deployment.md)。
+>
+> 这份文档不改内容——它记的是 v2 当时的设计决策和踩过的坑,改了就是伪造历史。
+> 读它是为了理解「为什么从 Postgres 走到 Redshift、又为什么从 Redshift 走到湖仓」,
+> **不要照着它部署**:`database/redshift/`、`scripts/redshift/`、`scripts/glue/`
+> 都已是死路径。文中所有行数(8000 万)属于 v2 那批数据。**注意别被量级骗了**:v3 的湖后来
+> 也被灌成了 8000 万行(新生成器,和 v2 这批同量级但不同源),而仓库交付的 `data/csv/` 种子
+> 只有约 22 万行 —— 三者是三份不同的数据。当前规模看
+> [deployment.md](deployment.md#数据说明),不要从本文推。
+
 v1 的数据在 Aurora/Postgres，元数据是一棵手写的 markdown 树。这份文档记录 v2 改了什么、
 为什么这么改，以及迁移过程中踩到的坑。
 

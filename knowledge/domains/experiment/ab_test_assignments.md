@@ -18,6 +18,7 @@
 3. 分配结果记录到本表并持久化
 4. 同一用户在整个实验期间保持在同一变体（sticky assignment）
 
+
 ## 索引
 
 - PRIMARY KEY: `id`
@@ -34,7 +35,7 @@ SELECT
     v.is_control,
     COUNT(a.user_id) AS sample_size,
     v.traffic_percentage AS expected_pct,
-    ROUND(COUNT(a.user_id) * 100.0 / SUM(COUNT(a.user_id)) OVER (PARTITION BY t.test_id), 2) AS actual_pct
+    COUNT(a.user_id) * 100.0 / SUM(COUNT(a.user_id)) OVER (PARTITION BY t.test_id) AS actual_pct
 FROM ab_tests t
 JOIN ab_test_variants v ON t.test_id = v.test_id
 LEFT JOIN ab_test_assignments a ON v.variant_id = a.variant_id
@@ -51,7 +52,7 @@ SELECT
     COUNT(*) AS new_assignments
 FROM ab_test_assignments a
 JOIN ab_tests t ON a.test_id = t.test_id
-WHERE a.assigned_at >= CURRENT_DATE - INTERVAL '7 days'
+WHERE a.assigned_at >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '6' day AND a.assigned_at < (SELECT max(as_of_date) FROM meta_snapshot) + interval '1' day
 GROUP BY t.test_id, t.test_name, DATE(a.assigned_at)
 ORDER BY t.test_name, assign_date DESC;
 ```
@@ -60,11 +61,18 @@ ORDER BY t.test_name, assign_date DESC;
 ```sql
 SELECT
     t.test_name,
-    AVG(EXTRACT(EPOCH FROM (a.first_exposure_at - a.assigned_at))) AS avg_seconds_to_exposure,
-    PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (a.first_exposure_at - a.assigned_at))) AS median_seconds,
+    AVG(date_diff('second', a.assigned_at, a.first_exposure_at)) AS avg_seconds_to_exposure,
+    approx_percentile(date_diff('second', a.assigned_at, a.first_exposure_at), 0.5) AS median_seconds,
     COUNT(*) FILTER (WHERE a.first_exposure_at IS NULL) AS no_exposure_count
 FROM ab_test_assignments a
 JOIN ab_tests t ON a.test_id = t.test_id
 WHERE t.status = 'running'
 GROUP BY t.test_id, t.test_name;
 ```
+
+## 补充：人数与比例按人算
+
+- 问「多少人」「各组人数」时按去重 `user_id` 计。每个用户在一个实验里只有一条记录，但同一用户可能出现在多个实验里，跨实验合计必须去重。
+- 「某组用户里有多少比例做了某事（下单、留存……）」的分母是这一组**符合条件的人**，不是事件或订单条数。
+
+- 按实验（或按分组）逐个列结果时，从 `ab_tests`（或 `ab_test_variants`）出发 LEFT JOIN 本表：草稿、已结束、或时间窗内没有分流记录的实验也要列出来，人数记 0。从本表出发 INNER JOIN 会把这些实验漏掉。
