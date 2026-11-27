@@ -87,3 +87,7 @@ HAVING COUNT(DISTINCT p.product_id) >= 10
 ORDER BY total_sold DESC
 LIMIT 20;
 ```
+
+## 补充：「各类标签」按 tag_type 分
+
+题面说「各类标签」「每类标签」时，按标签类型 `tag_type` 分组；说「每个标签」「各个标签」时才按 `tag_name` 分组。

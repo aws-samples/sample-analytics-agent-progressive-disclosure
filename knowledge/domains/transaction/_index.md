@@ -48,6 +48,9 @@ actual_amount = total_amount - discount_amount + shipping_fee
 | 商品销量、销售排行、SKU、购买数量、商品明细 | `order_items.md` |
 | 支付、支付宝、微信、银行卡、支付成功率、支付失败 | `payments.md` |
 | 订阅、会员、续费、自动扣款、订阅取消 | `subscriptions.md` |
+| 毛收入、确认收入（财务口径的收入） | `fin_daily_revenue.md`（`gross_revenue`，按 `paid_at` 记账；不要用订单的 GMV 代替） |
+| 首单 / 非首单、新客订单、新客成交额 | `domains/mart/mart_daily_revenue.md`（`is_new_user` = 用户的首笔**有效**订单，口径已冻结；不要自己按订单时间排序推首单，那样会把无效订单算进去） |
+| 注册后 N 天内完成首单、首单日期、30 天复购 | `domains/mart/mart_user_summary.md`（`first_paid_date` 是首笔有效订单日期，`is_repurchaser_30d` 是复购标记） |
 
 ## 常见分析场景
 

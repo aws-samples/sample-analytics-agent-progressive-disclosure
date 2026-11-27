@@ -204,3 +204,13 @@ WHERE placed_at >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '29' d
 GROUP BY DATE(placed_at)
 ORDER BY order_date DESC;
 ```
+
+## 补充：这些问题有现成口径，不要从 orders 重推
+
+| 问题 | 用哪里 |
+|---|---|
+| 首单 / 非首单、新客订单、新客成交额 | `domains/mart/mart_daily_revenue.md` 的 `is_new_user`（用户的首笔**有效**订单） |
+| 注册后 N 天内首单率、首单日期、30 天复购率 | `domains/mart/mart_user_summary.md` 的 `first_paid_date` / `is_repurchaser_30d`（或 `call_metric`） |
+| 毛收入、净收入、退款总额（财务口径） | `fin_daily_revenue.md` 的 `gross_revenue` / `net_revenue` / `refund_amount` |
+
+自己从 orders 推这些数，常见的错是把无效订单（pending / cancelled）算进首单，或者用 GMV 代替财务收入。

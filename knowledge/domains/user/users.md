@@ -112,3 +112,7 @@ FROM users
 WHERE last_active_at >= (SELECT max(as_of_date) FROM meta_snapshot) - interval '6' day AND last_active_at < (SELECT max(as_of_date) FROM meta_snapshot) + interval '1' day
   AND status = 'active';
 ```
+
+## 补充：易混概念
+
+- `registration_source` 是用户**从哪个入口注册**（应用商店、小程序、网页、自然流量等），不是投放 / 获客渠道。问「获客渠道」「渠道 ARPU」「渠道 CAC」时用归因域的 `user_attributions` + `channels`（或 `mart_user_summary.register_channel`），不要拿 `registration_source` 代替。

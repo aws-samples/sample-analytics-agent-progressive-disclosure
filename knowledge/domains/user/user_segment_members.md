@@ -101,3 +101,7 @@ GROUP BY s1.segment_name, s2.segment_name
 ORDER BY overlap_count DESC
 LIMIT 10;
 ```
+
+## 补充：分群不是实验分组
+
+本表是按规则圈出来的人群分群（`user_segments`）。「分进实验」「实验分组」「对照组 / 实验组」指的是 A/B 实验的分流，在 `domains/experiment/ab_test_assignments.md`，不要用本表的 `entered_at` 代替实验的 `assigned_at`。

@@ -125,3 +125,7 @@ WHERE status = 'active'
   AND min_purchase >= 100
 ORDER BY min_purchase DESC;
 ```
+
+## 补充：这是模板表
+
+本表一种券一行（券模板），记录的是券的配置。「发了多少张券」「券的使用率 / 过期率」「已过期的券占多少」这类问的是**发到用户手里的券**，要用 `user_coupons.md`（每张券一行，状态在 `user_coupons.status`）。

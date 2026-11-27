@@ -40,6 +40,7 @@ user_coupons
 | 领券、用券、券使用率、核销 | `user_coupons.md` |
 | Banner、广告位、曝光、点击率、CTR | `banners.md` |
 | 推送、通知、push、送达率、打开率 | `push_notifications.md` |
+| 发出去的券的状态占比（已过期 / 未使用 / 已使用）、某来源发了多少张券 | `user_coupons.md`（发到用户手里的每张券一行）。`coupons.md` 是券模板，一种券一行，不能用来数「多少张券」 |
 
 ## 常见分析场景
 
